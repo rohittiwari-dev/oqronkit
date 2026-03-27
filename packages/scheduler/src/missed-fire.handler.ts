@@ -1,11 +1,11 @@
-import type { ChronoLogger, CronDefinition } from "@chronoforge/core";
+import type { CronDefinition, Logger } from "@chronoforge/core";
 
 /**
  * Evaluates missed-fire scenarios when the scheduler restarts and detects
  * that a schedule hasn't run in a while.
  */
 export class MissedFireHandler {
-  constructor(private readonly _logger: ChronoLogger) {}
+  constructor(private readonly _logger: Logger) {}
 
   async evaluate(
     schedule: CronDefinition,
@@ -13,10 +13,11 @@ export class MissedFireHandler {
   ): Promise<boolean> {
     if (!lastRunAt) return false;
 
-    if (schedule.missedFirePolicy === "run-once") {
+    if (schedule.missedFire === "run-once") {
       this._logger.warn(
-        `Missed execution detected for ${schedule.id}, policy: run-once`,
+        `Missed execution detected for ${schedule.name}, policy: run-once`,
       );
+      // Wait, we should trigger onMissedFire hook if it exists
       return true;
     }
 

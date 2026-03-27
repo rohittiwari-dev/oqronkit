@@ -69,11 +69,11 @@ export class SqliteAdapter implements IChronoAdapter {
            tags             = excluded.tags`,
       )
       .run(
-        def.id,
-        def.expression,
+        def.name,
+        def.schedule,
         def.timezone ?? null,
-        def.missedFirePolicy,
-        def.overlap ? 1 : 0,
+        def.missedFire,
+        def.overlap !== "skip" && def.overlap !== false ? 1 : 0,
         JSON.stringify(def.tags),
       );
   }
@@ -81,14 +81,14 @@ export class SqliteAdapter implements IChronoAdapter {
   async getDueSchedules(
     now: Date,
     limit: number,
-  ): Promise<Pick<CronDefinition, "id">[]> {
+  ): Promise<Pick<CronDefinition, "name">[]> {
     return this.db
       .prepare(
-        `SELECT id FROM chrono_schedules
+        `SELECT id as name FROM chrono_schedules
          WHERE nextRunAt IS NULL OR nextRunAt <= ?
          LIMIT ?`,
       )
-      .all(now.toISOString(), limit) as { id: string }[];
+      .all(now.toISOString(), limit) as { name: string }[];
   }
 
   async recordExecution(job: JobRecord): Promise<void> {

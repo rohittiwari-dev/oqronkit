@@ -1,4 +1,4 @@
-import type { ChronoLogger, ILockAdapter } from "@chronoforge/core";
+import type { ILockAdapter, Logger } from "@chronoforge/core";
 
 export class LeaderElection {
   private electionTimer?: ReturnType<typeof setInterval>;
@@ -6,7 +6,7 @@ export class LeaderElection {
 
   constructor(
     private readonly lock: ILockAdapter,
-    private readonly logger: ChronoLogger,
+    private readonly logger: Logger,
     private readonly leaderKey: string,
     private readonly nodeId: string,
     private readonly ttlMs: number = 30_000,

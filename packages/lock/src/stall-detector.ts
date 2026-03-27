@@ -1,4 +1,4 @@
-import type { ChronoLogger, ILockAdapter } from "@chronoforge/core";
+import type { ILockAdapter, Logger } from "@chronoforge/core";
 
 /**
  * Detects stalled jobs where the heartbeat has expired (the worker crashed).
@@ -9,7 +9,7 @@ export class StallDetector {
 
   constructor(
     private readonly lock: ILockAdapter,
-    private readonly logger: ChronoLogger,
+    private readonly logger: Logger,
     private readonly checkIntervalMs: number = 15_000,
   ) {}
 

@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { IChronoAdapter } from "../types/db.types.js";
 import type { ILockAdapter } from "../types/lock.types.js";
 
-// Helper to validate a class instance that satisfies an interface
+// Duck-typing validators for DI instances
 const isIChronoAdapter = (val: unknown): val is IChronoAdapter => {
   if (!val || typeof val !== "object") return false;
   return (
@@ -23,7 +23,7 @@ export const ChronoConfigSchema = z.object({
   project: z.string().optional(),
   environment: z.string().default("development"),
 
-  // Infrastructure dependencies are REQUIRED to be provided by the consumer
+  // Infrastructure — explicit DI
   db: z.custom<IChronoAdapter>(
     isIChronoAdapter,
     "db must be an instance of IChronoAdapter",
@@ -34,13 +34,16 @@ export const ChronoConfigSchema = z.object({
   ),
   broker: z.any().optional(),
 
-  // enabled modules Array
+  // Modules
   modules: z.array(z.string()).default([]),
 
-  // global tags
+  // Auto-discovery directory
+  jobsDir: z.string().default("./src/jobs"),
+
+  // Global tags
   tags: z.array(z.string()).default([]),
 
-  // worker configs
+  // Worker
   worker: z
     .object({
       concurrency: z.number().default(50),
@@ -48,11 +51,23 @@ export const ChronoConfigSchema = z.object({
     })
     .default({ concurrency: 50, gracefulShutdownMs: 30000 }),
 
+  // Logger (voltlog-io config or false to disable)
   logger: z
-    .object({
-      level: z.enum(["debug", "info", "warn", "error"]).default("info"),
-    })
-    .default({ level: "info" }),
+    .union([
+      z.literal(false),
+      z.object({
+        enabled: z.boolean().default(true),
+        level: z.string().default("info"),
+        prettify: z.boolean().default(false),
+        showMetadata: z.boolean().default(true),
+      }),
+    ])
+    .default({
+      enabled: true,
+      level: "info",
+      prettify: false,
+      showMetadata: true,
+    }),
 });
 
 export type ValidatedConfig = z.infer<typeof ChronoConfigSchema>;

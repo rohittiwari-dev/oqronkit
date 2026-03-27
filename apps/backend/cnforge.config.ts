@@ -26,5 +26,5 @@ export default defineConfig({
   },
 
   // 7. Core logger settings
-  logger: { level: "debug" },
+  logger: { level: "debug", prettify: true },
 });

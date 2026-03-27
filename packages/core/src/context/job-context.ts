@@ -1,14 +1,14 @@
-import type { ChronoLogger } from "../logger/voltlog.js";
+import type { Logger } from "../logger/index.js";
 
 export interface BaseJobContextOptions {
   id: string;
-  logger: ChronoLogger;
+  logger: Logger;
   signal: AbortSignal;
 }
 
 export class JobContext {
   public readonly id: string;
-  public readonly log: ChronoLogger;
+  public readonly log: Logger;
   public readonly signal: AbortSignal;
   private _progress = 0;
 

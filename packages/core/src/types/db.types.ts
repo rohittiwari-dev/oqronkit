@@ -8,7 +8,7 @@ export interface IChronoAdapter {
   getDueSchedules(
     now: Date,
     limit: number,
-  ): Promise<Pick<CronDefinition, "id">[]>;
+  ): Promise<Pick<CronDefinition, "name">[]>;
 
   /** Record a job execution (insert or update) */
   recordExecution(job: JobRecord): Promise<void>;

@@ -5,7 +5,6 @@ describe("@chronoforge/core — Index Exports", () => {
   it("exports ChronoError", () => expect(core.ChronoError).toBeDefined());
   it("exports CronContext", () => expect(core.CronContext).toBeDefined());
   it("exports JobContext", () => expect(core.JobContext).toBeDefined());
-  it("exports ChronoLogger", () => expect(core.ChronoLogger).toBeDefined());
   it("exports createLogger", () => expect(core.createLogger).toBeDefined());
   it("exports ChronoEventBus", () => expect(core.ChronoEventBus).toBeDefined());
   it("exports ChronoRegistry", () => expect(core.ChronoRegistry).toBeDefined());

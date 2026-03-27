@@ -1,9 +1,9 @@
-import type { ChronoLogger } from "../logger/voltlog.js";
+import type { Logger } from "../logger/index.js";
 
 // Interface the Cron handler receives — avoids circular type import
 export interface ICronContext {
   readonly id: string;
-  readonly log: ChronoLogger;
+  readonly log: Logger;
   readonly signal: AbortSignal;
   readonly firedAt: Date;
   readonly scheduleName: string;

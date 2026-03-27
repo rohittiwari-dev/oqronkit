@@ -1,13 +1,6 @@
+import type { ChronoLoggerConfig } from "../logger/index.js";
 import type { IChronoAdapter } from "./db.types.js";
 import type { ILockAdapter } from "./lock.types.js";
-
-export type IModulesName =
-  | "cron"
-  | "queue"
-  | "workflow"
-  | "batch"
-  | "webhook"
-  | "pipeline";
 
 export interface ChronoConfig {
   /**
@@ -23,14 +16,14 @@ export interface ChronoConfig {
   environment?: string;
 
   /**
-   * The primary database adapter (State Store) used for job tracking and persistence.
-   * Required. Usually instantiated via @chronoforge/db.
+   * The primary database adapter (State Store).
+   * Required. Instantiate via @chronoforge/db.
    */
   db: IChronoAdapter;
 
   /**
-   * The distributed lock adapter used to guarantee safe concurrency across workers.
-   * Required. Usually instantiated via @chronoforge/lock.
+   * The distributed lock adapter for safe concurrency.
+   * Required. Instantiate via @chronoforge/lock.
    */
   lock: ILockAdapter;
 
@@ -40,15 +33,22 @@ export interface ChronoConfig {
   broker?: any;
 
   /**
-   * List of core modules to enable on this node.
+   * List of core modules to enable.
    * e.g. ['cron', 'queue', 'workflow', 'batch', 'webhook', 'pipeline']
    * @default []
    */
-  modules?: IModulesName[];
+  modules?: string[];
 
   /**
-   * Global tags applied to every job processed by this node. Useful for
-   * filtering in the UI Dashboard (e.g., ['billing-core', 'aws-us-east-1']).
+   * Directory to auto-discover job definition files from.
+   * ChronoForge.init() scans this directory recursively for .ts/.js files
+   * that export CronDefinitions (via `cron()`) and registers them automatically.
+   * @default "./src/jobs"
+   */
+  jobsDir?: string;
+
+  /**
+   * Global tags applied to every job processed by this node.
    * @default []
    */
   tags?: string[];
@@ -57,16 +57,15 @@ export interface ChronoConfig {
    * Worker-level configurations
    */
   worker?: {
-    /** Number of concurrent jobs this node is allowed to process simultaneously */
+    /** Number of concurrent jobs this node processes simultaneously */
     concurrency?: number;
-    /** Time in ms to wait for active jobs to safely complete before SIGTERM exits */
+    /** Time in ms to wait for active jobs before SIGTERM exits */
     gracefulShutdownMs?: number;
   };
 
   /**
-   * Internal logger settings
+   * Logger configuration (powered by voltlog-io).
+   * Set to `false` to disable logging entirely.
    */
-  logger?: {
-    level?: "debug" | "info" | "warn" | "error";
-  };
+  logger?: ChronoLoggerConfig | false;
 }

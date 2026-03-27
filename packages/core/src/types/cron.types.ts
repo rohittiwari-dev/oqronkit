@@ -1,16 +1,24 @@
 import type { ICronContext } from "../context/cron-context.interface.js";
 
 export type MissedFirePolicy = "skip" | "run-once" | "run-all";
+export type OverlapPolicy = "skip" | "run" | boolean;
+
+export interface CronHooks {
+  onMissedFire?: (ctx: ICronContext, missedAt: Date) => Promise<void> | void;
+}
 
 export interface CronDefinition {
-  id: string;
-  expression: string;
+  name: string;
+  schedule: string;
   timezone?: string;
-  missedFirePolicy: MissedFirePolicy;
-  overlap: boolean;
+  missedFire: MissedFirePolicy;
+  overlap: OverlapPolicy;
+  guaranteedWorker?: boolean;
+  heartbeatMs?: number;
+  lockTtlMs?: number;
   tags: string[];
-  // Handler receives ICronContext interface — no circular import
   handler: (ctx: ICronContext) => Promise<unknown>;
+  hooks?: CronHooks;
 }
 
 export interface JobRecord {

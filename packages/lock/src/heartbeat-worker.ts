@@ -1,4 +1,4 @@
-import type { ChronoLogger, ILockAdapter } from "@chronoforge/core";
+import type { ILockAdapter, Logger } from "@chronoforge/core";
 
 export class HeartbeatWorker {
   private heartbeatTimer?: ReturnType<typeof setInterval>;
@@ -6,7 +6,7 @@ export class HeartbeatWorker {
 
   constructor(
     private readonly lock: ILockAdapter,
-    private readonly logger: ChronoLogger,
+    private readonly logger: Logger,
     private readonly key: string,
     private readonly ownerId: string,
     private readonly ttlMs: number = 30_000,

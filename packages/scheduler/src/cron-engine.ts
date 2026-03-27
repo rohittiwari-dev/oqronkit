@@ -1,11 +1,11 @@
 import {
-  type ChronoLogger,
   CronContext,
   type CronDefinition,
   createLogger,
   type IChronoAdapter,
   type IChronoModule,
   type ILockAdapter,
+  type Logger,
 } from "@chronoforge/core";
 import { HeartbeatWorker, LeaderElection } from "@chronoforge/lock";
 import { randomUUID } from "crypto";
@@ -16,7 +16,7 @@ export class SchedulerModule implements IChronoModule {
   public readonly enabled = true;
 
   private readonly nodeId: string;
-  private readonly logger: ChronoLogger;
+  private readonly logger: Logger;
   private leader?: LeaderElection;
   private tickTimer?: ReturnType<typeof setInterval>;
   // key = scheduleId, prevents overlapping runs when overlap=false
@@ -26,11 +26,11 @@ export class SchedulerModule implements IChronoModule {
     private readonly schedules: CronDefinition[],
     private readonly db: IChronoAdapter,
     private readonly lock: ILockAdapter,
-    logger?: ChronoLogger,
+    logger?: Logger,
   ) {
     this.nodeId = randomUUID();
     this.logger =
-      logger ?? createLogger({ level: "info", module: "scheduler" });
+      logger ?? createLogger({ level: "info" }, { module: "scheduler" });
   }
 
   async init(): Promise<void> {
@@ -41,8 +41,8 @@ export class SchedulerModule implements IChronoModule {
     for (const def of this.schedules) {
       await this.db.upsertSchedule(def);
       this.logger.debug("Registered schedule", {
-        id: def.id,
-        expression: def.expression,
+        name: def.name,
+        schedule: def.schedule,
       });
     }
   }
@@ -66,8 +66,8 @@ export class SchedulerModule implements IChronoModule {
     if (!this.leader?.isLeader) return;
     try {
       const due = await this.db.getDueSchedules(new Date(), 50);
-      for (const { id } of due) {
-        const def = this.schedules.find((s) => s.id === id);
+      for (const { name } of due) {
+        const def = this.schedules.find((s) => s.name === name);
         if (!def) continue;
         void this.fire(def);
       }
@@ -77,8 +77,9 @@ export class SchedulerModule implements IChronoModule {
   }
 
   private async fire(def: CronDefinition): Promise<void> {
-    if (!def.overlap && this.activeJobs.has(def.id)) {
-      this.logger.debug("Skipping overlapping run", { id: def.id });
+    const isOverlapSkip = def.overlap === "skip" || def.overlap === false;
+    if (isOverlapSkip && this.activeJobs.has(def.name)) {
+      this.logger.debug("Skipping overlapping run", { name: def.name });
       return;
     }
 
@@ -86,7 +87,7 @@ export class SchedulerModule implements IChronoModule {
     const worker = new HeartbeatWorker(
       this.lock,
       this.logger,
-      `chrono:run:${def.id}`,
+      `chrono:run:${def.name}`,
       this.nodeId,
       30_000,
     );
@@ -94,11 +95,11 @@ export class SchedulerModule implements IChronoModule {
     const acquired = await worker.start();
     if (!acquired) return;
 
-    this.activeJobs.set(def.id, worker);
+    this.activeJobs.set(def.name, worker);
     const startedAt = new Date();
     await this.db.recordExecution({
       id: runId,
-      scheduleId: def.id,
+      scheduleId: def.name,
       status: "running",
       startedAt,
     });
@@ -107,10 +108,10 @@ export class SchedulerModule implements IChronoModule {
       const abort = new AbortController();
       const ctx = new CronContext({
         id: runId,
-        logger: this.logger.child(def.id),
+        logger: this.logger.child({ schedule: def.name }),
         signal: abort.signal,
         firedAt: startedAt,
-        scheduleName: def.id,
+        scheduleName: def.name,
       });
 
       let status: "completed" | "failed" = "completed";
@@ -121,25 +122,29 @@ export class SchedulerModule implements IChronoModule {
       } catch (err: unknown) {
         status = "failed";
         error = err instanceof Error ? err.message : String(err);
-        this.logger.error("Job handler threw", { id: def.id, runId, error });
+        this.logger.error("Job handler threw", {
+          name: def.name,
+          runId,
+          error,
+        });
       } finally {
         const completedAt = new Date();
         await this.db.recordExecution({
           id: runId,
-          scheduleId: def.id,
+          scheduleId: def.name,
           status,
           startedAt,
           completedAt,
           error,
         });
         await worker.stop();
-        this.activeJobs.delete(def.id);
+        this.activeJobs.delete(def.name);
         try {
-          getNextRunDate(def.expression, def.timezone);
+          getNextRunDate(def.schedule, def.timezone);
         } catch {
           /* expression was already validated */
         }
-        this.logger.info("Job finished", { id: def.id, runId, status });
+        this.logger.info("Job finished", { name: def.name, runId, status });
       }
     });
   }
