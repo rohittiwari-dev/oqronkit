@@ -47,7 +47,7 @@ async function main(): Promise<void> {
     });
   });
 
-  const PORT = Number(process.env["PORT"] ?? 3000);
+  const PORT = Number(process.env.PORT ?? 3000);
   const server = app.listen(PORT, () => {
     log.info(`Server ready on http://localhost:${PORT}`);
     ChronoEventBus.emit("system:ready");

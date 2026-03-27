@@ -41,7 +41,7 @@ export async function handleHealth(
       ok: true,
       status: "running",
       uptime: process.uptime(),
-      env: process.env["CHRONO_ENV"] ?? "development",
+      env: process.env.CHRONO_ENV ?? "development",
       ts: new Date().toISOString(),
     },
   };
@@ -50,7 +50,7 @@ export async function handleHealth(
 export async function handleEvents(
   req: MonitorRequest,
 ): Promise<MonitorResponse> {
-  const limit = Math.min(Number(req.query["limit"] ?? 50), 200);
+  const limit = Math.min(Number(req.query.limit ?? 50), 200);
   return {
     status: 200,
     body: { ok: true, events: recentEvents.slice(0, limit) },
@@ -60,7 +60,7 @@ export async function handleEvents(
 export async function handleTrigger(
   req: MonitorRequest,
 ): Promise<MonitorResponse> {
-  const id = req.params["id"];
+  const id = req.params.id;
   if (!id)
     return { status: 400, body: { ok: false, error: "Missing :id param" } };
   appendEvent("manual:trigger", { id });

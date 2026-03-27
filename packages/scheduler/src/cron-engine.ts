@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   CronContext,
   type CronDefinition,
@@ -8,7 +9,6 @@ import {
   type Logger,
 } from "@chronoforge/core";
 import { HeartbeatWorker, LeaderElection } from "@chronoforge/lock";
-import { randomUUID } from "crypto";
 import { getNextRunDate } from "./expression-parser.js";
 
 export class SchedulerModule implements IChronoModule {
