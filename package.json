@@ -1,24 +1,46 @@
 {
   "name": "choronoforge",
-  "private": true,
+  "version": "0.0.1",
+  "private": false,
   "scripts": {
     "build": "turbo run build",
+    "test": "turbo run test",
     "dev": "turbo run dev",
     "lint": "turbo run lint",
-    "format": "prettier --write \"**/*.{ts,tsx,md}\"",
-    "check-types": "turbo run check-types"
+    "commit": "cz",
+    "changeset": "changeset",
+    "format": "biome format --write .",
+    "check": "biome check --write .",
+    "prepublishOnly": "bun run build",
+    "prepare": "bun -e \"if (!process.env.CI) process.exit(1)\" || husky",
+    "commitlint": "commitlint --edit",
+    "version": "changeset version",
+    "release": "bun run build && changeset publish"
   },
+  "config": {
+    "commitizen": {
+      "path": "./node_modules/cz-conventional-changelog"
+    }
+  },
+  "author": "Rohit Tiwari <rohit@rohittiwari.me>",
+  "homepage": "https://choronoforge.rohittiwari.me",
+  "bugs": {
+    "url": "https://github.com/rohittiwari-dev/choronoforge/issues"
+  },
+  "keywords": [],
   "devDependencies": {
-    "prettier": "^3.7.4",
-    "turbo": "^2.8.20",
-    "typescript": "5.9.2"
+    "@biomejs/biome": "^2.4.8",
+    "@changesets/cli": "^2.30.0",
+    "@commitlint/cli": "^20.4.4",
+    "@commitlint/config-conventional": "^20.4.4",
+    "commitizen": "^4.3.1",
+    "cz-conventional-changelog": "^3.3.0",
+    "husky": "^9.1.7",
+    "turbo": "^2.8.19"
   },
-  "engines": {
-    "node": ">=18"
-  },
-  "packageManager": "bun@1.3.9",
   "workspaces": [
-    "apps/*",
-    "packages/*"
-  ]
+    "packages/*",
+    "apps/*"
+  ],
+  "packageManager": "^bun@1.3.9"
 }
