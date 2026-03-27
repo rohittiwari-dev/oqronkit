@@ -19,9 +19,20 @@ export async function loadConfig(
   try {
     // Dynamic import works in Bun for both .ts and .js files
     const mod = await import(/* @vite-ignore */ pathToFileURL(configPath).href);
-    rawConfig = mod.default ?? mod;
-  } catch {
-    throw new Error(`[ChronoForge] Failed to load config from: ${configPath}`);
+
+    // Unwrap nested .default from TSX/CommonJS transpilation
+    rawConfig = mod;
+    while (
+      rawConfig &&
+      typeof rawConfig === "object" &&
+      "default" in rawConfig
+    ) {
+      rawConfig = (rawConfig as any).default;
+    }
+  } catch (err) {
+    throw new Error(
+      `[ChronoForge] Failed to load config from: ${configPath}\n${err}`,
+    );
   }
 
   const parseResult = ChronoConfigSchema.safeParse(rawConfig);
