@@ -1,0 +1,42 @@
+{
+  "name": "chronoforge",
+  "version": "0.0.1",
+  "description": "Crash-safe, non-blocking, modular job processing framework for Node.js",
+  "main": "dist/index.js",
+  "module": "dist/index.mjs",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types":   "./dist/index.d.ts",
+      "import":  "./dist/index.mjs",
+      "require": "./dist/index.js"
+    },
+    "./cron": {
+      "types":   "./dist/cron.d.ts",
+      "import":  "./dist/cron.mjs",
+      "require": "./dist/cron.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build":         "tsup && tsc --emitDeclarationOnly --outDir dist",
+    "test":          "vitest run",
+    "test:watch":    "vitest",
+    "test:coverage": "vitest run --coverage",
+    "prepublishOnly": "bun run build"
+  },
+  "dependencies": {
+    "@chronoforge/core":      "*",
+    "@chronoforge/db":        "*",
+    "@chronoforge/lock":      "*",
+    "@chronoforge/scheduler": "*"
+  },
+  "devDependencies": {
+    "@types/node":         "^22.15.3",
+    "@vitest/coverage-v8": "^3.0.0",
+    "tsup":                "^8.5.1",
+    "typescript":          "^5.7.3",
+    "vitest":              "^3.0.0"
+  },
+  "engines": { "node": ">=18.0.0" }
+}

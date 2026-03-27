@@ -1,7 +1,7 @@
 {
-  "name": "choronoforge",
+  "name": "chronoforge-monorepo",
   "version": "0.0.1",
-  "private": false,
+  "private": true,
   "scripts": {
     "build": "turbo run build",
     "test": "turbo run test",
@@ -12,7 +12,7 @@
     "format": "biome format --write .",
     "check": "biome check --write .",
     "prepublishOnly": "bun run build",
-    "prepare": "bun -e \"if (!process.env.CI) process.exit(1)\" || husky",
+    "prepare": "husky || true",
     "commitlint": "commitlint --edit",
     "version": "changeset version",
     "release": "bun run build && changeset publish"
@@ -23,9 +23,9 @@
     }
   },
   "author": "Rohit Tiwari <rohit@rohittiwari.me>",
-  "homepage": "https://choronoforge.rohittiwari.me",
+  "homepage": "https://chronoforge.rohittiwari.me",
   "bugs": {
-    "url": "https://github.com/rohittiwari-dev/choronoforge/issues"
+    "url": "https://github.com/rohittiwari-dev/chronoforge/issues"
   },
   "keywords": [],
   "devDependencies": {
