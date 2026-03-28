@@ -8,7 +8,7 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/rohittiwari-dev/oqronkit"
-  }
+  },
   "exports": {
     ".": {
       "types":   "./dist/index.d.ts",
