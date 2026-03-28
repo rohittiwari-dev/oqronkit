@@ -17,6 +17,10 @@
     "version": "changeset version",
     "release": "bun run build && changeset publish"
   },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/rohittiwari-dev/oqronkit"
+  }
   "config": {
     "commitizen": {
       "path": "./node_modules/cz-conventional-changelog"
