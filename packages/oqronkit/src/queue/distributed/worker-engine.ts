@@ -123,23 +123,35 @@ export class WorkerEngine implements IOqronModule {
     adapter: IQueueAdapter,
   ): Promise<void> {
     try {
-      OqronEventBus.emit("job:start", job.id, w.name);
+      OqronEventBus.emit("job:start", job.queueName, job.id, w.name);
 
       const result = await w.processor(job);
       await adapter.completeJob(job.id, result);
+      OqronEventBus.emit("job:success", job.queueName, job.id);
 
-      OqronEventBus.emit("job:success", job.id);
+      if (w.options?.hooks?.onSuccess) {
+        Promise.resolve()
+          .then(() => w.options!.hooks!.onSuccess!(job, result))
+          .catch((e) =>
+            this.logger.error(`[Worker ${w.name}] onSuccess hook error`, e),
+          );
+      }
     } catch (e: any) {
+      const errorObject = new Error(e.message ?? "Unknown error");
       await adapter.failJob(
         job.id,
         e.message || "Worker execution failed",
         e.stack,
       );
-      OqronEventBus.emit(
-        "job:fail",
-        job.id,
-        new Error(e.message ?? "Unknown error"),
-      );
+      OqronEventBus.emit("job:fail", job.queueName, job.id, errorObject);
+
+      if (w.options?.hooks?.onFail) {
+        Promise.resolve()
+          .then(() => w.options!.hooks!.onFail!(job, errorObject))
+          .catch((err) =>
+            this.logger.error(`[Worker ${w.name}] onFail hook error`, err),
+          );
+      }
     }
   }
 }

@@ -13,6 +13,17 @@ export interface WorkerOptions {
     duration: number;
     groupKey?: string;
   };
+  /** Callbacks executed directly on the CPU node doing the worker processing natively */
+  hooks?: {
+    onSuccess?: (
+      job: OqronJobData<any, any>,
+      result: any,
+    ) => Promise<void> | void;
+    onFail?: (
+      job: OqronJobData<any, any>,
+      error: Error,
+    ) => Promise<void> | void;
+  };
 }
 
 // Internal registry tracking all Worker instances

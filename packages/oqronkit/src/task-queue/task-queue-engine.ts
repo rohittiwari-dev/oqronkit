@@ -149,7 +149,7 @@ export class TaskQueueEngine implements IOqronModule {
 
     try {
       // Fire event telemetry tracking via EventBus
-      OqronEventBus.emit("job:start", job.id, q.name);
+      OqronEventBus.emit("job:start", job.queueName, job.id, q.name);
 
       const result = await q.handler(ctx);
 
@@ -160,8 +160,21 @@ export class TaskQueueEngine implements IOqronModule {
       }
 
       await this.adapter.completeJob(job.id, result);
-      OqronEventBus.emit("job:success", job.id);
+      OqronEventBus.emit("job:success", job.queueName, job.id);
+
+      if (q.hooks?.onSuccess) {
+        // Execute asynchronously avoiding pipeline halts
+        Promise.resolve()
+          .then(() => q.hooks!.onSuccess!(job, result))
+          .catch((e) =>
+            this.logger.error(
+              `[TaskQueue ${q.name}] onSuccess hook exception`,
+              e,
+            ),
+          );
+      }
     } catch (e: any) {
+      const errorObject = new Error(e.message ?? "Unknown error");
       if (internalDiscarded) {
         // Drop permanently with no retry logic applied.
         await this.adapter.failJob(job.id, "Discarded", e.stack);
@@ -172,11 +185,18 @@ export class TaskQueueEngine implements IOqronModule {
           e.stack,
         );
       }
-      OqronEventBus.emit(
-        "job:fail",
-        job.id,
-        new Error(e.message ?? "Unknown error"),
-      );
+      OqronEventBus.emit("job:fail", job.queueName, job.id, errorObject);
+
+      if (q.hooks?.onFail) {
+        Promise.resolve()
+          .then(() => q.hooks!.onFail!(job, errorObject))
+          .catch((err) =>
+            this.logger.error(
+              `[TaskQueue ${q.name}] onFail hook exception`,
+              err,
+            ),
+          );
+      }
     }
   }
 }

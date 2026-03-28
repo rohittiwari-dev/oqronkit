@@ -50,6 +50,12 @@ export interface TaskQueueConfig<T = any, R = any> {
     onDead?: (job: OqronJobData<T, R>) => Promise<void>;
   };
 
+  /** Natively execute direct local callbacks when the monolithic processor succeeds or fails */
+  hooks?: {
+    onSuccess?: (job: OqronJobData<T, R>, result: R) => Promise<void> | void;
+    onFail?: (job: OqronJobData<T, R>, error: Error) => Promise<void> | void;
+  };
+
   /**
    * The monolithic processing function.
    * Required for taskQueue.

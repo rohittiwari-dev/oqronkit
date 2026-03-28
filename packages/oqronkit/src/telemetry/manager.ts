@@ -28,13 +28,17 @@ export class TelemetryManager {
     if (this.started) return;
     this.started = true;
 
-    OqronEventBus.on("job:start", (jobId: string, schedule: string) => {
-      this.increment(this.jobsStartedTotal, schedule);
-      this.increment(this.jobsActiveGauge, schedule);
-      this.jobStartTimes.set(jobId, { ts: Date.now(), schedule });
-    });
+    OqronEventBus.on(
+      "job:start",
+      (queueName: string, jobId: string, schedule?: string) => {
+        const topic = schedule || queueName || "_unknown";
+        this.increment(this.jobsStartedTotal, topic);
+        this.increment(this.jobsActiveGauge, topic);
+        this.jobStartTimes.set(jobId, { ts: Date.now(), schedule: topic });
+      },
+    );
 
-    OqronEventBus.on("job:success", (jobId: string) => {
+    OqronEventBus.on("job:success", (_queueName: string, jobId: string) => {
       const entry = this.jobStartTimes.get(jobId);
       const schedule = entry?.schedule ?? "_unknown";
 
@@ -54,19 +58,22 @@ export class TelemetryManager {
       }
     });
 
-    OqronEventBus.on("job:fail", (jobId: string, _error: Error) => {
-      const entry = this.jobStartTimes.get(jobId);
-      const schedule = entry?.schedule ?? "_unknown";
+    OqronEventBus.on(
+      "job:fail",
+      (_queueName: string, jobId: string, _error: Error) => {
+        const entry = this.jobStartTimes.get(jobId);
+        const schedule = entry?.schedule ?? "_unknown";
 
-      this.increment(this.jobsFailedTotal, schedule);
-      this.decrement(this.jobsActiveGauge, schedule);
+        this.increment(this.jobsFailedTotal, schedule);
+        this.decrement(this.jobsActiveGauge, schedule);
 
-      if (entry) {
-        const duration = Date.now() - entry.ts;
-        this.jobDurationsMs.push({ schedule, duration });
-        this.jobStartTimes.delete(jobId);
-      }
-    });
+        if (entry) {
+          const duration = Date.now() - entry.ts;
+          this.jobDurationsMs.push({ schedule, duration });
+          this.jobStartTimes.delete(jobId);
+        }
+      },
+    );
   }
 
   /** Stop listening and reset all counters */

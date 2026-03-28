@@ -436,7 +436,7 @@ export class ScheduleEngine implements IOqronModule {
     });
 
     // ── Execute handler (non-blocking) ────────────────────────────────────
-    OqronEventBus.emit("job:start", runId, def.name);
+    OqronEventBus.emit("job:start", "system_schedule", runId, def.name);
     entry.promise = Promise.resolve().then(async () => {
       const ctx = new ScheduleContext({
         id: runId,
@@ -585,10 +585,11 @@ export class ScheduleEngine implements IOqronModule {
 
       // Emit EventBus events for telemetry and monitoring
       if (status === "completed") {
-        OqronEventBus.emit("job:success", runId);
+        OqronEventBus.emit("job:success", "system_schedule", runId);
       } else {
         OqronEventBus.emit(
           "job:fail",
+          "system_schedule",
           runId,
           new Error(error ?? "Unknown error"),
         );

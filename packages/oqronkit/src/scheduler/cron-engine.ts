@@ -421,7 +421,7 @@ export class SchedulerModule implements IOqronModule {
     });
 
     // ── Execute handler (non-blocking) ────────────────────────────────────
-    OqronEventBus.emit("job:start", runId, def.name);
+    OqronEventBus.emit("job:start", "cron", runId, def.name);
     entry.promise = Promise.resolve().then(async () => {
       const ctx = new CronContext({
         id: runId,
@@ -576,10 +576,11 @@ export class SchedulerModule implements IOqronModule {
 
       // Emit EventBus events for telemetry and monitoring
       if (status === "completed") {
-        OqronEventBus.emit("job:success", runId);
+        OqronEventBus.emit("job:success", "cron", runId);
       } else {
         OqronEventBus.emit(
           "job:fail",
+          "cron",
           runId,
           new Error(error ?? "Unknown error"),
         );

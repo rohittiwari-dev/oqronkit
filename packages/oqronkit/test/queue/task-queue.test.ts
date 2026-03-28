@@ -98,6 +98,6 @@ describe("Server-Dependent module: Task Queue", () => {
     const job = await q.add({});
     await vi.advanceTimersByTimeAsync(50);
 
-    expect(successSpy).toHaveBeenCalledWith(job.id);
+    expect(successSpy).toHaveBeenCalledWith("event-q", job.id);
   });
 });

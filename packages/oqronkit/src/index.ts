@@ -70,7 +70,9 @@ export {
   PostgresLockAdapter,
   RedisLockAdapter,
 } from "./lock/index.js";
+export { FlowProducer } from "./queue/distributed/flow-producer.js";
 export { Queue } from "./queue/distributed/queue.js";
+export { QueueEvents } from "./queue/distributed/queue-events.js";
 export { Worker } from "./queue/distributed/worker.js";
 export {
   cron,

@@ -1,10 +1,10 @@
 import { EventEmitter } from "eventemitter3";
 
 export type OqronEventMap = {
-  "job:start": [jobId: string, module: string];
-  "job:progress": [jobId: string, value: number];
-  "job:success": [jobId: string];
-  "job:fail": [jobId: string, error: Error];
+  "job:start": [queueName: string, jobId: string, module: string];
+  "job:progress": [queueName: string, jobId: string, value: number];
+  "job:success": [queueName: string, jobId: string];
+  "job:fail": [queueName: string, jobId: string, error: Error];
   "system:ready": [];
   "system:stop": [];
 };

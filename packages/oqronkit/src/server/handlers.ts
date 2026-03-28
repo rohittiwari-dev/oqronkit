@@ -21,14 +21,14 @@ function appendEvent(event: string, data: unknown): void {
   if (recentEvents.length > 500) recentEvents.pop();
 }
 
-OqronEventBus.on("job:start", (jobId: string, mod: string) =>
-  appendEvent("job:start", { jobId, mod }),
+OqronEventBus.on("job:start", (queueName: string, jobId: string, mod: string) =>
+  appendEvent("job:start", { queueName, jobId, mod }),
 );
-OqronEventBus.on("job:success", (jobId: string) =>
-  appendEvent("job:success", { jobId }),
+OqronEventBus.on("job:success", (queueName: string, jobId: string) =>
+  appendEvent("job:success", { queueName, jobId }),
 );
-OqronEventBus.on("job:fail", (jobId: string, err: Error) =>
-  appendEvent("job:fail", { jobId, error: err.message }),
+OqronEventBus.on("job:fail", (queueName: string, jobId: string, err: Error) =>
+  appendEvent("job:fail", { queueName, jobId, error: err.message }),
 );
 OqronEventBus.on("system:ready", () => appendEvent("system:ready", {}));
 OqronEventBus.on("system:stop", () => appendEvent("system:stop", {}));

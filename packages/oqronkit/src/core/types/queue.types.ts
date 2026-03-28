@@ -3,10 +3,19 @@ export interface OqronJobData<T = any, R = any> {
   queueName: string; // The topic/queue name (e.g. 'payment-processor')
   data: T; // User payload
   opts?: OqronJobOptions;
+  parentId?: string;
 
   // Execution State
   attemptMade: number;
-  status: "waiting" | "active" | "completed" | "failed" | "delayed" | "paused";
+  waitingChildrenCount?: number;
+  status:
+    | "waiting-children"
+    | "waiting"
+    | "active"
+    | "completed"
+    | "failed"
+    | "delayed"
+    | "paused";
 
   // Timestamps
   createdAt: Date;
@@ -37,6 +46,14 @@ export interface OqronJobOptions {
   removeOnFail?: boolean | number;
 }
 
+export interface FlowJobNode<T = any> {
+  name: string;
+  queueName: string;
+  data: T;
+  opts?: OqronJobOptions;
+  children?: FlowJobNode<any>[];
+}
+
 /**
  * Universal interface for persistent queue storage operations.
  * Allows Memory, Redis, or Postgres to handle job orchestration.
@@ -57,6 +74,9 @@ export interface IQueueAdapter {
     queueName: string,
     jobs: { data: T; opts?: OqronJobOptions }[],
   ): Promise<OqronJobData<T>[]>;
+
+  /** Push a complex parent-child DAG map */
+  enqueueFlow(flow: FlowJobNode): Promise<OqronJobData>;
 
   /**
    * Used by Workers to fetch work.

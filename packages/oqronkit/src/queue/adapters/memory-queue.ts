@@ -1,5 +1,6 @@
 import crypto from "node:crypto";
 import type {
+  FlowJobNode,
   IQueueAdapter,
   OqronJobData,
   OqronJobOptions,
@@ -55,6 +56,44 @@ export class MemoryQueueAdapter implements IQueueAdapter {
     return results;
   }
 
+  async enqueueFlow(
+    flow: FlowJobNode,
+    parentId?: string,
+  ): Promise<OqronJobData> {
+    const jobId = flow.opts?.jobId || this.generateId();
+    if (flow.opts?.jobId && this.jobs.has(jobId)) {
+      return this.jobs.get(jobId) as OqronJobData;
+    }
+
+    const childrenCount = flow.children?.length || 0;
+    const job: OqronJobData = {
+      id: jobId,
+      queueName: flow.queueName,
+      data: flow.data,
+      opts: flow.opts,
+      parentId,
+      attemptMade: 0,
+      waitingChildrenCount: childrenCount,
+      status:
+        childrenCount > 0
+          ? "waiting-children"
+          : flow.opts?.delay
+            ? "delayed"
+            : "waiting",
+      createdAt: new Date(),
+      progressPercent: 0,
+    };
+
+    if (flow.children && flow.children.length > 0) {
+      for (const child of flow.children) {
+        await this.enqueueFlow(child, jobId);
+      }
+    }
+
+    this.jobs.set(job.id, job);
+    return job;
+  }
+
   async claimJobs(
     queueName: string,
     limit: number,
@@ -100,6 +139,20 @@ export class MemoryQueueAdapter implements IQueueAdapter {
     job.status = "completed";
     job.finishedAt = new Date();
     job.returnValue = returnValue;
+
+    if (job.parentId) {
+      const parent = this.jobs.get(job.parentId);
+      if (
+        parent &&
+        parent.waitingChildrenCount !== undefined &&
+        parent.waitingChildrenCount > 0
+      ) {
+        parent.waitingChildrenCount -= 1;
+        if (parent.waitingChildrenCount === 0) {
+          parent.status = parent.opts?.delay ? "delayed" : "waiting";
+        }
+      }
+    }
 
     if (job.opts?.removeOnComplete === true) {
       this.jobs.delete(jobId);
