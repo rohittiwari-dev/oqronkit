@@ -48,6 +48,8 @@ export class ScheduleEngine implements IChronoModule {
     private readonly config?: {
       enable?: boolean;
       tickInterval?: number;
+      keepJobHistory?: boolean | number;
+      keepFailedJobHistory?: boolean | number;
     },
   ) {
     this.nodeId = randomUUID();
@@ -472,6 +474,24 @@ export class ScheduleEngine implements IChronoModule {
       }
 
       this.activeJobs.delete(runId);
+
+      // Handle history pruning based on configured cascade
+      const keepJobHistory =
+        def.keepHistory ?? this.config?.keepJobHistory ?? true;
+      const keepFailedHistory =
+        def.keepFailedHistory ?? this.config?.keepFailedJobHistory ?? true;
+
+      if (keepJobHistory !== true || keepFailedHistory !== true) {
+        this.db
+          .pruneHistoryForSchedule(def.name, keepJobHistory, keepFailedHistory)
+          .catch((err) =>
+            this.logger.debug("Failed to prune history", {
+              err,
+              name: def.name,
+            }),
+          );
+      }
+
       this.logger.info("Schedule finished", {
         name: def.name,
         runId,

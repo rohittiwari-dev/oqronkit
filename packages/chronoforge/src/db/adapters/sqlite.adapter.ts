@@ -305,4 +305,44 @@ export class SqliteAdapter implements IChronoAdapter {
       .run(before.toISOString());
     return result.changes;
   }
+
+  async pruneHistoryForSchedule(
+    scheduleId: string,
+    keepJobHistory: number | boolean,
+    keepFailedJobHistory: number | boolean,
+  ): Promise<void> {
+    if (keepJobHistory === false && keepFailedJobHistory === false) return;
+
+    if (typeof keepJobHistory === "number") {
+      this.db
+        .prepare(
+          `
+        DELETE FROM chrono_jobs 
+        WHERE scheduleId = ? AND status = 'completed'
+        AND id NOT IN (
+          SELECT id FROM chrono_jobs 
+          WHERE scheduleId = ? AND status = 'completed' 
+          ORDER BY startedAt DESC LIMIT ?
+        )
+      `,
+        )
+        .run(scheduleId, scheduleId, keepJobHistory);
+    }
+
+    if (typeof keepFailedJobHistory === "number") {
+      this.db
+        .prepare(
+          `
+        DELETE FROM chrono_jobs 
+        WHERE scheduleId = ? AND status IN ('failed', 'dead')
+        AND id NOT IN (
+          SELECT id FROM chrono_jobs 
+          WHERE scheduleId = ? AND status IN ('failed', 'dead') 
+          ORDER BY startedAt DESC LIMIT ?
+        )
+      `,
+        )
+        .run(scheduleId, scheduleId, keepFailedJobHistory);
+    }
+  }
 }

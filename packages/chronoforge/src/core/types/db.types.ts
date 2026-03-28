@@ -40,4 +40,11 @@ export interface IChronoAdapter {
 
   /** Clean old execution records */
   cleanOldExecutions(before: Date): Promise<number>;
+
+  /** Roll history based on config settings */
+  pruneHistoryForSchedule(
+    scheduleId: string,
+    keepJobHistory: number | boolean,
+    keepFailedJobHistory: number | boolean,
+  ): Promise<void>;
 }

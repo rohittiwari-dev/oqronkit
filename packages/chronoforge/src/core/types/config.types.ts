@@ -84,11 +84,17 @@ export interface ChronoConfig {
     missedFirePolicy?: "skip" | "run-once" | "run-all";
     maxConcurrentJobs?: number;
     leaderElection?: boolean;
+    /** Rolling execution history. `true` = infinite, `false` = 0, `number` = keep N */
+    keepJobHistory?: boolean | number;
+    /** Override for failed tasks. Handled explicitly under errors */
+    keepFailedJobHistory?: boolean | number;
   };
 
   scheduler?: {
     enable?: boolean;
     tickInterval?: number;
+    keepJobHistory?: boolean | number;
+    keepFailedJobHistory?: boolean | number;
   };
 
   /**

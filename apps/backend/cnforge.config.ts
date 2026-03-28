@@ -27,6 +27,11 @@ export default defineConfig({
     gracefulShutdownMs: 30000,
   },
 
+  // cron: {
+  //   keepJobHistory: true, // number|boolean if this is true or number(length of history to keep) then will keep history of recent jobs
+  //   keepFailedJobHistory: true, // number|boolean if this is  true or number(length of history to keep) then keepFailedJobHistoryFor and keepJobHistory will be ignored for failed jobs  will keep history of recent failed jobs (optional)
+  // },
+
   // 7. Core logger settings
   logger: {
     enabled: true,

@@ -95,6 +95,8 @@ export const ChronoConfigSchema = z.object({
         .default("run-once"),
       maxConcurrentJobs: z.number().default(5),
       leaderElection: z.boolean().default(true),
+      keepJobHistory: z.union([z.boolean(), z.number()]).default(true),
+      keepFailedJobHistory: z.union([z.boolean(), z.number()]).default(true),
     })
     .default({}),
 
@@ -102,6 +104,8 @@ export const ChronoConfigSchema = z.object({
     .object({
       enable: z.boolean().default(true),
       tickInterval: z.number().default(1000),
+      keepJobHistory: z.union([z.boolean(), z.number()]).default(true),
+      keepFailedJobHistory: z.union([z.boolean(), z.number()]).default(true),
     })
     .default({}),
 

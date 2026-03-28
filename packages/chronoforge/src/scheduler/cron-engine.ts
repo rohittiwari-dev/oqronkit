@@ -51,6 +51,8 @@ export class SchedulerModule implements IChronoModule {
       missedFirePolicy?: "skip" | "run-once" | "run-all";
       maxConcurrentJobs?: number;
       leaderElection?: boolean;
+      keepJobHistory?: boolean | number;
+      keepFailedJobHistory?: boolean | number;
     },
   ) {
     this.nodeId = randomUUID();
@@ -463,6 +465,23 @@ export class SchedulerModule implements IChronoModule {
         if (nextRun) {
           await this.db.updateNextRun(def.name, nextRun).catch(() => {});
         }
+      }
+
+      // Handle history pruning based on configured cascade
+      const keepJobHistory =
+        def.keepHistory ?? this.config?.keepJobHistory ?? true;
+      const keepFailedHistory =
+        def.keepFailedHistory ?? this.config?.keepFailedJobHistory ?? true;
+
+      if (keepJobHistory !== true || keepFailedHistory !== true) {
+        this.db
+          .pruneHistoryForSchedule(def.name, keepJobHistory, keepFailedHistory)
+          .catch((err) =>
+            this.logger.debug("Failed to prune history", {
+              err,
+              name: def.name,
+            }),
+          );
       }
 
       this.logger.info("Job finished", {

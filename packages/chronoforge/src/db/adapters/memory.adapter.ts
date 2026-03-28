@@ -118,4 +118,39 @@ export class MemoryChronoAdapter implements IChronoAdapter {
     }
     return removed;
   }
+
+  async pruneHistoryForSchedule(
+    scheduleId: string,
+    keepJobHistory: number | boolean,
+    keepFailedJobHistory: number | boolean,
+  ): Promise<void> {
+    if (keepJobHistory === false && keepFailedJobHistory === false) return;
+
+    const all = Array.from(this.jobs.values()).filter(
+      (j) =>
+        j.scheduleId === scheduleId &&
+        ["completed", "failed", "dead"].includes(j.status),
+    );
+
+    all.sort((a, b) => b.startedAt.getTime() - a.startedAt.getTime());
+
+    const successes = all.filter((j) => j.status === "completed");
+    const failures = all.filter((j) => ["failed", "dead"].includes(j.status));
+
+    if (
+      typeof keepJobHistory === "number" &&
+      successes.length > keepJobHistory
+    ) {
+      const toRemove = successes.slice(keepJobHistory);
+      for (const j of toRemove) this.jobs.delete(j.id);
+    }
+
+    if (
+      typeof keepFailedJobHistory === "number" &&
+      failures.length > keepFailedJobHistory
+    ) {
+      const toRemove = failures.slice(keepFailedJobHistory);
+      for (const j of toRemove) this.jobs.delete(j.id);
+    }
+  }
 }
