@@ -64,14 +64,14 @@ export {
   OqronEventBus,
 } from "./core/index.js";
 export { PostgresAdapter, RedisAdapter, SqliteAdapter } from "./db/index.js";
-export { Queue } from "./distributed/queue.js";
-export { Worker } from "./distributed/worker.js";
 export {
   DbLockAdapter,
   MemoryLockAdapter,
   PostgresLockAdapter,
   RedisLockAdapter,
 } from "./lock/index.js";
+export { Queue } from "./queue/distributed/queue.js";
+export { Worker } from "./queue/distributed/worker.js";
 export {
   cron,
   type DefineCronOptions,
@@ -400,7 +400,9 @@ export const OqronKit = {
     }
 
     if (_config.modules.includes("worker")) {
-      const { WorkerEngine } = await import("./distributed/worker-engine.js");
+      const { WorkerEngine } = await import(
+        "./queue/distributed/worker-engine.js"
+      );
       const engine = new WorkerEngine(_config, _logger!);
       OqronRegistry.getInstance().register(engine);
     }

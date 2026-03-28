@@ -1,8 +1,11 @@
 import { randomUUID } from "node:crypto";
-import type { IOqronModule, Logger } from "../core/index.js";
-import { OqronEventBus } from "../core/index.js";
-import type { OqronConfig } from "../core/types/config.types.js";
-import type { IQueueAdapter, OqronJobData } from "../core/types/queue.types.js";
+import type { IOqronModule, Logger } from "../../core/index.js";
+import { OqronEventBus } from "../../core/index.js";
+import type { OqronConfig } from "../../core/types/config.types.js";
+import type {
+  IQueueAdapter,
+  OqronJobData,
+} from "../../core/types/queue.types.js";
 import { getRegisteredWorkers, type Worker } from "./worker.js";
 
 export class WorkerEngine implements IOqronModule {

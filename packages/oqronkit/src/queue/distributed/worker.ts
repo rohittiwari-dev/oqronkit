@@ -1,5 +1,8 @@
-import type { IQueueAdapter, OqronJobData } from "../core/types/queue.types.js";
-import { getTaskQueueAdapter } from "../task-queue/registry.js"; // or similar
+import type {
+  IQueueAdapter,
+  OqronJobData,
+} from "../../core/types/queue.types.js";
+import { getTaskQueueAdapter } from "../../task-queue/registry.js"; // or similar
 
 export interface WorkerOptions {
   connection?: IQueueAdapter; // Optional override
