@@ -16,6 +16,7 @@ import {
   MemoryOqronAdapter,
   NamespacedOqronAdapter,
   PostgresAdapter,
+  RedisAdapter,
   SqliteAdapter,
 } from "./db/index.js";
 import {
@@ -23,6 +24,7 @@ import {
   MemoryLockAdapter,
   NamespacedLockAdapter,
   PostgresLockAdapter,
+  RedisLockAdapter,
 } from "./lock/index.js";
 import { expressRouter } from "./server/express.js";
 import { fastifyPlugin } from "./server/fastify.js";
@@ -54,12 +56,19 @@ export type {
   ScheduleRunAfter,
 } from "./core/index.js";
 // ── Re-exports: single source of truth for ALL user-facing APIs ─────────────
-export { createLogger, defineConfig, OqronEventBus } from "./core/index.js";
-export { PostgresAdapter, SqliteAdapter } from "./db/index.js";
+export {
+  createDbAdapter,
+  createLockAdapter,
+  createLogger,
+  defineConfig,
+  OqronEventBus,
+} from "./core/index.js";
+export { PostgresAdapter, RedisAdapter, SqliteAdapter } from "./db/index.js";
 export {
   DbLockAdapter,
   MemoryLockAdapter,
   PostgresLockAdapter,
+  RedisLockAdapter,
 } from "./lock/index.js";
 export {
   cron,
@@ -152,6 +161,32 @@ export const OqronKit = {
           _logger.warn(msg);
         }
         _db = new MemoryOqronAdapter();
+      } else if (adapter === "redis") {
+        if (!url) {
+          throw new Error(
+            "[OqronKit] Redis adapter requires a 'url' (connection string). Example: redis://localhost:6379",
+          );
+        }
+        try {
+          const ioredisModule = "ioredis";
+          const ioredis = await (import(
+            /* webpackIgnore: true */ ioredisModule
+          ) as Promise<any>);
+          const RedisClient = ioredis.default ?? ioredis;
+          const client = new RedisClient(url);
+          _db = new RedisAdapter(client);
+          _logger.info("Redis adapter initialized successfully");
+        } catch (err: any) {
+          if (
+            err.code === "ERR_MODULE_NOT_FOUND" ||
+            err.code === "MODULE_NOT_FOUND"
+          ) {
+            throw new Error(
+              "[OqronKit] Redis adapter requires the 'ioredis' package. Install it: npm install ioredis",
+            );
+          }
+          throw err;
+        }
       } else {
         throw new Error(
           `[OqronKit] Database adapter '${adapter}' not yet bundled. Please pass a custom IOqronAdapter instance.`,
@@ -179,6 +214,39 @@ export const OqronKit = {
         }
       } else if (adapter === "memory") {
         _lock = new MemoryLockAdapter();
+      } else if (adapter === "redis") {
+        const lockUrl =
+          url ??
+          (_config.db &&
+          "adapter" in _config.db &&
+          _config.db.adapter === "redis"
+            ? _config.db.url
+            : undefined);
+        if (!lockUrl) {
+          throw new Error(
+            "[OqronKit] Redis lock adapter requires a 'url'. Example: redis://localhost:6379",
+          );
+        }
+        try {
+          const ioredisModule = "ioredis";
+          const ioredis = await (import(
+            /* webpackIgnore: true */ ioredisModule
+          ) as Promise<any>);
+          const RedisClient = ioredis.default ?? ioredis;
+          const client = new RedisClient(lockUrl);
+          _lock = new RedisLockAdapter(client, ttl);
+          _logger.info("Redis lock adapter initialized successfully");
+        } catch (err: any) {
+          if (
+            err.code === "ERR_MODULE_NOT_FOUND" ||
+            err.code === "MODULE_NOT_FOUND"
+          ) {
+            throw new Error(
+              "[OqronKit] Redis lock adapter requires the 'ioredis' package. Install it: npm install ioredis",
+            );
+          }
+          throw err;
+        }
       } else {
         throw new Error(
           `[OqronKit] Lock adapter '${adapter}' not yet bundled. Please pass a custom ILockAdapter instance.`,

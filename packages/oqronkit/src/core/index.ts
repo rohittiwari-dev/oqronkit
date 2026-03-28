@@ -5,7 +5,6 @@ export { defineConfig } from "./config/define-config.js";
 export type { ValidatedConfig } from "./config/schema.js";
 
 export { OqronConfigSchema } from "./config/schema.js";
-
 // Context
 export type { ICronContext } from "./context/cron-context.interface.js";
 export type { CronContextOptions } from "./context/cron-context.js";
@@ -14,6 +13,8 @@ export type { BaseJobContextOptions } from "./context/job-context.js";
 export { JobContext } from "./context/job-context.js";
 export type { ScheduleContextOptions } from "./context/schedule-context.js";
 export { ScheduleContext } from "./context/schedule-context.js";
+// Adapter Factories
+export { createDbAdapter, createLockAdapter } from "./create-adapter.js";
 
 // Errors
 export { OqronError } from "./errors/base.error.js";

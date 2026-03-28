@@ -52,10 +52,14 @@
   },
   "peerDependencies": {
     "better-sqlite3": ">=9.0.0",
+    "ioredis": ">=5.0.0",
     "pg": ">=8.0.0"
   },
   "peerDependenciesMeta": {
     "better-sqlite3": {
+      "optional": true
+    },
+    "ioredis": {
       "optional": true
     },
     "pg": {
