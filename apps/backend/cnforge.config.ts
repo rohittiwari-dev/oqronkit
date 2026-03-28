@@ -1,6 +1,4 @@
-import { SqliteAdapter } from "@chronoforge/db";
-import { DbLockAdapter } from "@chronoforge/lock";
-import { defineConfig } from "chronoforge";
+import { DbLockAdapter, defineConfig, SqliteAdapter } from "chronoforge";
 
 export default defineConfig({
   // 1. Identification

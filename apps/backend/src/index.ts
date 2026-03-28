@@ -1,31 +1,21 @@
 /**
  * Main entry for the ChronoForge backend demo.
  * Uses Express.js — swap the import block for Fastify/Hono as needed.
- *
- * Node.js runtime:  tsx src/index.ts  |  ts-node src/index.ts
- * Bun runtime:      bun run src/index.ts
- * Deno runtime:     deno run -A src/index.ts
  */
 
 import { mkdirSync } from "node:fs";
-import { ChronoEventBus, createLogger } from "@chronoforge/core";
 import { ChronoForge } from "chronoforge";
 import express from "express";
-
-const log = createLogger({ level: "debug" });
-log.info("ChronoForge backend starting");
 
 // ─── 1. Prepare DB directory ──────────────────────────────────────────────────
 mkdirSync("data", { recursive: true });
 
 // ─── 2. Bootstrap ChronoForge ──────────────────────────────────────────────────
 async function main(): Promise<void> {
-  log.info("Booting ChronoForge…");
+  console.log("Booting ChronoForge…");
 
   // Zero boilerplate: reads chronoforge.config.js, uses jobsDir to load crons
-  await ChronoForge.init({
-    cwd: process.cwd(),
-  });
+  await ChronoForge.init({ cwd: process.cwd() });
 
   // ─── 3. Express HTTP server ──────────────────────────────────────────────────
   const app = express();
@@ -49,17 +39,15 @@ async function main(): Promise<void> {
 
   const PORT = Number(process.env.PORT ?? 3000);
   const server = app.listen(PORT, () => {
-    log.info(`Server ready on http://localhost:${PORT}`);
-    ChronoEventBus.emit("system:ready");
+    console.log(`Server ready on http://localhost:${PORT}`);
   });
 
   // Graceful shutdown
   const shutdown = async (signal: string): Promise<void> => {
-    log.info(`${signal} received — shutting down…`);
+    console.log(`${signal} received — shutting down…`);
     server.close();
     await ChronoForge.stop();
-    ChronoEventBus.emit("system:stop");
-    log.info("Bye!");
+    console.log("Bye!");
     process.exit(0);
   };
 

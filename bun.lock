@@ -19,10 +19,6 @@
       "name": "@choronoforge/backend",
       "version": "0.0.1",
       "dependencies": {
-        "@chronoforge/core": "*",
-        "@chronoforge/db": "*",
-        "@chronoforge/lock": "*",
-        "@chronoforge/scheduler": "*",
         "better-sqlite3": "^12.8.0",
         "chronoforge": "*",
         "express": "^4.21.2",
@@ -41,88 +37,20 @@
       "name": "chronoforge",
       "version": "0.0.1",
       "dependencies": {
-        "@chronoforge/core": "*",
-        "@chronoforge/db": "*",
-        "@chronoforge/lock": "*",
-        "@chronoforge/scheduler": "*",
-      },
-      "devDependencies": {
-        "@types/node": "^22.15.3",
-        "@vitest/coverage-v8": "^3.0.0",
-        "tsup": "^8.5.1",
-        "typescript": "^5.7.3",
-        "vitest": "^3.0.0",
-      },
-    },
-    "packages/core": {
-      "name": "@chronoforge/core",
-      "version": "0.0.1",
-      "dependencies": {
+        "better-sqlite3": "^12.8.0",
+        "cron-parser": "^4.9.0",
         "eventemitter3": "^5.0.1",
         "find-up": "^7.0.0",
         "voltlog-io": "^1.0.8",
         "zod": "^3.22.4",
       },
       "devDependencies": {
-        "@types/node": "^22.15.3",
-        "@vitest/coverage-v8": "^3.0.0",
-        "tsup": "^8.5.1",
-        "typescript": "^5.7.3",
-        "vitest": "^3.0.0",
-      },
-    },
-    "packages/db": {
-      "name": "@chronoforge/db",
-      "version": "0.0.1",
-      "dependencies": {
-        "@chronoforge/core": "*",
-        "better-sqlite3": "^12.8.0",
-      },
-      "devDependencies": {
         "@types/better-sqlite3": "^7.6.13",
         "@types/node": "^22.15.3",
         "@vitest/coverage-v8": "^3.0.0",
         "tsup": "^8.5.1",
         "typescript": "^5.7.3",
         "vitest": "^3.0.0",
-      },
-    },
-    "packages/lock": {
-      "name": "@chronoforge/lock",
-      "version": "0.0.1",
-      "dependencies": {
-        "@chronoforge/core": "*",
-        "better-sqlite3": "^12.8.0",
-      },
-      "devDependencies": {
-        "@types/better-sqlite3": "^7.6.13",
-        "@types/node": "^22.15.3",
-        "@vitest/coverage-v8": "^3.0.0",
-        "tsup": "^8.5.1",
-        "typescript": "^5.7.3",
-        "vitest": "^3.0.0",
-      },
-    },
-    "packages/scheduler": {
-      "name": "@chronoforge/scheduler",
-      "version": "0.0.1",
-      "dependencies": {
-        "@chronoforge/core": "*",
-        "@chronoforge/lock": "*",
-        "cron-parser": "^4.9.0",
-      },
-      "devDependencies": {
-        "@types/node": "^22.15.3",
-        "@vitest/coverage-v8": "^3.0.0",
-        "tsup": "^8.5.1",
-        "typescript": "^5.7.3",
-        "vitest": "^3.0.0",
-      },
-    },
-    "packages/test-utils": {
-      "name": "@chronoforge/test-utils",
-      "dependencies": {
-        "@chronoforge/core": "*",
       },
     },
   },
@@ -196,16 +124,6 @@
     "@changesets/write": ["@changesets/write@0.4.0", "", { "dependencies": { "@changesets/types": "^6.1.0", "fs-extra": "^7.0.1", "human-id": "^4.1.1", "prettier": "^2.7.1" } }, "sha512-CdTLvIOPiCNuH71pyDu3rA+Q0n65cmAbXnwWH84rKGiFumFzkmHNT8KHTMEchcxN+Kl8I54xGUhJ7l3E7X396Q=="],
 
     "@choronoforge/backend": ["@choronoforge/backend@workspace:apps/backend"],
-
-    "@chronoforge/core": ["@chronoforge/core@workspace:packages/core"],
-
-    "@chronoforge/db": ["@chronoforge/db@workspace:packages/db"],
-
-    "@chronoforge/lock": ["@chronoforge/lock@workspace:packages/lock"],
-
-    "@chronoforge/scheduler": ["@chronoforge/scheduler@workspace:packages/scheduler"],
-
-    "@chronoforge/test-utils": ["@chronoforge/test-utils@workspace:packages/test-utils"],
 
     "@commitlint/cli": ["@commitlint/cli@20.5.0", "", { "dependencies": { "@commitlint/format": "^20.5.0", "@commitlint/lint": "^20.5.0", "@commitlint/load": "^20.5.0", "@commitlint/read": "^20.5.0", "@commitlint/types": "^20.5.0", "tinyexec": "^1.0.0", "yargs": "^17.0.0" }, "bin": { "commitlint": "./cli.js" } }, "sha512-yNkyN/tuKTJS3wdVfsZ2tXDM4G4Gi7z+jW54Cki8N8tZqwKBltbIvUUrSbT4hz1bhW/h0CdR+5sCSpXD+wMKaQ=="],
 

@@ -1,4 +1,4 @@
-import type { ICronContext } from "@chronoforge/core";
+import type { ICronContext } from "chronoforge";
 import { cron } from "chronoforge";
 
 // ─── Analytics Report (expression-based) ──────────────────────────────────────

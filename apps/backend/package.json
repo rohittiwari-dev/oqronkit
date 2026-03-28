@@ -11,10 +11,6 @@
   },
   "dependencies": {
     "chronoforge": "*",
-    "@chronoforge/core": "*",
-    "@chronoforge/db": "*",
-    "@chronoforge/lock": "*",
-    "@chronoforge/scheduler": "*",
     "express": "^4.21.2",
     "fastify": "^4.29.0",
     "hono": "^4.4.13",

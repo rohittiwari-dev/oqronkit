@@ -2,29 +2,31 @@ import { defineConfig } from "tsup";
 
 export default defineConfig([
   {
-    entry: { index: "src/index.ts" },
+    entry: ["src/index.ts"],
     format: ["cjs", "esm"],
-    dts: false,
-    splitting: false,
-    sourcemap: false,
+    dts: true,
     clean: true,
-    outDir: "dist",
-    target: "node18",
-    shims: true,
-    treeshake: true,
-    external: ["@chronoforge/core", "@chronoforge/db", "@chronoforge/lock", "@chronoforge/scheduler"],
-  },
-  {
-    entry: { cron: "src/cron.ts" },
-    format: ["cjs", "esm"],
-    dts: false,
-    splitting: false,
     sourcemap: false,
-    clean: false,
+    external: ["better-sqlite3", "cron-parser", "eventemitter3", "find-up", "voltlog-io", "zod"],
     outDir: "dist",
     target: "node18",
     shims: true,
     treeshake: true,
-    external: ["@chronoforge/core", "@chronoforge/scheduler"],
+  },
+  // Isolated sub-module exports
+  {
+    entry: {
+      cron: "src/cron.ts",
+      scheduler: "src/scheduler/index.ts"
+    },
+    format: ["cjs", "esm"],
+    dts: true,
+    clean: false,
+    sourcemap: false,
+    external: ["eventemitter3", "zod", "cron-parser", "better-sqlite3"],
+    outDir: "dist",
+    target: "node18",
+    shims: true,
+    treeshake: true,
   },
 ]);

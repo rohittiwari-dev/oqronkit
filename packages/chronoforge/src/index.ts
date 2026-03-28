@@ -9,15 +9,31 @@ import {
   type Logger,
   loadConfig,
   type ValidatedConfig,
-} from "@chronoforge/core";
+} from "./core/index.js";
 
 let _config: ValidatedConfig | null = null;
 let _db: IChronoAdapter | null = null;
 let _lock: ILockAdapter | null = null;
 let _logger: Logger | null = null;
 
-export { defineConfig } from "@chronoforge/core";
-export { cron, type DefineCronOptions } from "@chronoforge/scheduler";
+export type {
+  ChronoLoggerConfig,
+  CronDefinition,
+  CronHooks,
+  EveryConfig,
+  IChronoAdapter,
+  ICronContext,
+  ILockAdapter,
+  JobRecord,
+  Logger,
+  MissedFirePolicy,
+  OverlapPolicy,
+} from "./core/index.js";
+// ── Re-exports: single source of truth for ALL user-facing APIs ─────────────
+export { ChronoEventBus, createLogger, defineConfig } from "./core/index.js";
+export { SqliteAdapter } from "./db/index.js";
+export { DbLockAdapter, MemoryLockAdapter } from "./lock/index.js";
+export { cron, type DefineCronOptions } from "./scheduler/index.js";
 
 export const ChronoForge = {
   /**
@@ -44,7 +60,7 @@ export const ChronoForge = {
     // --- Boot modules ---
     if (_config.modules.includes("cron")) {
       const { SchedulerModule, _drainPending } = await import(
-        "@chronoforge/scheduler"
+        "./scheduler/index.js"
       );
 
       // Auto-discover jobs if directory is configured
@@ -86,7 +102,7 @@ export const ChronoForge = {
       // Collect all auto-registered definitions
       const schedules = _drainPending();
 
-      const scheduler = new SchedulerModule(schedules, _db, _lock, _logger);
+      const scheduler = new SchedulerModule(schedules, _db!, _lock!, _logger!);
       ChronoRegistry.getInstance().register(scheduler);
     }
 

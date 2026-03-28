@@ -1,4 +1,4 @@
-import { ChronoEventBus } from "@chronoforge/core";
+import { ChronoEventBus } from "../core/index.js";
 
 export type MonitorRequest = {
   method: string;

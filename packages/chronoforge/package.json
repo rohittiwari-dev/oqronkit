@@ -15,6 +15,11 @@
       "types":   "./dist/cron.d.ts",
       "import":  "./dist/cron.mjs",
       "require": "./dist/cron.js"
+    },
+    "./scheduler": {
+      "types":   "./dist/scheduler.d.ts",
+      "import":  "./dist/scheduler.mjs",
+      "require": "./dist/scheduler.js"
     }
   },
   "files": ["dist"],
@@ -26,13 +31,16 @@
     "prepublishOnly": "bun run build"
   },
   "dependencies": {
-    "@chronoforge/core":      "*",
-    "@chronoforge/db":        "*",
-    "@chronoforge/lock":      "*",
-    "@chronoforge/scheduler": "*"
+    "better-sqlite3": "^12.8.0",
+    "cron-parser": "^4.9.0",
+    "eventemitter3": "^5.0.1",
+    "find-up": "^7.0.0",
+    "voltlog-io": "^1.0.8",
+    "zod": "^3.22.4"
   },
   "devDependencies": {
-    "@types/node":         "^22.15.3",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22.15.3",
     "@vitest/coverage-v8": "^3.0.0",
     "tsup":                "^8.5.1",
     "typescript":          "^5.7.3",
