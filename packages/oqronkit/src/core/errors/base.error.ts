@@ -1,4 +1,4 @@
-export class ChronoError extends Error {
+export class OqronError extends Error {
   constructor(
     public readonly code: string,
     message: string,
@@ -6,9 +6,9 @@ export class ChronoError extends Error {
     public readonly cause?: Error,
   ) {
     super(message);
-    this.name = "ChronoError";
+    this.name = "OqronError";
     if (Error.captureStackTrace) {
-      Error.captureStackTrace(this, ChronoError);
+      Error.captureStackTrace(this, OqronError);
     }
   }
 

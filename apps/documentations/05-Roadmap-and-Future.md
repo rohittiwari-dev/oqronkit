@@ -14,7 +14,7 @@ Transitioning the current ephemeral Memory lock algorithms natively toward a rob
 The internal generic `OqronEventBus` will be dynamically expanded out strictly to automatically stream Prometheus Counters structurally (`oqronkit_jobs_active`, `oqronkit_execution_lag`, `oqronkit_duration_ms`). Express routers can natively mount `/api/oqron/metrics` to securely stream metric topologies instantly inside visualization tooling contexts.
 
 ### 4. Rate-Limiting & Output Throttling
-Currently natively constrained by system IO thresholds, future `v1.0.0` goals mathematically enforce `guaranteedWorker` thresholds (e.g., `maxConcurrent: 5`) explicitly inside the Adapter interfaces. This fundamentally prevents asynchronous scheduled DB fetches from rapidly bursting and aggressively destroying external downstream Webhook dependencies!
+Currently natively constrained by system IO thresholds, future `v1.0.0` goals mathematically enforce `guaranteedWorker` thresholds (e.g., `maxConcurrent: 5`) explicitly inside the Adapter interfaces. This fundamentally prevents achrono scheduled DB fetches from rapidly bursting and aggressively destroying external downstream Webhook dependencies!
 
 ---
 

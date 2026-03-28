@@ -20,7 +20,7 @@ export class SqliteAdapter implements IOqronAdapter {
       this.db = dbOrPath;
     }
     this.db.pragma("journal_mode = WAL");
-    this.db.pragma("synchronous = NORMAL");
+    this.db.pragma("chrono = NORMAL");
     this.db.pragma("foreign_keys = ON");
     this.migrate();
   }
@@ -35,6 +35,7 @@ export class SqliteAdapter implements IOqronAdapter {
         missedFirePolicy TEXT NOT NULL DEFAULT 'skip',
         overlap         INTEGER NOT NULL DEFAULT 1,
         tags            TEXT NOT NULL DEFAULT '[]',
+        status          TEXT NOT NULL DEFAULT 'active',
         
         -- Advanced Scheduling Columns
         runAt           TEXT,
@@ -60,7 +61,7 @@ export class SqliteAdapter implements IOqronAdapter {
         FOREIGN KEY(scheduleId) REFERENCES oqron_schedules(id) ON DELETE CASCADE
       );
 
-      CREATE TABLE IF NOT EXISTS chrono_locks (
+      CREATE TABLE IF NOT EXISTS oqron_locks (
         resourceKey TEXT PRIMARY KEY,
         ownerId     TEXT NOT NULL,
         expiresAt   TEXT NOT NULL
@@ -73,6 +74,7 @@ export class SqliteAdapter implements IOqronAdapter {
       "ALTER TABLE oqron_schedules ADD COLUMN runAfterOpts TEXT",
       "ALTER TABLE oqron_schedules ADD COLUMN rrule TEXT",
       "ALTER TABLE oqron_schedules ADD COLUMN recurring TEXT",
+      "ALTER TABLE oqron_schedules ADD COLUMN status TEXT DEFAULT 'active'",
       "ALTER TABLE oqron_jobs ADD COLUMN result TEXT",
       "ALTER TABLE oqron_jobs ADD COLUMN progressPercent INTEGER",
       "ALTER TABLE oqron_jobs ADD COLUMN progressLabel TEXT",
@@ -101,9 +103,9 @@ export class SqliteAdapter implements IOqronAdapter {
       .prepare(
         `INSERT INTO oqron_schedules (
            id, expression, timezone, missedFirePolicy, overlap, tags,
-           runAt, runAfterOpts, rrule, recurring
+           runAt, runAfterOpts, rrule, recurring, status
          )
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
            expression       = excluded.expression,
            timezone         = excluded.timezone,
@@ -131,6 +133,7 @@ export class SqliteAdapter implements IOqronAdapter {
         isSchedule && def.runAfter ? JSON.stringify(def.runAfter) : null,
         isSchedule && def.rrule ? def.rrule : null,
         isSchedule && def.recurring ? JSON.stringify(def.recurring) : null,
+        def.status ?? "active",
       );
   }
 
@@ -139,7 +142,7 @@ export class SqliteAdapter implements IOqronAdapter {
     limit: number,
     prefix?: string,
   ): Promise<Pick<CronDefinition, "name">[]> {
-    let sql = `SELECT id as name FROM oqron_schedules WHERE nextRunAt <= ?`;
+    let sql = `SELECT id as name FROM oqron_schedules WHERE nextRunAt <= ? AND status = 'active'`;
     const params: any[] = [now.toISOString()];
 
     if (prefix) {
@@ -358,5 +361,17 @@ export class SqliteAdapter implements IOqronAdapter {
         )
         .run(scheduleId, scheduleId, keepFailedJobHistory);
     }
+  }
+
+  async pauseSchedule(id: string): Promise<void> {
+    this.db
+      .prepare(`UPDATE oqron_schedules SET status = 'paused' WHERE id = ?`)
+      .run(id);
+  }
+
+  async resumeSchedule(id: string): Promise<void> {
+    this.db
+      .prepare(`UPDATE oqron_schedules SET status = 'active' WHERE id = ?`)
+      .run(id);
   }
 }

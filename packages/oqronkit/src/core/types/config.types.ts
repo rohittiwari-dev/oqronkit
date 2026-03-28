@@ -1,4 +1,4 @@
-import type { ChronoLoggerConfig } from "../logger/index.js";
+import type { OqronLoggerConfig } from "../logger/index.js";
 import type { IOqronAdapter } from "./db.types.js";
 import type { ILockAdapter } from "./lock.types.js";
 
@@ -125,7 +125,7 @@ export interface OqronConfig {
    * Logger configuration (powered by voltlog-io).
    * Set to `false` to disable logging entirely.
    */
-  logger?: ChronoLoggerConfig | false;
+  logger?: OqronLoggerConfig | false;
 
   /**
    * Telemetry configuration

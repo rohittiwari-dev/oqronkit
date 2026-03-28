@@ -117,4 +117,12 @@ export class NamespacedOqronAdapter implements IOqronAdapter {
       keepFailedJobHistory,
     );
   }
+
+  async pauseSchedule(scheduleId: string): Promise<void> {
+    return this.base.pauseSchedule(this.ns(scheduleId));
+  }
+
+  async resumeSchedule(scheduleId: string): Promise<void> {
+    return this.base.resumeSchedule(this.ns(scheduleId));
+  }
 }

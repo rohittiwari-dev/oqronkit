@@ -41,6 +41,8 @@ export interface CronDefinition {
   handler: (ctx: ICronContext) => Promise<unknown>;
   hooks?: CronHooks;
   retries?: RetryConfig;
+  status?: "active" | "paused";
+  maxConcurrent?: number;
 }
 
 export interface JobRecord {

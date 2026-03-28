@@ -47,6 +47,8 @@ export type DefineScheduleOptions<TPayload> = {
   hooks?: ScheduleHooks<TPayload>;
   payload?: TPayload;
   retries?: RetryConfig;
+  maxConcurrent?: number;
+  status?: "active" | "paused";
 };
 
 // Global reference that the engine will attach at boot time
@@ -84,6 +86,8 @@ export const schedule = <TPayload = unknown>(
     hooks: options.hooks,
     payload: options.payload,
     retries: options.retries,
+    maxConcurrent: options.maxConcurrent,
+    status: options.status,
   };
 
   _registerSchedule(def as ScheduleDefinition<unknown>);

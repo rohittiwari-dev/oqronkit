@@ -50,4 +50,10 @@ export interface IOqronAdapter {
     keepJobHistory: number | boolean,
     keepFailedJobHistory: number | boolean,
   ): Promise<void>;
+
+  /** Pause a schedule from being fetched or executed */
+  pauseSchedule(scheduleId: string): Promise<void>;
+
+  /** Resume a previously paused schedule */
+  resumeSchedule(scheduleId: string): Promise<void>;
 }

@@ -31,6 +31,8 @@ export type DefineCronOptions = CronScheduleConfig & {
   handler: (ctx: ICronContext) => Promise<unknown>;
   hooks?: CronHooks;
   retries?: RetryConfig;
+  maxConcurrent?: number;
+  status?: "active" | "paused";
 };
 
 // ── Helpers ─────────────────────────────────────────────────────────────────────
@@ -97,6 +99,8 @@ export const cron = (options: DefineCronOptions): CronDefinition => {
     handler: options.handler,
     hooks: options.hooks,
     retries: options.retries,
+    maxConcurrent: options.maxConcurrent,
+    status: options.status,
   };
 
   // Auto-register: no need for manual array wiring

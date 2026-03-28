@@ -6,6 +6,7 @@ interface MemSchedule {
   name: string;
   nextRunAt: Date | null;
   lastRunAt: Date | null;
+  status: "active" | "paused";
 }
 
 export class MemoryOqronAdapter implements IOqronAdapter {
@@ -20,6 +21,7 @@ export class MemoryOqronAdapter implements IOqronAdapter {
         name: def.name,
         nextRunAt: null,
         lastRunAt: null,
+        status: def.status ?? "active",
       });
     }
   }
@@ -32,7 +34,7 @@ export class MemoryOqronAdapter implements IOqronAdapter {
     const due: { name: string }[] = [];
     for (const s of this.schedules.values()) {
       if (prefix && !s.name.startsWith(prefix)) continue;
-      if (s.nextRunAt !== null && s.nextRunAt <= now) {
+      if (s.nextRunAt !== null && s.nextRunAt <= now && s.status === "active") {
         due.push({ name: s.name });
       }
       if (due.length >= limit) break;
@@ -162,5 +164,15 @@ export class MemoryOqronAdapter implements IOqronAdapter {
       const toRemove = failures.slice(keepFailedJobHistory);
       for (const j of toRemove) this.jobs.delete(j.id);
     }
+  }
+
+  async pauseSchedule(id: string): Promise<void> {
+    const s = this.schedules.get(id);
+    if (s) s.status = "paused";
+  }
+
+  async resumeSchedule(id: string): Promise<void> {
+    const s = this.schedules.get(id);
+    if (s) s.status = "active";
   }
 }

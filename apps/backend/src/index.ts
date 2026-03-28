@@ -33,7 +33,7 @@ async function main(): Promise<void> {
   app.use(express.json());
 
   // Mount OqronKit monitoring routes cleanly
-  app.use("/api/chrono", OqronKit.expressRouter());
+  app.use("/api/oqron", OqronKit.expressRouter());
 
   // Root info
   app.get("/", (_req, res) => {
@@ -41,9 +41,9 @@ async function main(): Promise<void> {
       name: "OqronKit Backend Demo",
       version: "0.0.1",
       docs: {
-        health: "GET  /api/chrono/health",
-        events: "GET  /api/chrono/events?limit=50",
-        trigger: "POST /api/chrono/jobs/:id/trigger",
+        health: "GET  /api/oqron/health",
+        events: "GET  /api/oqron/events?limit=50",
+        trigger: "POST /api/oqron/jobs/:id/trigger",
       },
     });
   });

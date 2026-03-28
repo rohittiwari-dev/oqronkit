@@ -1,4 +1,4 @@
-export interface IChronoModule {
+export interface IOqronModule {
   readonly name: string;
   readonly enabled: boolean;
   init(): Promise<void>;

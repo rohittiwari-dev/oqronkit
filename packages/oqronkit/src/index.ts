@@ -15,23 +15,26 @@ import {
 import {
   MemoryOqronAdapter,
   NamespacedOqronAdapter,
+  PostgresAdapter,
   SqliteAdapter,
 } from "./db/index.js";
 import {
   DbLockAdapter,
   MemoryLockAdapter,
   NamespacedLockAdapter,
+  PostgresLockAdapter,
 } from "./lock/index.js";
 import { expressRouter } from "./server/express.js";
 import { fastifyPlugin } from "./server/fastify.js";
+import { TelemetryManager } from "./telemetry/index.js";
 
 let _config: ValidatedConfig | null = null;
 let _db: IOqronAdapter | null = null;
 let _lock: ILockAdapter | null = null;
 let _logger: Logger | null = null;
+let _telemetry: TelemetryManager | null = null;
 
 export type {
-  ChronoLoggerConfig,
   CronDefinition,
   CronHooks,
   EveryConfig,
@@ -42,6 +45,7 @@ export type {
   JobRecord,
   Logger,
   MissedFirePolicy,
+  OqronLoggerConfig,
   OverlapPolicy,
   RetryConfig,
   ScheduleDefinition,
@@ -51,8 +55,12 @@ export type {
 } from "./core/index.js";
 // ── Re-exports: single source of truth for ALL user-facing APIs ─────────────
 export { createLogger, defineConfig, OqronEventBus } from "./core/index.js";
-export { SqliteAdapter } from "./db/index.js";
-export { DbLockAdapter, MemoryLockAdapter } from "./lock/index.js";
+export { PostgresAdapter, SqliteAdapter } from "./db/index.js";
+export {
+  DbLockAdapter,
+  MemoryLockAdapter,
+  PostgresLockAdapter,
+} from "./lock/index.js";
 export {
   cron,
   type DefineCronOptions,
@@ -92,7 +100,49 @@ export const OqronKit = {
     } else if ("adapter" in _config.db) {
       const { adapter, url } = _config.db;
       if (adapter === "sqlite") {
-        _db = new SqliteAdapter(url ?? "oqron.sqlite");
+        try {
+          _db = new SqliteAdapter(url ?? "oqron.sqlite");
+        } catch (err: any) {
+          if (
+            err.code === "ERR_MODULE_NOT_FOUND" ||
+            err.code === "MODULE_NOT_FOUND" ||
+            err.message?.includes("better-sqlite3")
+          ) {
+            throw new Error(
+              "[OqronKit] SQLite adapter requires the 'better-sqlite3' package. Install it: npm install better-sqlite3",
+            );
+          }
+          throw err;
+        }
+      } else if (adapter === "postgres") {
+        if (!url) {
+          throw new Error(
+            "[OqronKit] PostgreSQL adapter requires a 'url' (connection string). Example: postgresql://user:pass@host:5432/db",
+          );
+        }
+        // Dynamically import pg to keep it as a peer dependency
+        try {
+          // Dynamic import with variable to bypass TS module resolution for optional peer dep
+          const pgModule = "pg";
+          const pg = await (import(
+            /* webpackIgnore: true */ pgModule
+          ) as Promise<any>);
+          const Pool = pg.default?.Pool ?? pg.Pool;
+          const pool = new Pool({ connectionString: url });
+          _db = new PostgresAdapter(pool);
+          await (_db as PostgresAdapter).migrate();
+          _logger.info("PostgreSQL adapter initialized successfully");
+        } catch (err: any) {
+          if (
+            err.code === "ERR_MODULE_NOT_FOUND" ||
+            err.code === "MODULE_NOT_FOUND"
+          ) {
+            throw new Error(
+              "[OqronKit] PostgreSQL adapter requires the 'pg' package. Install it: npm install pg",
+            );
+          }
+          throw err;
+        }
       } else if (adapter === "memory") {
         const msg =
           "Using ephemeral 'memory' database adapter. [WARNING: Data will not persist across restarts]";
@@ -122,6 +172,8 @@ export const OqronKit = {
         // Share the same DB if possible
         if (_db instanceof SqliteAdapter) {
           _lock = new DbLockAdapter((_db as any).db, ttl);
+        } else if (_db instanceof PostgresAdapter) {
+          _lock = new PostgresLockAdapter((_db as any).pool, ttl);
         } else {
           _lock = new DbLockAdapter(url ?? "oqron.sqlite", ttl);
         }
@@ -339,6 +391,34 @@ export const OqronKit = {
     return _lock;
   },
 
+  /** Pause a schedule from natively executing */
+  async pause(scheduleId: string): Promise<void> {
+    if (!_db) throw new Error("[OqronKit] Not initialized yet.");
+    if (_config?.project && _config?.environment) {
+      await new NamespacedOqronAdapter(
+        _db,
+        _config.project,
+        _config.environment,
+      ).pauseSchedule(scheduleId);
+    } else {
+      await _db.pauseSchedule(scheduleId);
+    }
+  },
+
+  /** Resume a previously paused schedule */
+  async resume(scheduleId: string): Promise<void> {
+    if (!_db) throw new Error("[OqronKit] Not initialized yet.");
+    if (_config?.project && _config?.environment) {
+      await new NamespacedOqronAdapter(
+        _db,
+        _config.project,
+        _config.environment,
+      ).resumeSchedule(scheduleId);
+    } else {
+      await _db.resumeSchedule(scheduleId);
+    }
+  },
+
   /** Get the Express router for monitoring */
   expressRouter() {
     return expressRouter();
@@ -347,6 +427,24 @@ export const OqronKit = {
   /** Get the Fastify plugin for monitoring */
   fastifyPlugin(fastify: any, opts: any, done: () => void) {
     return fastifyPlugin(fastify, opts, done);
+  },
+
+  /** Get Prometheus-formatted metrics text */
+  getMetrics(): string {
+    if (!_telemetry) {
+      _telemetry = new TelemetryManager();
+      _telemetry.start();
+    }
+    return _telemetry.serialize();
+  },
+
+  /** Get the telemetry manager instance (for engine-level recording) */
+  getTelemetry(): TelemetryManager {
+    if (!_telemetry) {
+      _telemetry = new TelemetryManager();
+      _telemetry.start();
+    }
+    return _telemetry;
   },
 };
 

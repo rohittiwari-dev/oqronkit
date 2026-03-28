@@ -16,18 +16,19 @@ export type { ScheduleContextOptions } from "./context/schedule-context.js";
 export { ScheduleContext } from "./context/schedule-context.js";
 
 // Errors
-export { ChronoError } from "./errors/base.error.js";
+export { OqronError } from "./errors/base.error.js";
 
 // Events
 export { OqronEventBus } from "./events/event-bus.js";
+// Circuit Breaker
+export { LagMonitor } from "./lag-monitor.js";
 export type {
-  ChronoLoggerConfig,
   Logger,
   LogLevelName,
+  OqronLoggerConfig,
 } from "./logger/index.js";
 // Logger (voltlog-io)
 export { createLogger } from "./logger/index.js";
-
 // Registry
 export { OqronRegistry } from "./registry.js";
 
@@ -44,7 +45,7 @@ export type {
 } from "./types/cron.types.js";
 export type { IOqronAdapter } from "./types/db.types.js";
 export type { ILockAdapter } from "./types/lock.types.js";
-export type { IChronoModule } from "./types/module.types.js";
+export type { IOqronModule } from "./types/module.types.js";
 export type {
   IScheduleContext,
   ScheduleDefinition,

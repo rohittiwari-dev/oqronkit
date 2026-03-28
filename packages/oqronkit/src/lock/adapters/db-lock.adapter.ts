@@ -1,10 +1,9 @@
-import Database from "better-sqlite3";
 import type { ILockAdapter } from "../../core/index.js";
 
 type LockRow = { ownerId: string; expiresAt: string };
 
 export class DbLockAdapter implements ILockAdapter {
-  private readonly db: Database.Database;
+  private readonly db: any;
   private readonly defaultTtl: number;
 
   /**
@@ -12,13 +11,18 @@ export class DbLockAdapter implements ILockAdapter {
    *                   When sharing the same SQLite file as SqliteAdapter, pass the same path.
    * @param defaultTtlMs - Default TTL for locks if not provided in acquire (optional)
    */
-  constructor(
-    dbOrPath: Database.Database | string = "oqron.sqlite",
-    defaultTtlMs = 30_000,
-  ) {
+  constructor(dbOrPath: any | string = "oqron.sqlite", defaultTtlMs = 30_000) {
     this.defaultTtl = defaultTtlMs;
     if (typeof dbOrPath === "string") {
-      this.db = new Database(dbOrPath);
+      try {
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const Database = require("better-sqlite3");
+        this.db = new Database(dbOrPath);
+      } catch {
+        throw new Error(
+          "[OqronKit] DbLockAdapter requires 'better-sqlite3'. Install it: npm install better-sqlite3",
+        );
+      }
     } else {
       this.db = dbOrPath;
     }
@@ -36,7 +40,7 @@ export class DbLockAdapter implements ILockAdapter {
     this.db
       .prepare(
         `
-      INSERT INTO chrono_locks (resourceKey, ownerId, expiresAt)
+      INSERT INTO oqron_locks (resourceKey, ownerId, expiresAt)
       VALUES (?, ?, ?)
       ON CONFLICT(resourceKey) DO UPDATE SET
         ownerId   = CASE WHEN expiresAt < ? THEN excluded.ownerId   ELSE ownerId   END,
@@ -46,7 +50,7 @@ export class DbLockAdapter implements ILockAdapter {
       .run(key, ownerId, expiresAt, now, now);
 
     const row = this.db
-      .prepare(`SELECT ownerId FROM chrono_locks WHERE resourceKey = ?`)
+      .prepare(`SELECT ownerId FROM oqron_locks WHERE resourceKey = ?`)
       .get(key) as { ownerId: string } | undefined;
 
     return row?.ownerId === ownerId;
@@ -58,7 +62,7 @@ export class DbLockAdapter implements ILockAdapter {
     const result = this.db
       .prepare(
         `
-      UPDATE chrono_locks SET expiresAt = ?
+      UPDATE oqron_locks SET expiresAt = ?
       WHERE resourceKey = ? AND ownerId = ?
     `,
       )
@@ -68,14 +72,14 @@ export class DbLockAdapter implements ILockAdapter {
 
   async release(key: string, ownerId: string): Promise<void> {
     this.db
-      .prepare(`DELETE FROM chrono_locks WHERE resourceKey = ? AND ownerId = ?`)
+      .prepare(`DELETE FROM oqron_locks WHERE resourceKey = ? AND ownerId = ?`)
       .run(key, ownerId);
   }
 
   async isOwner(key: string, ownerId: string): Promise<boolean> {
     const row = this.db
       .prepare(
-        `SELECT ownerId, expiresAt FROM chrono_locks WHERE resourceKey = ?`,
+        `SELECT ownerId, expiresAt FROM oqron_locks WHERE resourceKey = ?`,
       )
       .get(key) as LockRow | undefined;
 

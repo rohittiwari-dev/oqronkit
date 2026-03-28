@@ -42,7 +42,7 @@ export const OqronConfigSchema = z.object({
         url: z.string().optional(),
         poolMin: z.number().default(2),
         poolMax: z.number().default(10),
-        tablePrefix: z.string().default("chrono_"),
+        tablePrefix: z.string().default("oqron_"),
         migrations: z
           .union([z.enum(["auto", "manual"]), z.literal(false)])
           .default("auto"),

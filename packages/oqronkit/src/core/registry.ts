@@ -1,8 +1,8 @@
-import type { IChronoModule } from "./types/module.types.js";
+import type { IOqronModule } from "./types/module.types.js";
 
 export class OqronRegistry {
   private static _instance: OqronRegistry;
-  private readonly _modules = new Map<string, IChronoModule>();
+  private readonly _modules = new Map<string, IOqronModule>();
 
   private constructor() {}
 
@@ -13,18 +13,18 @@ export class OqronRegistry {
     return OqronRegistry._instance;
   }
 
-  register(mod: IChronoModule): void {
+  register(mod: IOqronModule): void {
     if (this._modules.has(mod.name)) {
       throw new Error(`[OqronKit] Module "${mod.name}" is already registered.`);
     }
     this._modules.set(mod.name, mod);
   }
 
-  get(name: string): IChronoModule | undefined {
+  get(name: string): IOqronModule | undefined {
     return this._modules.get(name);
   }
 
-  getAll(): IChronoModule[] {
+  getAll(): IOqronModule[] {
     return [...this._modules.values()];
   }
 

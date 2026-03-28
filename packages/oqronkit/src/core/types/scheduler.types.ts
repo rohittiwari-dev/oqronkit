@@ -78,4 +78,6 @@ export interface ScheduleDefinition<TPayload = unknown> {
 
   // Statically defining a task vs. runtime payloads payload (Optional defaults)
   payload?: TPayload;
+  status?: "active" | "paused";
+  maxConcurrent?: number;
 }

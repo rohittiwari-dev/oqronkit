@@ -35,7 +35,6 @@
     "prepublishOnly": "bun run build"
   },
   "dependencies": {
-    "better-sqlite3": "^12.8.0",
     "cron-parser": "^4.9.0",
     "eventemitter3": "^5.0.1",
     "find-up": "^7.0.0",
@@ -50,6 +49,18 @@
     "tsup":                "^8.5.1",
     "typescript":          "^5.7.3",
     "vitest":              "^3.0.0"
+  },
+  "peerDependencies": {
+    "better-sqlite3": ">=9.0.0",
+    "pg": ">=8.0.0"
+  },
+  "peerDependenciesMeta": {
+    "better-sqlite3": {
+      "optional": true
+    },
+    "pg": {
+      "optional": true
+    }
   },
   "engines": { "node": ">=18.0.0" }
 }

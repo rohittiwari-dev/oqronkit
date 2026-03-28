@@ -9,7 +9,7 @@ export type {
 } from "./cron.types.js";
 export type { IOqronAdapter } from "./db.types.js";
 export type { ILockAdapter } from "./lock.types.js";
-export type { IChronoModule } from "./module.types.js";
+export type { IOqronModule } from "./module.types.js";
 export type {
   IScheduleContext,
   ScheduleDefinition,

@@ -16,7 +16,7 @@ import {
 
 export type { Logger, LogLevelName };
 
-export interface ChronoLoggerConfig {
+export interface OqronLoggerConfig {
   /** Enable/disable logging entirely. Default: true */
   enabled?: boolean;
   /** Minimum log level. Default: 'INFO' */
@@ -67,7 +67,7 @@ const NOOP_LOGGER: Logger = {
  * This is the single factory used internally.
  */
 export function createLogger(
-  config?: ChronoLoggerConfig,
+  config?: OqronLoggerConfig,
   context?: Record<string, unknown>,
 ): Logger {
   if (typeof config?.enabled !== "undefined" && config?.enabled === false)

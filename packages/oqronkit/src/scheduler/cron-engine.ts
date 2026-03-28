@@ -3,10 +3,12 @@ import {
   CronContext,
   type CronDefinition,
   createLogger,
-  type IChronoModule,
   type ILockAdapter,
   type IOqronAdapter,
+  type IOqronModule,
+  LagMonitor,
   type Logger,
+  OqronEventBus,
 } from "../core/index.js";
 import {
   HeartbeatWorker,
@@ -21,9 +23,10 @@ type ActiveJobEntry = {
   lockKey: string;
   worker?: HeartbeatWorker;
   abort?: AbortController;
+  promise?: Promise<void>;
 };
 
-export class SchedulerModule implements IChronoModule {
+export class SchedulerModule implements IOqronModule {
   public readonly name = "cron";
   public readonly enabled = true;
 
@@ -31,6 +34,7 @@ export class SchedulerModule implements IChronoModule {
   private readonly logger: Logger;
   private leader?: LeaderElection;
   private stallDetector: StallDetector;
+  private lagMonitor: LagMonitor;
   private missedFireHandler: MissedFireHandler;
   private tickTimer?: ReturnType<typeof setInterval>;
 
@@ -59,6 +63,7 @@ export class SchedulerModule implements IChronoModule {
     this.logger =
       logger ?? createLogger({ level: "info" }, { module: "scheduler" });
     this.stallDetector = new StallDetector(this.lock, this.logger, 15_000);
+    this.lagMonitor = new LagMonitor(this.logger, 500, 50);
     this.missedFireHandler = new MissedFireHandler(this.logger, this.db);
   }
 
@@ -119,12 +124,47 @@ export class SchedulerModule implements IChronoModule {
     }, interval);
 
     this.logger.info("Scheduler started", { nodeId: this.nodeId, interval });
+    this.lagMonitor.start();
+    this.stallDetector.start(
+      () =>
+        Array.from(this.activeJobs.values()).map((j) => ({
+          key: j.lockKey,
+          ownerId: this.nodeId,
+        })),
+      (key) => {
+        for (const [id, job] of this.activeJobs) {
+          if (job.lockKey === key) {
+            this.logger.error("Stalled job detected, aborting", {
+              key,
+              runId: id,
+            });
+            job.abort?.abort();
+            this.activeJobs.delete(id);
+          }
+        }
+      },
+    );
   }
 
   async stop(): Promise<void> {
     if (this.tickTimer) clearInterval(this.tickTimer);
     if (this.leader) await this.leader.stop();
     this.stallDetector.stop();
+    this.lagMonitor.stop();
+
+    const activePromises = Array.from(this.activeJobs.values())
+      .map((job) => job.promise)
+      .filter((p): p is Promise<void> => p !== undefined);
+
+    if (activePromises.length > 0) {
+      this.logger.info(
+        `Scheduler draining ${activePromises.length} active jobs...`,
+      );
+      const drainMs = (this as any)._shutdownTimeout ?? 25_000;
+      const drainTimeout = new Promise<void>((r) => setTimeout(r, drainMs));
+      await Promise.race([Promise.allSettled(activePromises), drainTimeout]);
+    }
+
     for (const job of this.activeJobs.values()) {
       if (job.abort) job.abort.abort();
       if (job.worker) {
@@ -252,6 +292,12 @@ export class SchedulerModule implements IChronoModule {
     }
 
     try {
+      // 0. Circuit Breaker: Skip if event loop is stalled
+      if (this.lagMonitor.isCircuitTripped) {
+        this.logger.debug("Tick skipped — event loop lag detected");
+        return;
+      }
+
       // 1. Cluster stall check (~10% probability per tick)
       if (Math.random() < 0.1) {
         void this.detectClusterStalls();
@@ -299,6 +345,22 @@ export class SchedulerModule implements IChronoModule {
       }
     }
 
+    // Concurrency rate limiting
+    if (def.maxConcurrent) {
+      let activeCount = 0;
+      for (const job of this.activeJobs.values()) {
+        if (job.lockKey.startsWith(`oqron:run:${def.name}`)) activeCount++;
+      }
+      if (activeCount >= def.maxConcurrent) {
+        this.logger.debug("Skipping — maxConcurrent reached", {
+          name: def.name,
+          active: activeCount,
+          max: def.maxConcurrent,
+        });
+        return;
+      }
+    }
+
     const runId = randomUUID();
     const lockKey = isOverlapSkip
       ? `oqron:run:${def.name}`
@@ -330,7 +392,8 @@ export class SchedulerModule implements IChronoModule {
     if (!acquired) return; // Cluster overlap protection
 
     const abort = new AbortController();
-    this.activeJobs.set(runId, { runId, lockKey, worker, abort });
+    const entry: ActiveJobEntry = { runId, lockKey, worker, abort };
+    this.activeJobs.set(runId, entry);
 
     await this.db.recordExecution({
       id: runId,
@@ -340,7 +403,8 @@ export class SchedulerModule implements IChronoModule {
     });
 
     // ── Execute handler (non-blocking) ────────────────────────────────────
-    void Promise.resolve().then(async () => {
+    OqronEventBus.emit("job:start", runId, def.name);
+    entry.promise = Promise.resolve().then(async () => {
       const ctx = new CronContext({
         id: runId,
         logger: this.logger.child({ schedule: def.name }),
@@ -491,6 +555,17 @@ export class SchedulerModule implements IChronoModule {
         status,
         attempts,
       });
+
+      // Emit EventBus events for telemetry and monitoring
+      if (status === "completed") {
+        OqronEventBus.emit("job:success", runId);
+      } else {
+        OqronEventBus.emit(
+          "job:fail",
+          runId,
+          new Error(error ?? "Unknown error"),
+        );
+      }
     });
   }
 }

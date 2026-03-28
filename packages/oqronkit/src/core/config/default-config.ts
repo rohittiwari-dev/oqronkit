@@ -8,7 +8,7 @@ const defaultConfig: ValidatedConfig = {
     adapter: "memory",
     poolMin: 2,
     poolMax: 10,
-    tablePrefix: "chrono_",
+    tablePrefix: "oqron_",
     migrations: "auto",
     ssl: false,
   },

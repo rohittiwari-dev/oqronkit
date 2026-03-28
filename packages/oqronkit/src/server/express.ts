@@ -5,13 +5,13 @@ import { dispatch } from "./handlers.js";
  *
  * Usage:
  *   const { OqronKit } = require('oqronkit');
- *   app.use('/api/chrono', OqronKit.expressRouter());
+ *   app.use('/api/oqron', OqronKit.expressRouter());
  */
 export function expressRouter(): any {
   // Return a generic middleware function that matches Express signature: (req, res, next)
-  return async function chronoMiddleware(req: any, res: any, next: any) {
+  return async function oqronMiddleware(req: any, res: any, next: any) {
     // We only want to handle our sub-routes
-    // In express, if mounted via app.use('/api/chrono', middleware),
+    // In express, if mounted via app.use('/api/oqron', middleware),
     // req.path is the sub-path (e.g. /health).
 
     // Safety check, although Express generally strips the mount point

@@ -1,6 +1,6 @@
 import { EventEmitter } from "eventemitter3";
 
-export type ChronoEventMap = {
+export type OqronEventMap = {
   "job:start": [jobId: string, module: string];
   "job:progress": [jobId: string, value: number];
   "job:success": [jobId: string];
@@ -9,7 +9,7 @@ export type ChronoEventMap = {
   "system:stop": [];
 };
 
-class OqronEventBusClass extends EventEmitter<ChronoEventMap> {
+class OqronEventBusClass extends EventEmitter<OqronEventMap> {
   private static _instance: OqronEventBusClass;
   static getInstance(): OqronEventBusClass {
     if (!OqronEventBusClass._instance) {

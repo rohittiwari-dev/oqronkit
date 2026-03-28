@@ -41,7 +41,7 @@ export async function handleHealth(
       ok: true,
       status: "running",
       uptime: process.uptime(),
-      env: process.env.CHRONO_ENV ?? "development",
+      env: process.env.OQRON_ENV ?? "development",
       ts: new Date().toISOString(),
     },
   };
