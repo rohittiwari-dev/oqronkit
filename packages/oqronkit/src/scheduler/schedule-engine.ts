@@ -182,6 +182,18 @@ export class ScheduleEngine implements IOqronModule {
     this.logger.info("Schedule engine stopped");
   }
 
+  /**
+   * Manually trigger a schedule by name (admin API).
+   * Returns true if the schedule was found and fire() was called.
+   */
+  async triggerManual(scheduleId: string): Promise<boolean> {
+    const def = this.schedules.get(scheduleId);
+    if (!def) return false;
+    this.logger.info("Manual trigger requested", { scheduleId });
+    void this.fire(def);
+    return true;
+  }
+
   // ── Core scheduling helpers ─────────────────────────────────────────────────
 
   private computeNextRun(def: ScheduleDefinition, from: Date): Date | null {

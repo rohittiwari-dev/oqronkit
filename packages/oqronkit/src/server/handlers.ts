@@ -1,4 +1,5 @@
 import { OqronEventBus } from "../core/index.js";
+import type { OqronRegistry } from "../core/registry.js";
 
 export type MonitorRequest = {
   method: string;
@@ -32,6 +33,21 @@ OqronEventBus.on("job:fail", (jobId: string, err: Error) =>
 OqronEventBus.on("system:ready", () => appendEvent("system:ready", {}));
 OqronEventBus.on("system:stop", () => appendEvent("system:stop", {}));
 
+// ── Registry reference (set via configureHandlers) ──────────────────────
+
+let _registry: OqronRegistry | null = null;
+
+/**
+ * Wire the handler layer to the module registry.
+ * Call this after all modules are booted so handleTrigger can
+ * look up engines and actually fire schedules.
+ */
+export function configureHandlers(registry: OqronRegistry): void {
+  _registry = registry;
+}
+
+// ── Handlers ────────────────────────────────────────────────────────────
+
 export async function handleHealth(
   _req: MonitorRequest,
 ): Promise<MonitorResponse> {
@@ -63,12 +79,32 @@ export async function handleTrigger(
   const id = req.params.id;
   if (!id)
     return { status: 400, body: { ok: false, error: "Missing :id param" } };
-  appendEvent("manual:trigger", { id });
+
+  // Try to actually fire the schedule via registered modules
+  if (_registry) {
+    for (const mod of _registry.getAll()) {
+      if (mod.triggerManual) {
+        const triggered = await mod.triggerManual(id);
+        if (triggered) {
+          appendEvent("manual:trigger", { id, executed: true });
+          return {
+            status: 200,
+            body: {
+              ok: true,
+              message: `Schedule "${id}" triggered successfully.`,
+            },
+          };
+        }
+      }
+    }
+  }
+
+  // Schedule not found in any module
   return {
-    status: 200,
+    status: 404,
     body: {
-      ok: true,
-      message: `Manual trigger event recorded for "${id}". Note: This logs the event but does not execute the job.`,
+      ok: false,
+      error: `Schedule "${id}" not found in any registered module.`,
     },
   };
 }

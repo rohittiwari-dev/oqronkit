@@ -37,10 +37,6 @@ const defaultConfig: ValidatedConfig = {
   },
   jobsDir: "./src/jobs",
   tags: [],
-  worker: {
-    concurrency: 50,
-    gracefulShutdownMs: 30000,
-  },
   logger: {
     enabled: true,
     level: "info",
@@ -103,11 +99,6 @@ export function reconfigureConfig(config: OqronConfig): ValidatedConfig {
 
     jobsDir: config.jobsDir ?? defaultConfig.jobsDir,
     tags: config.tags ?? defaultConfig.tags,
-
-    worker: {
-      ...defaultConfig.worker,
-      ...config.worker,
-    },
 
     logger:
       config.logger === false

@@ -4,4 +4,6 @@ export interface IOqronModule {
   init(): Promise<void>;
   start(): Promise<void>;
   stop(): Promise<void>;
+  /** Manually trigger a schedule/job by name (for admin APIs) */
+  triggerManual?(scheduleId: string): Promise<boolean>;
 }

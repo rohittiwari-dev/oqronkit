@@ -112,16 +112,6 @@ export interface OqronConfig {
   tags?: string[];
 
   /**
-   * Worker-level configurations
-   */
-  worker?: {
-    /** Number of concurrent jobs this node processes simultaneously */
-    concurrency?: number;
-    /** Time in ms to wait for active jobs before SIGTERM exits */
-    gracefulShutdownMs?: number;
-  };
-
-  /**
    * Logger configuration (powered by voltlog-io).
    * Set to `false` to disable logging entirely.
    */

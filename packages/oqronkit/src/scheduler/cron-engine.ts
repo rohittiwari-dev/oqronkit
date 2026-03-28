@@ -183,6 +183,18 @@ export class SchedulerModule implements IOqronModule {
     this.logger.info("Scheduler stopped");
   }
 
+  /**
+   * Manually trigger a cron schedule by name (admin API).
+   * Returns true if the schedule was found and fire() was called.
+   */
+  async triggerManual(scheduleId: string): Promise<boolean> {
+    const def = this.schedules.find((s) => s.name === scheduleId);
+    if (!def) return false;
+    this.logger.info("Manual trigger requested", { scheduleId });
+    void this.fire(def);
+    return true;
+  }
+
   // ── Core scheduling helpers ─────────────────────────────────────────────────
 
   /**

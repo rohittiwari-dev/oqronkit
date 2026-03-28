@@ -115,14 +115,6 @@ export const OqronConfigSchema = z.object({
   // Global tags
   tags: z.array(z.string()).default([]),
 
-  // Worker
-  worker: z
-    .object({
-      concurrency: z.number().default(50),
-      gracefulShutdownMs: z.number().default(30000),
-    })
-    .default({ concurrency: 50, gracefulShutdownMs: 30000 }),
-
   // Logger (voltlog-io config or false to disable)
   logger: z
     .union([

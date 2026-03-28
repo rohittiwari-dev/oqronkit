@@ -401,6 +401,10 @@ export const OqronKit = {
     }
 
     _logger.info("OqronKit ready ✓");
+
+    // Wire server handlers to the registry so /jobs/:id can trigger schedules
+    const { configureHandlers } = await import("./server/handlers.js");
+    configureHandlers(registry);
   },
 
   /** Gracefully stop all modules */
