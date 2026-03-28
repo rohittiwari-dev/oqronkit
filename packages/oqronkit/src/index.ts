@@ -64,6 +64,8 @@ export {
   OqronEventBus,
 } from "./core/index.js";
 export { PostgresAdapter, RedisAdapter, SqliteAdapter } from "./db/index.js";
+export { Queue } from "./distributed/queue.js";
+export { Worker } from "./distributed/worker.js";
 export {
   DbLockAdapter,
   MemoryLockAdapter,
@@ -77,6 +79,12 @@ export {
   type ScheduleInstance,
   schedule,
 } from "./scheduler/index.js";
+export { taskQueue } from "./task-queue/define-task-queue.js";
+export type {
+  ITaskQueue,
+  TaskJobContext,
+  TaskQueueConfig,
+} from "./task-queue/types.js";
 
 export const OqronKit = {
   /**
@@ -380,6 +388,20 @@ export const OqronKit = {
         _config.project,
         { ..._config.scheduler, shutdownTimeout: _config.shutdown.timeout },
       );
+      OqronRegistry.getInstance().register(engine);
+    }
+
+    if (_config.modules.includes("taskQueue")) {
+      const { TaskQueueEngine } = await import(
+        "./task-queue/task-queue-engine.js"
+      );
+      const engine = new TaskQueueEngine(_config, _logger!);
+      OqronRegistry.getInstance().register(engine);
+    }
+
+    if (_config.modules.includes("worker")) {
+      const { WorkerEngine } = await import("./distributed/worker-engine.js");
+      const engine = new WorkerEngine(_config, _logger!);
       OqronRegistry.getInstance().register(engine);
     }
 

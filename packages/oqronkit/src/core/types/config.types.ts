@@ -67,7 +67,9 @@ export interface OqronConfig {
   modules?: (
     | "cron"
     | "scheduler"
+    | "taskQueue"
     | "queue"
+    | "worker"
     | "workflow"
     | "batch"
     | "webhook"
@@ -95,6 +97,37 @@ export interface OqronConfig {
     tickInterval?: number;
     keepJobHistory?: boolean | number;
     keepFailedJobHistory?: boolean | number;
+  };
+
+  taskQueue?: {
+    concurrency?: number;
+    heartbeatMs?: number;
+    lockTtlMs?: number;
+    retries?: {
+      max?: number;
+      strategy?: "fixed" | "exponential";
+      baseDelay?: number;
+      maxDelay?: number;
+    };
+    deadLetter?: { enabled?: boolean };
+  };
+
+  queue?: {
+    defaultTtl?: number;
+    ack?: "leader" | "all" | "none";
+  };
+
+  worker?: {
+    concurrency?: number;
+    heartbeatMs?: number;
+    lockTtlMs?: number;
+    retries?: {
+      max?: number;
+      strategy?: "fixed" | "exponential";
+      baseDelay?: number;
+      maxDelay?: number;
+    };
+    deadLetter?: { enabled?: boolean };
   };
 
   /**

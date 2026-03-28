@@ -11,6 +11,11 @@ export type { IOqronAdapter } from "./db.types.js";
 export type { ILockAdapter } from "./lock.types.js";
 export type { IOqronModule } from "./module.types.js";
 export type {
+  IQueueAdapter,
+  OqronJobData,
+  OqronJobOptions,
+} from "./queue.types.js";
+export type {
   IScheduleContext,
   ScheduleDefinition,
   ScheduleHooks,

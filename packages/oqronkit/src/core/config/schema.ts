@@ -75,7 +75,9 @@ export const OqronConfigSchema = z.object({
       z.enum([
         "cron",
         "scheduler",
+        "taskQueue",
         "queue",
+        "worker",
         "workflow",
         "batch",
         "webhook",
@@ -106,6 +108,55 @@ export const OqronConfigSchema = z.object({
       tickInterval: z.number().default(1000),
       keepJobHistory: z.union([z.boolean(), z.number()]).default(true),
       keepFailedJobHistory: z.union([z.boolean(), z.number()]).default(true),
+    })
+    .default({}),
+
+  taskQueue: z
+    .object({
+      concurrency: z.number().default(5),
+      heartbeatMs: z.number().default(5000),
+      lockTtlMs: z.number().default(30000),
+      retries: z
+        .object({
+          max: z.number().default(3),
+          strategy: z.enum(["fixed", "exponential"]).default("exponential"),
+          baseDelay: z.number().default(2000),
+          maxDelay: z.number().default(60000),
+        })
+        .default({}),
+      deadLetter: z
+        .object({
+          enabled: z.boolean().default(true),
+        })
+        .default({}),
+    })
+    .default({}),
+
+  queue: z
+    .object({
+      defaultTtl: z.number().default(86400 * 1000), // 24 hours
+      ack: z.enum(["leader", "all", "none"]).default("leader"),
+    })
+    .default({}),
+
+  worker: z
+    .object({
+      concurrency: z.number().default(5),
+      heartbeatMs: z.number().default(5000),
+      lockTtlMs: z.number().default(30000),
+      retries: z
+        .object({
+          max: z.number().default(3),
+          strategy: z.enum(["fixed", "exponential"]).default("exponential"),
+          baseDelay: z.number().default(2000),
+          maxDelay: z.number().default(60000),
+        })
+        .default({}),
+      deadLetter: z
+        .object({
+          enabled: z.boolean().default(true),
+        })
+        .default({}),
     })
     .default({}),
 

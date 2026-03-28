@@ -35,6 +35,34 @@ const defaultConfig: ValidatedConfig = {
     keepJobHistory: true,
     keepFailedJobHistory: true,
   },
+  taskQueue: {
+    concurrency: 5,
+    heartbeatMs: 5000,
+    lockTtlMs: 30000,
+    retries: {
+      max: 3,
+      strategy: "exponential",
+      baseDelay: 2000,
+      maxDelay: 60000,
+    },
+    deadLetter: { enabled: true },
+  },
+  queue: {
+    defaultTtl: 86400000,
+    ack: "leader",
+  },
+  worker: {
+    concurrency: 5,
+    heartbeatMs: 5000,
+    lockTtlMs: 30000,
+    retries: {
+      max: 3,
+      strategy: "exponential",
+      baseDelay: 2000,
+      maxDelay: 60000,
+    },
+    deadLetter: { enabled: true },
+  },
   jobsDir: "./src/jobs",
   tags: [],
   logger: {
@@ -95,6 +123,34 @@ export function reconfigureConfig(config: OqronConfig): ValidatedConfig {
     scheduler: {
       ...defaultConfig.scheduler,
       ...config.scheduler,
+    },
+
+    taskQueue: {
+      ...defaultConfig.taskQueue,
+      ...config.taskQueue,
+      retries: {
+        ...defaultConfig.taskQueue.retries,
+        ...config.taskQueue?.retries,
+      },
+      deadLetter: {
+        ...defaultConfig.taskQueue.deadLetter,
+        ...config.taskQueue?.deadLetter,
+      },
+    },
+
+    queue: {
+      ...defaultConfig.queue,
+      ...config.queue,
+    },
+
+    worker: {
+      ...defaultConfig.worker,
+      ...config.worker,
+      retries: { ...defaultConfig.worker.retries, ...config.worker?.retries },
+      deadLetter: {
+        ...defaultConfig.worker.deadLetter,
+        ...config.worker?.deadLetter,
+      },
     },
 
     jobsDir: config.jobsDir ?? defaultConfig.jobsDir,
