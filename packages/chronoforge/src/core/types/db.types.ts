@@ -1,14 +1,15 @@
 import type { CronDefinition, JobRecord } from "./cron.types.js";
+import type { ScheduleDefinition } from "./scheduler.types.js";
 
 export interface IChronoAdapter {
   /** Insert or update a schedule definition */
-  upsertSchedule(def: CronDefinition): Promise<void>;
+  upsertSchedule(def: CronDefinition | ScheduleDefinition): Promise<void>;
 
   /** Get schedules that are due to fire (nextRunAt <= now, or never run) */
   getDueSchedules(
     now: Date,
     limit: number,
-  ): Promise<Pick<CronDefinition, "name">[]>;
+  ): Promise<Pick<CronDefinition | ScheduleDefinition, "name">[]>;
 
   /** Get all registered schedules and their run metadata */
   getSchedules(): Promise<
@@ -16,10 +17,17 @@ export interface IChronoAdapter {
   >;
 
   /** Update nextRunAt for a schedule */
-  updateNextRun(scheduleId: string, nextRunAt: Date): Promise<void>;
+  updateNextRun(scheduleId: string, nextRunAt: Date | null): Promise<void>;
 
   /** Record a job execution (insert or update) */
   recordExecution(job: JobRecord): Promise<void>;
+
+  /** Update progress of an active job */
+  updateJobProgress(
+    id: string,
+    progressPercent: number,
+    progressLabel?: string,
+  ): Promise<void>;
 
   /** Get execution history for a schedule */
   getExecutions(

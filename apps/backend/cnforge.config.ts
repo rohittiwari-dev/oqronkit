@@ -12,7 +12,7 @@ export default defineConfig({
   lock: new DbLockAdapter("data/chrono.sqlite"),
 
   // 4. Enabled Modules
-  modules: ["cron"], // The orchestrator will only start SchedulerModule when "cron" is specified
+  modules: ["cron", "scheduler"], // The orchestrator will only start SchedulerModule when "cron" is specified
 
   // 5. Global tag metadata
   tags: ["backend-demo", "node-v24", "local"],

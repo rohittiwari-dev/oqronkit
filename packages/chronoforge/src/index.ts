@@ -24,16 +24,28 @@ export type {
   IChronoAdapter,
   ICronContext,
   ILockAdapter,
+  IScheduleContext,
   JobRecord,
   Logger,
   MissedFirePolicy,
   OverlapPolicy,
+  RetryConfig,
+  ScheduleDefinition,
+  ScheduleHooks,
+  ScheduleRecurring,
+  ScheduleRunAfter,
 } from "./core/index.js";
 // ── Re-exports: single source of truth for ALL user-facing APIs ─────────────
 export { ChronoEventBus, createLogger, defineConfig } from "./core/index.js";
 export { SqliteAdapter } from "./db/index.js";
 export { DbLockAdapter, MemoryLockAdapter } from "./lock/index.js";
-export { cron, type DefineCronOptions } from "./scheduler/index.js";
+export {
+  cron,
+  type DefineCronOptions,
+  type DefineScheduleOptions,
+  type ScheduleInstance,
+  schedule,
+} from "./scheduler/index.js";
 
 export const ChronoForge = {
   /**
@@ -104,6 +116,26 @@ export const ChronoForge = {
 
       const scheduler = new SchedulerModule(schedules, _db!, _lock!, _logger!);
       ChronoRegistry.getInstance().register(scheduler);
+    }
+
+    if (_config.modules.includes("scheduler")) {
+      const { ScheduleEngine, _drainPendingSchedules } = await import(
+        "./scheduler/index.js"
+      );
+
+      // The file scan happens above during 'cron' if both are enabled.
+      // If ONLY 'scheduler' is enabled, we need to do the file scan here.
+      if (!_config.modules.includes("cron") && _config.jobsDir) {
+        _logger.warn(
+          "jobsDir scanning currently bound to cron module block. Consider enabling 'cron' module or creating global scanner.",
+        );
+      }
+
+      // Collect all auto-registered definitions
+      const schedules = _drainPendingSchedules();
+
+      const engine = new ScheduleEngine(schedules, _db!, _lock!, _logger!);
+      ChronoRegistry.getInstance().register(engine);
     }
 
     // --- Boot all registered modules ---

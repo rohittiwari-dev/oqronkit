@@ -3,10 +3,10 @@
   "version": "0.0.1",
   "private": true,
   "scripts": {
-    "dev": "tsx watch src/index.ts",
-    "dev:express": "tsx watch src/adapters/express.ts",
-    "dev:fastify": "tsx watch src/adapters/fastify.ts",
-    "dev:hono": "tsx watch src/adapters/hono.ts",
+    "dev": "tsx watch --ignore data src/index.ts",
+    "dev:express": "tsx watch --ignore data src/adapters/express.ts",
+    "dev:fastify": "tsx watch --ignore data src/adapters/fastify.ts",
+    "dev:hono": "tsx watch --ignore data src/adapters/hono.ts",
     "start": "tsx src/index.ts"
   },
   "dependencies": {

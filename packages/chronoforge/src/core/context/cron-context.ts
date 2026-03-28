@@ -10,10 +10,16 @@ export interface CronContextOptions extends BaseJobContextOptions {
 export class CronContext extends JobContext implements ICronContext {
   public readonly firedAt: Date;
   public readonly scheduleName: string;
+  private readonly startedLocalAt: number;
 
   constructor(opts: CronContextOptions) {
     super(opts);
     this.firedAt = opts.firedAt;
     this.scheduleName = opts.scheduleName;
+    this.startedLocalAt = Date.now();
+  }
+
+  get duration(): number {
+    return Date.now() - this.startedLocalAt;
   }
 }

@@ -15,7 +15,11 @@ async function main(): Promise<void> {
   console.log("Booting ChronoForge…");
 
   // Zero boilerplate: reads chronoforge.config.js, uses jobsDir to load crons
-  await ChronoForge.init({ cwd: process.cwd() });
+  await ChronoForge.init();
+
+  // Test dynamic schedule triggers!
+  const { scheduleOnboardingDrip } = await import("./jobs/scheduler.js");
+  await scheduleOnboardingDrip("u_" + Math.random().toString(36).slice(2, 8));
 
   // ─── 3. Express HTTP server ──────────────────────────────────────────────────
   const app = express();

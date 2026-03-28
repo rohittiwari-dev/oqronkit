@@ -1,20 +1,20 @@
 import { randomUUID } from "node:crypto";
+import { RRule, rrulestr } from "rrule";
 import {
-  CronContext,
-  type CronDefinition,
   createLogger,
   type IChronoAdapter,
   type IChronoModule,
   type ILockAdapter,
   type Logger,
+  ScheduleContext,
+  type ScheduleDefinition,
 } from "../core/index.js";
 import {
   HeartbeatWorker,
   LeaderElection,
   StallDetector,
 } from "../lock/index.js";
-import { getNextRunDate } from "./expression-parser.js";
-import { MissedFireHandler } from "./missed-fire.handler.js";
+import { _attachScheduleEngine } from "./define-schedule.js";
 
 type ActiveJobEntry = {
   runId: string;
@@ -23,22 +23,23 @@ type ActiveJobEntry = {
   abort?: AbortController;
 };
 
-export class SchedulerModule implements IChronoModule {
-  public readonly name = "cron";
+export class ScheduleEngine implements IChronoModule {
+  public readonly name = "scheduler";
   public readonly enabled = true;
 
   private readonly nodeId: string;
   private readonly logger: Logger;
   private leader?: LeaderElection;
   private stallDetector: StallDetector;
-  private missedFireHandler: MissedFireHandler;
   private tickTimer?: ReturnType<typeof setInterval>;
 
   private readonly activeJobs = new Map<string, ActiveJobEntry>();
+  // Includes static instances and dynamically triggered instances
+  private readonly schedules = new Map<string, ScheduleDefinition>();
   private _hasRunLeaderInit = false;
 
   constructor(
-    private readonly schedules: CronDefinition[],
+    staticSchedules: ScheduleDefinition[],
     private readonly db: IChronoAdapter,
     private readonly lock: ILockAdapter,
     logger?: Logger,
@@ -47,54 +48,54 @@ export class SchedulerModule implements IChronoModule {
     this.logger =
       logger ?? createLogger({ level: "info" }, { module: "scheduler" });
     this.stallDetector = new StallDetector(this.lock, this.logger, 15_000);
-    this.missedFireHandler = new MissedFireHandler(this.logger, this.db);
+
+    for (const def of staticSchedules) {
+      this.schedules.set(def.name, def);
+    }
   }
 
   // ── Lifecycle ───────────────────────────────────────────────────────────────
 
   async init(): Promise<void> {
-    this.logger.info("Initializing scheduler", {
+    this.logger.info("Initializing schedule engine", {
       nodeId: this.nodeId,
-      count: this.schedules.length,
+      staticCount: this.schedules.size,
     });
 
-    for (const def of this.schedules) {
-      await this.db.upsertSchedule(def);
-      this.logger.debug("Registered schedule", {
-        name: def.name,
-        expression: def.expression,
-        intervalMs: def.intervalMs,
-      });
-    }
+    _attachScheduleEngine(this);
 
-    // ── CRITICAL: Seed nextRunAt for schedules that don't have one yet ──
-    // Without this, getDueSchedules returns NULL rows every single tick,
-    // causing every schedule to fire every second indefinitely.
-    const existing = await this.db.getSchedules();
     const now = new Date();
-
-    for (const record of existing) {
-      if (record.nextRunAt !== null) continue; // already has a next-fire time
-
-      const def = this.schedules.find((s) => s.name === record.name);
-      if (!def) continue;
-
-      const nextRun = this.computeNextRun(def, now);
-      if (nextRun) {
-        await this.db.updateNextRun(def.name, nextRun);
-        this.logger.debug("Seeded nextRunAt", {
-          name: def.name,
-          nextRunAt: nextRun.toISOString(),
-        });
-      }
+    for (const def of this.schedules.values()) {
+      await this.upsertAndSeed(def, now);
     }
+  }
+
+  private async upsertAndSeed(def: ScheduleDefinition, now: Date) {
+    await this.db.upsertSchedule(def);
+    const nextRun = this.computeNextRun(def, now);
+    if (nextRun) {
+      await this.db.updateNextRun(def.name, nextRun);
+    }
+  }
+
+  /** Dynamically register and schedule a definition from trigger/schedule call */
+  async registerDynamic(def: ScheduleDefinition): Promise<void> {
+    this.schedules.set(def.name, def);
+    await this.upsertAndSeed(def, new Date());
+    this.logger.debug("Registered dynamic schedule", { name: def.name });
+  }
+
+  async cancel(name: string): Promise<void> {
+    // We remove it from memory and from DB's execution queue by setting nextRunAt to null/distant past
+    this.schedules.delete(name);
+    // For now just removing it from tracking memory
   }
 
   async start(): Promise<void> {
     this.leader = new LeaderElection(
       this.lock,
       this.logger,
-      "chrono:scheduler:leader",
+      "chrono:scheduleengine:leader",
       this.nodeId,
       30_000,
     );
@@ -104,7 +105,7 @@ export class SchedulerModule implements IChronoModule {
       void this.tick();
     }, 1_000);
 
-    this.logger.info("Scheduler started", { nodeId: this.nodeId });
+    this.logger.info("Schedule engine started", { nodeId: this.nodeId });
   }
 
   async stop(): Promise<void> {
@@ -120,64 +121,78 @@ export class SchedulerModule implements IChronoModule {
       }
     }
     this.activeJobs.clear();
-    this.logger.info("Scheduler stopped");
+    this.logger.info("Schedule engine stopped");
   }
 
   // ── Core scheduling helpers ─────────────────────────────────────────────────
 
-  /**
-   * Compute the next fire time for a definition.
-   * Returns null if computation fails (invalid expression, etc).
-   */
-  private computeNextRun(def: CronDefinition, from: Date): Date | null {
-    if (def.expression) {
-      try {
-        return getNextRunDate(def.expression, def.timezone, from);
-      } catch (err) {
-        this.logger.error("Failed to compute next run from expression", {
-          name: def.name,
-          expression: def.expression,
-          err: String(err),
-        });
-        return null;
+  private computeNextRun(def: ScheduleDefinition, from: Date): Date | null {
+    try {
+      if (def.runAt) {
+        // If pure runAt and it's in the past, return it so it fires immediately.
+        // In the fire method we will mark it as complete.
+        return new Date(def.runAt);
       }
+
+      if (def.runAfter) {
+        const add =
+          (def.runAfter.days ?? 0) * 86400000 +
+          (def.runAfter.hours ?? 0) * 3600000 +
+          (def.runAfter.minutes ?? 0) * 60000 +
+          (def.runAfter.seconds ?? 0) * 1000;
+        return new Date(from.getTime() + add);
+      }
+
+      if (def.rrule) {
+        const rule = rrulestr(def.rrule);
+        return rule.after(from);
+      }
+
+      if (def.recurring) {
+        const freqMapHash: Record<string, any> = {
+          daily: RRule.DAILY,
+          weekly: RRule.WEEKLY,
+          monthly: RRule.MONTHLY,
+          yearly: RRule.YEARLY,
+        };
+        const freq = freqMapHash[def.recurring.frequency] ?? RRule.DAILY;
+        const options: any = { freq };
+        if (def.recurring.months?.length)
+          options.bymonth = def.recurring.months;
+        if (def.recurring.dayOfMonth)
+          options.bymonthday = [def.recurring.dayOfMonth];
+        // Basic handling of 'at'
+        if (def.recurring.at) {
+          options.byhour = [def.recurring.at.hour];
+          options.byminute = [def.recurring.at.minute];
+          options.bysecond = [0];
+        }
+
+        const rule = new RRule(options);
+        return rule.after(from);
+      }
+
+      if (def.every) {
+        const add =
+          (def.every.hours ?? 0) * 3600000 +
+          (def.every.minutes ?? 0) * 60000 +
+          (def.every.seconds ?? 0) * 1000;
+        return new Date(from.getTime() + add);
+      }
+    } catch (err) {
+      this.logger.error("Failed to compute next run", {
+        name: def.name,
+        err: String(err),
+      });
     }
 
-    if (def.intervalMs) {
-      return new Date(from.getTime() + def.intervalMs);
-    }
-
-    this.logger.error("Schedule has neither expression nor intervalMs", {
-      name: def.name,
-    });
     return null;
   }
 
   // ── Leader init (missed-fire recovery + stall detector) ─────────────────────
 
   private async handleLeaderInit(): Promise<void> {
-    this.logger.info("Performing leader initialization...");
-
-    // 1. Evaluate missed fires
-    const knownSchedules = await this.db.getSchedules();
-    const now = new Date();
-
-    for (const record of knownSchedules) {
-      const def = this.schedules.find((s) => s.name === record.name);
-      if (!def) continue;
-
-      const missed = await this.missedFireHandler.checkMissed(
-        def,
-        record.lastRunAt,
-        now,
-      );
-      if (missed) {
-        this.logger.info("Triggering recovery run for missed schedule", {
-          name: def.name,
-        });
-        void this.fire(def);
-      }
-    }
+    this.logger.info("Schedule Engine: Performing leader initialization...");
 
     // 2. Start stall detector to monitor node-local locks
     this.stallDetector.start(
@@ -195,36 +210,6 @@ export class SchedulerModule implements IChronoModule {
     );
   }
 
-  private async detectClusterStalls() {
-    try {
-      const activeDbJobs = await this.db.getActiveJobs();
-      for (const job of activeDbJobs) {
-        if (!job.scheduleId) continue;
-        const def = this.schedules.find((s) => s.name === job.scheduleId);
-        if (!def?.guaranteedWorker) continue;
-
-        const ageMs = Date.now() - job.startedAt.getTime();
-        const ttl = def.lockTtlMs ?? 50_000;
-
-        if (ageMs > ttl + 10_000) {
-          this.logger.warn("Cluster stall detected", { runId: job.id });
-          await this.db.recordExecution({
-            id: job.id,
-            scheduleId: job.scheduleId,
-            status: "failed",
-            error: "Stall detected (lock assumed expired)",
-            startedAt: job.startedAt,
-            completedAt: new Date(),
-          });
-        }
-      }
-    } catch (err) {
-      this.logger.error("Failed to detect cluster stalls", {
-        err: String(err),
-      });
-    }
-  }
-
   // ── Tick loop ───────────────────────────────────────────────────────────────
 
   private async tick(): Promise<void> {
@@ -236,29 +221,59 @@ export class SchedulerModule implements IChronoModule {
     }
 
     try {
-      // 1. Cluster stall check (~10% probability per tick)
-      if (Math.random() < 0.1) {
-        void this.detectClusterStalls();
-      }
-
-      // 2. Fire due schedules
       const now = new Date();
       const due = await this.db.getDueSchedules(now, 50);
 
       for (const { name } of due) {
-        const def = this.schedules.find((s) => s.name === name);
+        const def = this.schedules.get(name);
+
+        // If not in static memory, check if it's dynamic but we don't have it loaded.
+        // We will skip dynamic orphaned ones.
         if (!def) continue;
 
-        // CRITICAL: Compute and persist nextRunAt BEFORE firing.
-        // If this fails, we do NOT fire — otherwise the schedule loops every tick.
-        const nextRun = this.computeNextRun(def, now);
-        if (!nextRun) {
-          this.logger.error(
-            "Cannot compute next run — skipping fire to prevent runaway loop",
-            { name: def.name },
-          );
-          continue;
+        // Condition Check
+        if (def.condition) {
+          try {
+            const conditionVal = await def.condition(
+              new ScheduleContext({
+                id: "eval",
+                scheduleName: def.name,
+                firedAt: now,
+                logger: this.logger,
+                signal: new AbortController().signal,
+                payload: def.payload,
+              }),
+            );
+            if (!conditionVal) {
+              // Push to next run time without actually firing
+              const nextRun = this.computeNextRun(def, now);
+              if (nextRun) await this.db.updateNextRun(def.name, nextRun);
+              continue;
+            }
+          } catch (e) {
+            this.logger.error("Condition crashed", {
+              name: def.name,
+              error: String(e),
+            });
+            continue;
+          }
         }
+
+        // CRITICAL: Compute and persist nextRunAt BEFORE firing.
+        // If runAt, this is a one-time execution so nextRunAt becomes null.
+        let nextRun: Date | null = null;
+        if (!def.runAt && !def.runAfter) {
+          nextRun = this.computeNextRun(def, now);
+          if (!nextRun) {
+            this.logger.error(
+              "Cannot compute next run — skipping fire to prevent runaway loop",
+              { name: def.name },
+            );
+            continue;
+          }
+        }
+
+        // Next run is null for one-offs!
         await this.db.updateNextRun(def.name, nextRun);
 
         void this.fire(def);
@@ -270,13 +285,13 @@ export class SchedulerModule implements IChronoModule {
 
   // ── Fire handler ────────────────────────────────────────────────────────────
 
-  private async fire(def: CronDefinition): Promise<void> {
+  private async fire(def: ScheduleDefinition): Promise<void> {
     const isOverlapSkip = def.overlap === "skip" || def.overlap === false;
 
     // Local overlap check
     if (isOverlapSkip) {
       for (const job of this.activeJobs.values()) {
-        if (job.lockKey === `chrono:run:${def.name}`) {
+        if (job.lockKey === `chrono:schedule:run:${def.name}`) {
           this.logger.debug("Skipping overlapping run", { name: def.name });
           return;
         }
@@ -285,8 +300,8 @@ export class SchedulerModule implements IChronoModule {
 
     const runId = randomUUID();
     const lockKey = isOverlapSkip
-      ? `chrono:run:${def.name}`
-      : `chrono:run:${def.name}:${runId}`;
+      ? `chrono:schedule:run:${def.name}`
+      : `chrono:schedule:run:${def.name}:${runId}`;
     const startedAt = new Date();
 
     // ── Acquire lock ──────────────────────────────────────────────────────
@@ -325,18 +340,20 @@ export class SchedulerModule implements IChronoModule {
 
     // ── Execute handler (non-blocking) ────────────────────────────────────
     void Promise.resolve().then(async () => {
-      const ctx = new CronContext({
+      const ctx = new ScheduleContext({
         id: runId,
         logger: this.logger.child({ schedule: def.name }),
         signal: abort.signal,
         firedAt: startedAt,
         scheduleName: def.name,
+        payload: def.payload,
         onProgress: (percent, label) => {
-          this.db
-            .updateJobProgress(runId, percent, label)
-            .catch((err) =>
-              this.logger.error("Failed to update progress", { runId, err }),
-            );
+          this.db.updateJobProgress(runId, percent, label).catch((err) =>
+            this.logger.error("Failed to update schedule progress", {
+              runId,
+              err,
+            }),
+          );
         },
       });
 
@@ -387,7 +404,7 @@ export class SchedulerModule implements IChronoModule {
           }
 
           if (attempts < maxAttempts) {
-            this.logger.warn("Job handler threw, retrying...", {
+            this.logger.warn("Schedule handler threw, retrying...", {
               name: def.name,
               runId,
               attempt: attempts,
@@ -404,7 +421,7 @@ export class SchedulerModule implements IChronoModule {
             // Sleep without releasing lock
             await new Promise((resolve) => setTimeout(resolve, delay));
           } else {
-            this.logger.error("Job handler failed completely", {
+            this.logger.error("Schedule handler failed completely", {
               name: def.name,
               runId,
               attempts,
@@ -441,17 +458,7 @@ export class SchedulerModule implements IChronoModule {
       }
 
       this.activeJobs.delete(runId);
-
-      // Update nextRunAt after completion (for interval-based schedules,
-      // this re-anchors from the actual completion time)
-      if (def.intervalMs) {
-        const nextRun = this.computeNextRun(def, new Date());
-        if (nextRun) {
-          await this.db.updateNextRun(def.name, nextRun).catch(() => {});
-        }
-      }
-
-      this.logger.info("Job finished", {
+      this.logger.info("Schedule finished", {
         name: def.name,
         runId,
         status,

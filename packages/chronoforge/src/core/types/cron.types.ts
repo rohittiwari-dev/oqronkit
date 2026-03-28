@@ -9,7 +9,16 @@ export interface EveryConfig {
   hours?: number;
 }
 
+export interface RetryConfig {
+  max: number;
+  strategy: "exponential" | "fixed";
+  baseDelay: number;
+}
+
 export interface CronHooks {
+  beforeRun?: (ctx: ICronContext) => Promise<void> | void;
+  afterRun?: (ctx: ICronContext, result: unknown) => Promise<void> | void;
+  onError?: (ctx: ICronContext, error: Error) => Promise<void> | void;
   onMissedFire?: (ctx: ICronContext, missedAt: Date) => Promise<void> | void;
 }
 
@@ -27,6 +36,7 @@ export interface CronDefinition {
   tags: string[];
   handler: (ctx: ICronContext) => Promise<unknown>;
   hooks?: CronHooks;
+  retries?: RetryConfig;
 }
 
 export interface JobRecord {
@@ -36,4 +46,9 @@ export interface JobRecord {
   startedAt: Date;
   completedAt?: Date;
   error?: string;
+  result?: string;
+  progressPercent?: number;
+  progressLabel?: string;
+  attempts?: number;
+  durationMs?: number;
 }

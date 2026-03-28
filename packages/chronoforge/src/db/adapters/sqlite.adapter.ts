@@ -3,6 +3,7 @@ import type {
   CronDefinition,
   IChronoAdapter,
   JobRecord,
+  ScheduleDefinition,
 } from "../../core/index.js";
 
 export class SqliteAdapter implements IChronoAdapter {
@@ -29,11 +30,18 @@ export class SqliteAdapter implements IChronoAdapter {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS chrono_schedules (
         id              TEXT PRIMARY KEY,
-        expression      TEXT NOT NULL,
+        expression      TEXT, -- Can be null now since rrule/runAt are supported
         timezone        TEXT,
         missedFirePolicy TEXT NOT NULL DEFAULT 'skip',
         overlap         INTEGER NOT NULL DEFAULT 1,
         tags            TEXT NOT NULL DEFAULT '[]',
+        
+        -- Advanced Scheduling Columns
+        runAt           TEXT,
+        runAfterOpts    TEXT,
+        rrule           TEXT,
+        recurring       TEXT,
+        
         lastRunAt       TEXT,
         nextRunAt       TEXT
       );
@@ -45,6 +53,10 @@ export class SqliteAdapter implements IChronoAdapter {
         startedAt   TEXT NOT NULL,
         completedAt TEXT,
         error       TEXT,
+        result      TEXT,
+        progressPercent INTEGER,
+        progressLabel TEXT,
+        attempts    INTEGER DEFAULT 1,
         FOREIGN KEY(scheduleId) REFERENCES chrono_schedules(id) ON DELETE CASCADE
       );
 
@@ -54,27 +66,71 @@ export class SqliteAdapter implements IChronoAdapter {
         expiresAt   TEXT NOT NULL
       );
     `);
+
+    // Safe optimistic migrations for existing databases
+    const alters = [
+      "ALTER TABLE chrono_schedules ADD COLUMN runAt TEXT",
+      "ALTER TABLE chrono_schedules ADD COLUMN runAfterOpts TEXT",
+      "ALTER TABLE chrono_schedules ADD COLUMN rrule TEXT",
+      "ALTER TABLE chrono_schedules ADD COLUMN recurring TEXT",
+      "ALTER TABLE chrono_jobs ADD COLUMN result TEXT",
+      "ALTER TABLE chrono_jobs ADD COLUMN progressPercent INTEGER",
+      "ALTER TABLE chrono_jobs ADD COLUMN progressLabel TEXT",
+      "ALTER TABLE chrono_jobs ADD COLUMN attempts INTEGER",
+      "ALTER TABLE chrono_jobs ADD COLUMN durationMs INTEGER",
+    ];
+    for (const sql of alters) {
+      try {
+        this.db.exec(sql);
+      } catch (_e) {
+        // Ignored. SQLite throws if column already exists
+      }
+    }
   }
 
-  async upsertSchedule(def: CronDefinition): Promise<void> {
+  async upsertSchedule(
+    def: CronDefinition | ScheduleDefinition,
+  ): Promise<void> {
+    const isSchedule =
+      "runAt" in def ||
+      "rrule" in def ||
+      "recurring" in def ||
+      "runAfter" in def;
+
     this.db
       .prepare(
-        `INSERT INTO chrono_schedules (id, expression, timezone, missedFirePolicy, overlap, tags)
-         VALUES (?, ?, ?, ?, ?, ?)
+        `INSERT INTO chrono_schedules (
+           id, expression, timezone, missedFirePolicy, overlap, tags,
+           runAt, runAfterOpts, rrule, recurring
+         )
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
            expression       = excluded.expression,
            timezone         = excluded.timezone,
            missedFirePolicy = excluded.missedFirePolicy,
            overlap          = excluded.overlap,
-           tags             = excluded.tags`,
+           tags             = excluded.tags,
+           runAt            = excluded.runAt,
+           runAfterOpts     = excluded.runAfterOpts,
+           rrule            = excluded.rrule,
+           recurring        = excluded.recurring`,
       )
       .run(
         def.name,
-        def.expression ?? (def.intervalMs ? `every:${def.intervalMs}ms` : null),
+        "expression" in def
+          ? (def.expression ??
+              (def.intervalMs ? `every:${def.intervalMs}ms` : null))
+          : "every" in def && def.every
+            ? JSON.stringify(def.every)
+            : null,
         def.timezone ?? null,
         def.missedFire,
         def.overlap !== "skip" && def.overlap !== false ? 1 : 0,
         JSON.stringify(def.tags),
+        isSchedule && def.runAt ? def.runAt.toISOString() : null,
+        isSchedule && def.runAfter ? JSON.stringify(def.runAfter) : null,
+        isSchedule && def.rrule ? def.rrule : null,
+        isSchedule && def.recurring ? JSON.stringify(def.recurring) : null,
       );
   }
 
@@ -85,7 +141,7 @@ export class SqliteAdapter implements IChronoAdapter {
     return this.db
       .prepare(
         `SELECT id as name FROM chrono_schedules
-         WHERE nextRunAt IS NULL OR nextRunAt <= ?
+         WHERE nextRunAt <= ?
          LIMIT ?`,
       )
       .all(now.toISOString(), limit) as { name: string }[];
@@ -108,21 +164,41 @@ export class SqliteAdapter implements IChronoAdapter {
     }));
   }
 
-  async updateNextRun(scheduleId: string, nextRunAt: Date): Promise<void> {
+  async updateNextRun(
+    scheduleId: string,
+    nextRunAt: Date | null,
+  ): Promise<void> {
     this.db
       .prepare(`UPDATE chrono_schedules SET nextRunAt = ? WHERE id = ?`)
-      .run(nextRunAt.toISOString(), scheduleId);
+      .run(nextRunAt ? nextRunAt.toISOString() : null, scheduleId);
+  }
+
+  async updateJobProgress(
+    id: string,
+    progressPercent: number,
+    progressLabel?: string,
+  ): Promise<void> {
+    this.db
+      .prepare(
+        `UPDATE chrono_jobs SET progressPercent = ?, progressLabel = ? WHERE id = ?`,
+      )
+      .run(progressPercent, progressLabel ?? null, id);
   }
 
   async recordExecution(job: JobRecord): Promise<void> {
     this.db
       .prepare(
-        `INSERT INTO chrono_jobs (id, scheduleId, status, startedAt, completedAt, error)
-         VALUES (?, ?, ?, ?, ?, ?)
+        `INSERT INTO chrono_jobs (id, scheduleId, status, startedAt, completedAt, error, result, attempts, progressPercent, progressLabel, durationMs)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET
-           status      = excluded.status,
-           completedAt = excluded.completedAt,
-           error       = excluded.error`,
+           status          = excluded.status,
+           completedAt     = excluded.completedAt,
+           error           = excluded.error,
+           result          = excluded.result,
+           attempts        = excluded.attempts,
+           progressPercent = coalesce(excluded.progressPercent, progressPercent),
+           progressLabel   = coalesce(excluded.progressLabel, progressLabel),
+           durationMs      = excluded.durationMs`,
       )
       .run(
         job.id,
@@ -131,6 +207,11 @@ export class SqliteAdapter implements IChronoAdapter {
         job.startedAt.toISOString(),
         job.completedAt?.toISOString() ?? null,
         job.error ?? null,
+        job.result ?? null,
+        job.attempts ?? 1,
+        job.progressPercent ?? null,
+        job.progressLabel ?? null,
+        job.durationMs ?? null,
       );
 
     if (
@@ -149,7 +230,7 @@ export class SqliteAdapter implements IChronoAdapter {
   ): Promise<JobRecord[]> {
     const rows = this.db
       .prepare(
-        `SELECT id, scheduleId, status, startedAt, completedAt, error
+        `SELECT id, scheduleId, status, startedAt, completedAt, error, result, progressPercent, progressLabel, attempts, durationMs
          FROM chrono_jobs WHERE scheduleId = ?
          ORDER BY startedAt DESC
          LIMIT ? OFFSET ?`,
@@ -161,6 +242,11 @@ export class SqliteAdapter implements IChronoAdapter {
       startedAt: string;
       completedAt: string | null;
       error: string | null;
+      result: string | null;
+      progressPercent: number | null;
+      progressLabel: string | null;
+      attempts: number | null;
+      durationMs: number | null;
     }>;
 
     return rows.map((r) => ({
@@ -170,13 +256,18 @@ export class SqliteAdapter implements IChronoAdapter {
       startedAt: new Date(r.startedAt),
       completedAt: r.completedAt ? new Date(r.completedAt) : undefined,
       error: r.error ?? undefined,
+      result: r.result ?? undefined,
+      progressPercent: r.progressPercent ?? undefined,
+      progressLabel: r.progressLabel ?? undefined,
+      attempts: r.attempts ?? undefined,
+      durationMs: r.durationMs ?? undefined,
     }));
   }
 
   async getActiveJobs(): Promise<JobRecord[]> {
     const rows = this.db
       .prepare(
-        `SELECT id, scheduleId, status, startedAt, completedAt, error
+        `SELECT id, scheduleId, status, startedAt, completedAt, error, result, progressPercent, progressLabel, attempts, durationMs
          FROM chrono_jobs WHERE status = 'running'`,
       )
       .all() as Array<{
@@ -186,6 +277,11 @@ export class SqliteAdapter implements IChronoAdapter {
       startedAt: string;
       completedAt: string | null;
       error: string | null;
+      result: string | null;
+      progressPercent: number | null;
+      progressLabel: string | null;
+      attempts: number | null;
+      durationMs: number | null;
     }>;
 
     return rows.map((r) => ({
@@ -195,6 +291,11 @@ export class SqliteAdapter implements IChronoAdapter {
       startedAt: new Date(r.startedAt),
       completedAt: r.completedAt ? new Date(r.completedAt) : undefined,
       error: r.error ?? undefined,
+      result: r.result ?? undefined,
+      progressPercent: r.progressPercent ?? undefined,
+      progressLabel: r.progressLabel ?? undefined,
+      attempts: r.attempts ?? undefined,
+      durationMs: r.durationMs ?? undefined,
     }));
   }
 

@@ -10,6 +10,8 @@ export type { CronContextOptions } from "./context/cron-context.js";
 export { CronContext } from "./context/cron-context.js";
 export type { BaseJobContextOptions } from "./context/job-context.js";
 export { JobContext } from "./context/job-context.js";
+export type { ScheduleContextOptions } from "./context/schedule-context.js";
+export { ScheduleContext } from "./context/schedule-context.js";
 
 // Errors
 export { ChronoError } from "./errors/base.error.js";
@@ -36,7 +38,15 @@ export type {
   JobRecord,
   MissedFirePolicy,
   OverlapPolicy,
+  RetryConfig,
 } from "./types/cron.types.js";
 export type { IChronoAdapter } from "./types/db.types.js";
 export type { ILockAdapter } from "./types/lock.types.js";
 export type { IChronoModule } from "./types/module.types.js";
+export type {
+  IScheduleContext,
+  ScheduleDefinition,
+  ScheduleHooks,
+  ScheduleRecurring,
+  ScheduleRunAfter,
+} from "./types/scheduler.types.js";

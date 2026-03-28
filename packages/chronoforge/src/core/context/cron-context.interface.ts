@@ -7,6 +7,7 @@ export interface ICronContext {
   readonly signal: AbortSignal;
   readonly firedAt: Date;
   readonly scheduleName: string;
-  progress(value: number): void;
+  readonly duration: number;
+  progress(value: number, label?: string): void;
   getProgress(): number;
 }

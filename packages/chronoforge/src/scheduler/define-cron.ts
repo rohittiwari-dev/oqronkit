@@ -6,6 +6,7 @@ import type {
   ICronContext,
   MissedFirePolicy,
   OverlapPolicy,
+  RetryConfig,
 } from "../core/index.js";
 
 const cronParser = (_cronParser as any).default ?? _cronParser;
@@ -29,6 +30,7 @@ export type DefineCronOptions = CronScheduleConfig & {
   tags?: string[];
   handler: (ctx: ICronContext) => Promise<unknown>;
   hooks?: CronHooks;
+  retries?: RetryConfig;
 };
 
 // ── Helpers ─────────────────────────────────────────────────────────────────────
@@ -94,6 +96,7 @@ export const cron = (options: DefineCronOptions): CronDefinition => {
     tags: options.tags ?? [],
     handler: options.handler,
     hooks: options.hooks,
+    retries: options.retries,
   };
 
   // Auto-register: no need for manual array wiring
