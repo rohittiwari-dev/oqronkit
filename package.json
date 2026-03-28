@@ -1,5 +1,5 @@
 {
-  "name": "chronoforge-monorepo",
+  "name": "oqronkit-monorepo",
   "version": "0.0.1",
   "private": true,
   "scripts": {
@@ -23,9 +23,9 @@
     }
   },
   "author": "Rohit Tiwari <rohit@rohittiwari.me>",
-  "homepage": "https://chronoforge.rohittiwari.me",
+  "homepage": "https://oqronkit.rohittiwari.me",
   "bugs": {
-    "url": "https://github.com/rohittiwari-dev/chronoforge/issues"
+    "url": "https://github.com/rohittiwari-dev/oqronkit/issues"
   },
   "keywords": [],
   "devDependencies": {

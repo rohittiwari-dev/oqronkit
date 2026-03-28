@@ -1,5 +1,5 @@
 {
-  "name": "@choronoforge/backend",
+  "name": "@oqronkit/backend",
   "version": "0.0.1",
   "private": true,
   "scripts": {
@@ -10,7 +10,7 @@
     "start": "tsx src/index.ts"
   },
   "dependencies": {
-    "chronoforge": "*",
+    "oqronkit": "*",
     "express": "^4.21.2",
     "fastify": "^4.29.0",
     "hono": "^4.4.13",

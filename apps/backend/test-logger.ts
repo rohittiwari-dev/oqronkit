@@ -1,4 +1,4 @@
-import { createLogger } from "chronoforge";
+import { createLogger } from "oqronkit";
 
 const logger = createLogger({
   enabled: true,

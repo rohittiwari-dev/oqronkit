@@ -1,4 +1,4 @@
-import { type IScheduleContext, schedule } from "chronoforge";
+import { type IScheduleContext, schedule } from "oqronkit";
 
 // ── 1. Advanced Progress & Retry Schedule ──────────────────────────────────────────
 export const dataProcessingJob = schedule({

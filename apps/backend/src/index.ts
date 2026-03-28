@@ -1,21 +1,21 @@
 /**
- * Main entry for the ChronoForge backend demo.
+ * Main entry for the OqronKit backend demo.
  * Uses Express.js — swap the import block for Fastify/Hono as needed.
  */
 
 import { mkdirSync } from "node:fs";
-import { ChronoForge } from "chronoforge";
 import express from "express";
+import { OqronKit } from "oqronkit";
 
 // ─── 1. Prepare DB directory ──────────────────────────────────────────────────
 mkdirSync("data", { recursive: true });
 
-// ─── 2. Bootstrap ChronoForge ──────────────────────────────────────────────────
+// ─── 2. Bootstrap OqronKit ──────────────────────────────────────────────────
 async function main(): Promise<void> {
-  console.log("Booting ChronoForge…");
+  console.log("Booting OqronKit…");
 
-  // Zero boilerplate: reads chronoforge.config.js, uses jobsDir to load crons
-  await ChronoForge.init({
+  // Zero boilerplate: reads oqronkit.config.js, uses jobsDir to load crons
+  await OqronKit.init({
     config: {
       modules: ["cron", "scheduler"],
       logger: {
@@ -32,13 +32,13 @@ async function main(): Promise<void> {
   const app = express();
   app.use(express.json());
 
-  // Mount ChronoForge monitoring routes cleanly
-  app.use("/api/chrono", ChronoForge.expressRouter());
+  // Mount OqronKit monitoring routes cleanly
+  app.use("/api/chrono", OqronKit.expressRouter());
 
   // Root info
   app.get("/", (_req, res) => {
     res.json({
-      name: "ChronoForge Backend Demo",
+      name: "OqronKit Backend Demo",
       version: "0.0.1",
       docs: {
         health: "GET  /api/chrono/health",

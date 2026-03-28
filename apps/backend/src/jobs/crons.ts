@@ -1,5 +1,5 @@
-import type { ICronContext } from "chronoforge";
-import { cron } from "chronoforge";
+import type { ICronContext } from "oqronkit";
+import { cron } from "oqronkit";
 
 // ─── Analytics Report (expression-based) ──────────────────────────────────────
 export const dailyAnalyticsReport = cron({
