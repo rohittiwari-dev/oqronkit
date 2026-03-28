@@ -10,6 +10,14 @@ export interface IChronoAdapter {
     limit: number,
   ): Promise<Pick<CronDefinition, "name">[]>;
 
+  /** Get all registered schedules and their run metadata */
+  getSchedules(): Promise<
+    Array<{ name: string; lastRunAt: Date | null; nextRunAt: Date | null }>
+  >;
+
+  /** Update nextRunAt for a schedule */
+  updateNextRun(scheduleId: string, nextRunAt: Date): Promise<void>;
+
   /** Record a job execution (insert or update) */
   recordExecution(job: JobRecord): Promise<void>;
 
@@ -18,6 +26,9 @@ export interface IChronoAdapter {
     scheduleId: string,
     opts: { limit: number; offset: number },
   ): Promise<JobRecord[]>;
+
+  /** Get all jobs currently marked as running */
+  getActiveJobs(): Promise<JobRecord[]>;
 
   /** Clean old execution records */
   cleanOldExecutions(before: Date): Promise<number>;

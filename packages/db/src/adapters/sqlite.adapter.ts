@@ -70,7 +70,7 @@ export class SqliteAdapter implements IChronoAdapter {
       )
       .run(
         def.name,
-        def.schedule,
+        def.expression ?? (def.intervalMs ? `every:${def.intervalMs}ms` : null),
         def.timezone ?? null,
         def.missedFire,
         def.overlap !== "skip" && def.overlap !== false ? 1 : 0,
@@ -89,6 +89,29 @@ export class SqliteAdapter implements IChronoAdapter {
          LIMIT ?`,
       )
       .all(now.toISOString(), limit) as { name: string }[];
+  }
+
+  async getSchedules(): Promise<
+    Array<{ name: string; lastRunAt: Date | null; nextRunAt: Date | null }>
+  > {
+    const rows = this.db
+      .prepare(`SELECT id, lastRunAt, nextRunAt FROM chrono_schedules`)
+      .all() as Array<{
+      id: string;
+      lastRunAt: string | null;
+      nextRunAt: string | null;
+    }>;
+    return rows.map((r) => ({
+      name: r.id,
+      lastRunAt: r.lastRunAt ? new Date(r.lastRunAt) : null,
+      nextRunAt: r.nextRunAt ? new Date(r.nextRunAt) : null,
+    }));
+  }
+
+  async updateNextRun(scheduleId: string, nextRunAt: Date): Promise<void> {
+    this.db
+      .prepare(`UPDATE chrono_schedules SET nextRunAt = ? WHERE id = ?`)
+      .run(nextRunAt.toISOString(), scheduleId);
   }
 
   async recordExecution(job: JobRecord): Promise<void> {
@@ -132,6 +155,31 @@ export class SqliteAdapter implements IChronoAdapter {
          LIMIT ? OFFSET ?`,
       )
       .all(scheduleId, opts.limit, opts.offset) as Array<{
+      id: string;
+      scheduleId: string | null;
+      status: string;
+      startedAt: string;
+      completedAt: string | null;
+      error: string | null;
+    }>;
+
+    return rows.map((r) => ({
+      id: r.id,
+      scheduleId: r.scheduleId ?? undefined,
+      status: r.status as JobRecord["status"],
+      startedAt: new Date(r.startedAt),
+      completedAt: r.completedAt ? new Date(r.completedAt) : undefined,
+      error: r.error ?? undefined,
+    }));
+  }
+
+  async getActiveJobs(): Promise<JobRecord[]> {
+    const rows = this.db
+      .prepare(
+        `SELECT id, scheduleId, status, startedAt, completedAt, error
+         FROM chrono_jobs WHERE status = 'running'`,
+      )
+      .all() as Array<{
       id: string;
       scheduleId: string | null;
       status: string;

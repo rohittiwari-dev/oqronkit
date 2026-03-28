@@ -8,8 +8,20 @@ import {
   type ILockAdapter,
   type Logger,
 } from "@chronoforge/core";
-import { HeartbeatWorker, LeaderElection } from "@chronoforge/lock";
+import {
+  HeartbeatWorker,
+  LeaderElection,
+  StallDetector,
+} from "@chronoforge/lock";
 import { getNextRunDate } from "./expression-parser.js";
+import { MissedFireHandler } from "./missed-fire.handler.js";
+
+type ActiveJobEntry = {
+  runId: string;
+  lockKey: string;
+  worker?: HeartbeatWorker;
+  abort?: AbortController;
+};
 
 export class SchedulerModule implements IChronoModule {
   public readonly name = "cron";
@@ -18,9 +30,12 @@ export class SchedulerModule implements IChronoModule {
   private readonly nodeId: string;
   private readonly logger: Logger;
   private leader?: LeaderElection;
+  private stallDetector: StallDetector;
+  private missedFireHandler: MissedFireHandler;
   private tickTimer?: ReturnType<typeof setInterval>;
-  // key = scheduleId, prevents overlapping runs when overlap=false
-  private readonly activeJobs = new Map<string, HeartbeatWorker>();
+
+  private readonly activeJobs = new Map<string, ActiveJobEntry>();
+  private _hasRunLeaderInit = false;
 
   constructor(
     private readonly schedules: CronDefinition[],
@@ -31,19 +46,47 @@ export class SchedulerModule implements IChronoModule {
     this.nodeId = randomUUID();
     this.logger =
       logger ?? createLogger({ level: "info" }, { module: "scheduler" });
+    this.stallDetector = new StallDetector(this.lock, this.logger, 15_000);
+    this.missedFireHandler = new MissedFireHandler(this.logger, this.db);
   }
+
+  // ── Lifecycle ───────────────────────────────────────────────────────────────
 
   async init(): Promise<void> {
     this.logger.info("Initializing scheduler", {
       nodeId: this.nodeId,
       count: this.schedules.length,
     });
+
     for (const def of this.schedules) {
       await this.db.upsertSchedule(def);
       this.logger.debug("Registered schedule", {
         name: def.name,
-        schedule: def.schedule,
+        expression: def.expression,
+        intervalMs: def.intervalMs,
       });
+    }
+
+    // ── CRITICAL: Seed nextRunAt for schedules that don't have one yet ──
+    // Without this, getDueSchedules returns NULL rows every single tick,
+    // causing every schedule to fire every second indefinitely.
+    const existing = await this.db.getSchedules();
+    const now = new Date();
+
+    for (const record of existing) {
+      if (record.nextRunAt !== null) continue; // already has a next-fire time
+
+      const def = this.schedules.find((s) => s.name === record.name);
+      if (!def) continue;
+
+      const nextRun = this.computeNextRun(def, now);
+      if (nextRun) {
+        await this.db.updateNextRun(def.name, nextRun);
+        this.logger.debug("Seeded nextRunAt", {
+          name: def.name,
+          nextRunAt: nextRun.toISOString(),
+        });
+      }
     }
   }
 
@@ -56,19 +99,168 @@ export class SchedulerModule implements IChronoModule {
       30_000,
     );
     await this.leader.start();
+
     this.tickTimer = setInterval(() => {
       void this.tick();
     }, 1_000);
+
     this.logger.info("Scheduler started", { nodeId: this.nodeId });
   }
 
+  async stop(): Promise<void> {
+    if (this.tickTimer) clearInterval(this.tickTimer);
+    if (this.leader) await this.leader.stop();
+    this.stallDetector.stop();
+    for (const job of this.activeJobs.values()) {
+      if (job.abort) job.abort.abort();
+      if (job.worker) {
+        await job.worker.stop();
+      } else {
+        await this.lock.release(job.lockKey, this.nodeId).catch(() => {});
+      }
+    }
+    this.activeJobs.clear();
+    this.logger.info("Scheduler stopped");
+  }
+
+  // ── Core scheduling helpers ─────────────────────────────────────────────────
+
+  /**
+   * Compute the next fire time for a definition.
+   * Returns null if computation fails (invalid expression, etc).
+   */
+  private computeNextRun(def: CronDefinition, from: Date): Date | null {
+    if (def.expression) {
+      try {
+        return getNextRunDate(def.expression, def.timezone, from);
+      } catch (err) {
+        this.logger.error("Failed to compute next run from expression", {
+          name: def.name,
+          expression: def.expression,
+          err: String(err),
+        });
+        return null;
+      }
+    }
+
+    if (def.intervalMs) {
+      return new Date(from.getTime() + def.intervalMs);
+    }
+
+    this.logger.error("Schedule has neither expression nor intervalMs", {
+      name: def.name,
+    });
+    return null;
+  }
+
+  // ── Leader init (missed-fire recovery + stall detector) ─────────────────────
+
+  private async handleLeaderInit(): Promise<void> {
+    this.logger.info("Performing leader initialization...");
+
+    // 1. Evaluate missed fires
+    const knownSchedules = await this.db.getSchedules();
+    const now = new Date();
+
+    for (const record of knownSchedules) {
+      const def = this.schedules.find((s) => s.name === record.name);
+      if (!def) continue;
+
+      const missed = await this.missedFireHandler.checkMissed(
+        def,
+        record.lastRunAt,
+        now,
+      );
+      if (missed) {
+        this.logger.info("Triggering recovery run for missed schedule", {
+          name: def.name,
+        });
+        void this.fire(def);
+      }
+    }
+
+    // 2. Start stall detector to monitor node-local locks
+    this.stallDetector.start(
+      () => {
+        return Array.from(this.activeJobs.values())
+          .filter((job) => job.worker !== undefined)
+          .map((job) => ({
+            key: job.lockKey,
+            ownerId: this.nodeId,
+          }));
+      },
+      (key: string) => {
+        this.logger.warn("Local stall detected", { key });
+      },
+    );
+  }
+
+  private async detectClusterStalls() {
+    try {
+      const activeDbJobs = await this.db.getActiveJobs();
+      for (const job of activeDbJobs) {
+        if (!job.scheduleId) continue;
+        const def = this.schedules.find((s) => s.name === job.scheduleId);
+        if (!def?.guaranteedWorker) continue;
+
+        const ageMs = Date.now() - job.startedAt.getTime();
+        const ttl = def.lockTtlMs ?? 50_000;
+
+        if (ageMs > ttl + 10_000) {
+          this.logger.warn("Cluster stall detected", { runId: job.id });
+          await this.db.recordExecution({
+            id: job.id,
+            scheduleId: job.scheduleId,
+            status: "failed",
+            error: "Stall detected (lock assumed expired)",
+            startedAt: job.startedAt,
+            completedAt: new Date(),
+          });
+        }
+      }
+    } catch (err) {
+      this.logger.error("Failed to detect cluster stalls", {
+        err: String(err),
+      });
+    }
+  }
+
+  // ── Tick loop ───────────────────────────────────────────────────────────────
+
   private async tick(): Promise<void> {
     if (!this.leader?.isLeader) return;
+
+    if (!this._hasRunLeaderInit) {
+      this._hasRunLeaderInit = true;
+      await this.handleLeaderInit();
+    }
+
     try {
-      const due = await this.db.getDueSchedules(new Date(), 50);
+      // 1. Cluster stall check (~10% probability per tick)
+      if (Math.random() < 0.1) {
+        void this.detectClusterStalls();
+      }
+
+      // 2. Fire due schedules
+      const now = new Date();
+      const due = await this.db.getDueSchedules(now, 50);
+
       for (const { name } of due) {
         const def = this.schedules.find((s) => s.name === name);
         if (!def) continue;
+
+        // CRITICAL: Compute and persist nextRunAt BEFORE firing.
+        // If this fails, we do NOT fire — otherwise the schedule loops every tick.
+        const nextRun = this.computeNextRun(def, now);
+        if (!nextRun) {
+          this.logger.error(
+            "Cannot compute next run — skipping fire to prevent runaway loop",
+            { name: def.name },
+          );
+          continue;
+        }
+        await this.db.updateNextRun(def.name, nextRun);
+
         void this.fire(def);
       }
     } catch (err) {
@@ -76,27 +268,54 @@ export class SchedulerModule implements IChronoModule {
     }
   }
 
+  // ── Fire handler ────────────────────────────────────────────────────────────
+
   private async fire(def: CronDefinition): Promise<void> {
     const isOverlapSkip = def.overlap === "skip" || def.overlap === false;
-    if (isOverlapSkip && this.activeJobs.has(def.name)) {
-      this.logger.debug("Skipping overlapping run", { name: def.name });
-      return;
+
+    // Local overlap check
+    if (isOverlapSkip) {
+      for (const job of this.activeJobs.values()) {
+        if (job.lockKey === `chrono:run:${def.name}`) {
+          this.logger.debug("Skipping overlapping run", { name: def.name });
+          return;
+        }
+      }
     }
 
     const runId = randomUUID();
-    const worker = new HeartbeatWorker(
-      this.lock,
-      this.logger,
-      `chrono:run:${def.name}`,
-      this.nodeId,
-      30_000,
-    );
-
-    const acquired = await worker.start();
-    if (!acquired) return;
-
-    this.activeJobs.set(def.name, worker);
+    const lockKey = isOverlapSkip
+      ? `chrono:run:${def.name}`
+      : `chrono:run:${def.name}:${runId}`;
     const startedAt = new Date();
+
+    // ── Acquire lock ──────────────────────────────────────────────────────
+    let worker: HeartbeatWorker | undefined;
+    let acquired = false;
+
+    if (def.guaranteedWorker) {
+      worker = new HeartbeatWorker(
+        this.lock,
+        this.logger,
+        lockKey,
+        this.nodeId,
+        def.lockTtlMs ?? 30_000,
+        def.heartbeatMs ?? 10_000,
+      );
+      acquired = await worker.start();
+    } else {
+      acquired = await this.lock.acquire(
+        lockKey,
+        this.nodeId,
+        def.lockTtlMs ?? 30_000,
+      );
+    }
+
+    if (!acquired) return; // Cluster overlap protection
+
+    const abort = new AbortController();
+    this.activeJobs.set(runId, { runId, lockKey, worker, abort });
+
     await this.db.recordExecution({
       id: runId,
       scheduleId: def.name,
@@ -104,8 +323,8 @@ export class SchedulerModule implements IChronoModule {
       startedAt,
     });
 
+    // ── Execute handler (non-blocking) ────────────────────────────────────
     void Promise.resolve().then(async () => {
-      const abort = new AbortController();
       const ctx = new CronContext({
         id: runId,
         logger: this.logger.child({ schedule: def.name }),
@@ -116,9 +335,21 @@ export class SchedulerModule implements IChronoModule {
 
       let status: "completed" | "failed" = "completed";
       let error: string | undefined;
+      let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
 
       try {
-        await def.handler(ctx);
+        if (def.timeout) {
+          // Race handler against timeout
+          const timeoutPromise = new Promise<never>((_, reject) => {
+            timeoutHandle = setTimeout(() => {
+              abort.abort();
+              reject(new Error(`Handler timed out after ${def.timeout}ms`));
+            }, def.timeout);
+          });
+          await Promise.race([def.handler(ctx), timeoutPromise]);
+        } else {
+          await def.handler(ctx);
+        }
       } catch (err: unknown) {
         status = "failed";
         error = err instanceof Error ? err.message : String(err);
@@ -128,6 +359,8 @@ export class SchedulerModule implements IChronoModule {
           error,
         });
       } finally {
+        if (timeoutHandle) clearTimeout(timeoutHandle);
+
         const completedAt = new Date();
         await this.db.recordExecution({
           id: runId,
@@ -137,23 +370,26 @@ export class SchedulerModule implements IChronoModule {
           completedAt,
           error,
         });
-        await worker.stop();
-        this.activeJobs.delete(def.name);
-        try {
-          getNextRunDate(def.schedule, def.timezone);
-        } catch {
-          /* expression was already validated */
+
+        if (worker) {
+          await worker.stop();
+        } else {
+          await this.lock.release(lockKey, this.nodeId).catch(() => {});
         }
+
+        this.activeJobs.delete(runId);
+
+        // Update nextRunAt after completion (for interval-based schedules,
+        // this re-anchors from the actual completion time)
+        if (def.intervalMs) {
+          const nextRun = this.computeNextRun(def, new Date());
+          if (nextRun) {
+            await this.db.updateNextRun(def.name, nextRun).catch(() => {});
+          }
+        }
+
         this.logger.info("Job finished", { name: def.name, runId, status });
       }
     });
-  }
-
-  async stop(): Promise<void> {
-    if (this.tickTimer) clearInterval(this.tickTimer);
-    if (this.leader) await this.leader.stop();
-    for (const worker of this.activeJobs.values()) await worker.stop();
-    this.activeJobs.clear();
-    this.logger.info("Scheduler stopped");
   }
 }

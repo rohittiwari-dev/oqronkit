@@ -1,13 +1,14 @@
 import type { ICronContext } from "@chronoforge/core";
 import { cron } from "chronoforge";
 
-// ─── Analytics Report ─────────────────────────────────────────────────────────
-export const dailyAnalyticsReport = cron.create({
+// ─── Analytics Report (expression-based) ──────────────────────────────────────
+export const dailyAnalyticsReport = cron({
   name: "daily-analytics-report",
-  schedule: "0 8 * * *",
+  expression: "0 8 * * *",
   timezone: "Asia/Kolkata",
   missedFire: "run-once",
   overlap: "skip",
+  timeout: 120_000,
   tags: ["analytics", "reporting", "daily"],
   handler: async (ctx: ICronContext) => {
     ctx.log.info("Starting daily analytics report", { firedAt: ctx.firedAt });
@@ -21,10 +22,10 @@ export const dailyAnalyticsReport = cron.create({
   },
 });
 
-// ─── DB Cleanup ───────────────────────────────────────────────────────────────
-export const weeklyDbCleanup = cron.create({
+// ─── DB Cleanup (expression-based) ───────────────────────────────────────────
+export const weeklyDbCleanup = cron({
   name: "weekly-db-cleanup",
-  schedule: "0 2 * * 0",
+  expression: "0 2 * * 0",
   missedFire: "skip",
   overlap: "skip",
   tags: ["maintenance", "database", "weekly"],
@@ -39,10 +40,12 @@ export const weeklyDbCleanup = cron.create({
   },
 });
 
-// ─── Health Ping ──────────────────────────────────────────────────────────────
-export const healthCheckPing = cron.create({
+// ─── Health Ping (expression-based) ──────────────────────────────────────────
+export const healthCheckPing = cron({
   name: "health-check-ping",
-  schedule: "*/5 * * * *",
+  every: {
+    seconds: 5,
+  },
   missedFire: "skip",
   overlap: "run",
   tags: ["health", "monitoring"],
@@ -51,10 +54,24 @@ export const healthCheckPing = cron.create({
   },
 });
 
-// ─── Monthly Billing (User Request Pattern) ───────────────────────────────────
-export const billingCron = cron.create({
+// ─── Inventory Sync (every-based) ────────────────────────────────────────────
+export const inventorySync = cron({
+  name: "inventory-sync",
+  every: { minutes: 15 },
+  overlap: "skip",
+  timeout: 300_000,
+  tags: ["inventory", "sync"],
+  handler: async (ctx: ICronContext) => {
+    ctx.log.info("Syncing inventory...");
+    await new Promise((r) => setTimeout(r, 100));
+    ctx.log.info("Inventory synced");
+  },
+});
+
+// ─── Monthly Billing (expression-based, crash-safe) ──────────────────────────
+export const billingCron = cron({
   name: "monthly-billing",
-  schedule: "0 0 1 * *",
+  expression: "0 0 1 * *",
 
   // ── Crash safety config
   guaranteedWorker: true,

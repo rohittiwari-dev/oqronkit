@@ -32,6 +32,7 @@ export type { ChronoConfig } from "./types/config.types.js";
 export type {
   CronDefinition,
   CronHooks,
+  EveryConfig,
   JobRecord,
   MissedFirePolicy,
   OverlapPolicy,

@@ -10,6 +10,7 @@ export class HeartbeatWorker {
     private readonly key: string,
     private readonly ownerId: string,
     private readonly ttlMs: number = 30_000,
+    private readonly heartbeatMs?: number,
   ) {}
 
   async start(): Promise<boolean> {
@@ -21,7 +22,7 @@ export class HeartbeatWorker {
     if (!acquired) return false;
 
     this._active = true;
-    const pingInterval = Math.floor(this.ttlMs / 3);
+    const pingInterval = this.heartbeatMs ?? Math.floor(this.ttlMs / 3);
 
     this.heartbeatTimer = setInterval(async () => {
       if (!this._active) return;
