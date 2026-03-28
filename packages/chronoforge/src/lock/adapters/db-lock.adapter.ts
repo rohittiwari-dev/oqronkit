@@ -5,12 +5,18 @@ type LockRow = { ownerId: string; expiresAt: string };
 
 export class DbLockAdapter implements ILockAdapter {
   private readonly db: Database.Database;
+  private readonly defaultTtl: number;
 
   /**
    * @param dbOrPath - Either a `better-sqlite3` Database instance or a file path.
    *                   When sharing the same SQLite file as SqliteAdapter, pass the same path.
+   * @param defaultTtlMs - Default TTL for locks if not provided in acquire (optional)
    */
-  constructor(dbOrPath: Database.Database | string = "chrono.sqlite") {
+  constructor(
+    dbOrPath: Database.Database | string = "chrono.sqlite",
+    defaultTtlMs = 30_000,
+  ) {
+    this.defaultTtl = defaultTtlMs;
     if (typeof dbOrPath === "string") {
       this.db = new Database(dbOrPath);
     } else {
@@ -18,18 +24,25 @@ export class DbLockAdapter implements ILockAdapter {
     }
   }
 
-  async acquire(key: string, ownerId: string, ttlMs: number): Promise<boolean> {
+  async acquire(
+    key: string,
+    ownerId: string,
+    ttlMs?: number,
+  ): Promise<boolean> {
+    const finalTtl = ttlMs ?? this.defaultTtl;
     const now = new Date().toISOString();
-    const expiresAt = new Date(Date.now() + ttlMs).toISOString();
+    const expiresAt = new Date(Date.now() + finalTtl).toISOString();
 
     this.db
-      .prepare(`
+      .prepare(
+        `
       INSERT INTO chrono_locks (resourceKey, ownerId, expiresAt)
       VALUES (?, ?, ?)
       ON CONFLICT(resourceKey) DO UPDATE SET
         ownerId   = CASE WHEN expiresAt < ? THEN excluded.ownerId   ELSE ownerId   END,
         expiresAt = CASE WHEN expiresAt < ? THEN excluded.expiresAt ELSE expiresAt END
-    `)
+    `,
+      )
       .run(key, ownerId, expiresAt, now, now);
 
     const row = this.db
@@ -39,13 +52,16 @@ export class DbLockAdapter implements ILockAdapter {
     return row?.ownerId === ownerId;
   }
 
-  async renew(key: string, ownerId: string, ttlMs: number): Promise<boolean> {
-    const expiresAt = new Date(Date.now() + ttlMs).toISOString();
+  async renew(key: string, ownerId: string, ttlMs?: number): Promise<boolean> {
+    const finalTtl = ttlMs ?? this.defaultTtl;
+    const expiresAt = new Date(Date.now() + finalTtl).toISOString();
     const result = this.db
-      .prepare(`
+      .prepare(
+        `
       UPDATE chrono_locks SET expiresAt = ?
       WHERE resourceKey = ? AND ownerId = ?
-    `)
+    `,
+      )
       .run(expiresAt, key, ownerId);
     return result.changes > 0;
   }

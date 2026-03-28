@@ -1,4 +1,4 @@
-import { DbLockAdapter, defineConfig, SqliteAdapter } from "chronoforge";
+import { defineConfig } from "chronoforge";
 
 export default defineConfig({
   // 1. Identification
@@ -7,12 +7,16 @@ export default defineConfig({
   // 2. Environment Isolation
   environment: process.env.CHRONO_ENV ?? "development",
 
-  // 3. Infrastructure setup — true explicit dependency injection
-  db: new SqliteAdapter("data/chrono.sqlite"),
-  lock: new DbLockAdapter("data/chrono.sqlite"),
+  // 3. Infrastructure setup — declarative auto-resolution
+  db: {
+    adapter: "memory",
+  },
+  lock: {
+    adapter: "memory",
+  },
 
   // 4. Enabled Modules
-  modules: ["cron", "scheduler"], // The orchestrator will only start SchedulerModule when "cron" is specified
+  modules: ["cron", "scheduler"],
 
   // 5. Global tag metadata
   tags: ["backend-demo", "node-v24", "local"],
@@ -24,5 +28,16 @@ export default defineConfig({
   },
 
   // 7. Core logger settings
-  logger: { level: "debug", prettify: true },
+  logger: {
+    enabled: true,
+    level: "debug",
+    prettify: true,
+    redact: ["password", "token", "userId"],
+  },
+
+  // 8. Graceful Shutdown
+  shutdown: {
+    enabled: true,
+    timeout: 30000,
+  },
 });

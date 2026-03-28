@@ -23,19 +23,87 @@ export const ChronoConfigSchema = z.object({
   project: z.string().optional(),
   environment: z.string().default("development"),
 
-  // Infrastructure — explicit DI
-  db: z.custom<IChronoAdapter>(
-    isIChronoAdapter,
-    "db must be an instance of IChronoAdapter",
-  ),
-  lock: z.custom<ILockAdapter>(
-    isILockAdapter,
-    "lock must be an instance of ILockAdapter",
-  ),
+  // Infrastructure — Union of explicit DI or declarative config
+  db: z
+    .union([
+      z.custom<IChronoAdapter>(
+        isIChronoAdapter,
+        "db must be an instance of IChronoAdapter",
+      ),
+      z.object({
+        adapter: z.enum([
+          "sqlite",
+          "memory",
+          "postgres",
+          "mysql",
+          "mongodb",
+          "redis",
+        ]),
+        url: z.string().optional(),
+        poolMin: z.number().default(2),
+        poolMax: z.number().default(10),
+        tablePrefix: z.string().default("chrono_"),
+        migrations: z
+          .union([z.enum(["auto", "manual"]), z.literal(false)])
+          .default("auto"),
+        ssl: z.boolean().default(false),
+      }),
+    ])
+    .optional(),
+
+  lock: z
+    .union([
+      z.custom<ILockAdapter>(
+        isILockAdapter,
+        "lock must be an instance of ILockAdapter",
+      ),
+      z.object({
+        adapter: z.enum(["db", "memory", "redis"]),
+        url: z.string().optional(),
+        ttl: z.number().default(30000),
+        retryDelay: z.number().default(200),
+        retryCount: z.number().default(5),
+      }),
+    ])
+    .optional(),
+
   broker: z.any().optional(),
 
   // Modules
-  modules: z.array(z.string()).default([]),
+  modules: z
+    .array(
+      z.enum([
+        "cron",
+        "scheduler",
+        "queue",
+        "workflow",
+        "batch",
+        "webhook",
+        "pipeline",
+      ]),
+    )
+    .default([]),
+
+  // Module-specific configs
+  cron: z
+    .object({
+      enable: z.boolean().default(true),
+      timezone: z.string().optional(),
+      tickInterval: z.number().default(1000),
+      missedFirePolicy: z
+        .enum(["skip", "run-once", "run-all"])
+        .default("run-once"),
+      maxConcurrentJobs: z.number().default(5),
+      leaderElection: z.boolean().default(true),
+    })
+    .default({}),
+
+  scheduler: z
+    .object({
+      enable: z.boolean().default(true),
+      tickInterval: z.number().default(1000),
+    })
+    .default({}),
 
   // Auto-discovery directory
   jobsDir: z.string().default("./src/jobs"),
@@ -60,6 +128,7 @@ export const ChronoConfigSchema = z.object({
         level: z.string().default("info"),
         prettify: z.boolean().default(false),
         showMetadata: z.boolean().default(true),
+        redact: z.array(z.string()).default([]),
       }),
     ])
     .default({
@@ -67,7 +136,34 @@ export const ChronoConfigSchema = z.object({
       level: "info",
       prettify: false,
       showMetadata: true,
+      redact: [],
     }),
+
+  // Telemetry
+  telemetry: z
+    .object({
+      prometheus: z
+        .object({
+          enabled: z.boolean().default(false),
+          path: z.string().default("/metrics"),
+        })
+        .default({}),
+      opentelemetry: z
+        .object({
+          enabled: z.boolean().default(false),
+        })
+        .default({}),
+    })
+    .default({}),
+
+  // Shutdown
+  shutdown: z
+    .object({
+      enabled: z.boolean().default(true),
+      timeout: z.number().default(30000),
+      signals: z.array(z.string()).default(["SIGINT", "SIGTERM"]),
+    })
+    .default({}),
 });
 
 export type ValidatedConfig = z.infer<typeof ChronoConfigSchema>;

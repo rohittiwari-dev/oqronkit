@@ -10,6 +10,7 @@ import {
   type Logger,
   type LogLevelName,
   prettyTransport,
+  redactionMiddleware,
   type LoggerOptions as VoltLoggerOptions,
 } from "voltlog-io";
 
@@ -26,6 +27,8 @@ export interface ChronoLoggerConfig {
   showMetadata?: boolean;
   /** Custom voltlog-io transport handler */
   handler?: (entry: any) => void | Promise<void>;
+  /** Keys to redact from metadata/payload. */
+  redact?: string[];
   /** Bring-your-own logger instance (Pino, winston, etc) */
   logger?: any;
 }
@@ -67,7 +70,8 @@ export function createLogger(
   config?: ChronoLoggerConfig,
   context?: Record<string, unknown>,
 ): Logger {
-  if (config?.enabled === false) return NOOP_LOGGER;
+  if (typeof config?.enabled !== "undefined" && config?.enabled === false)
+    return NOOP_LOGGER;
 
   // If user provides their own logger, use it directly
   if (config?.logger) return config.logger;
@@ -79,6 +83,16 @@ export function createLogger(
     transports: [],
     context,
   };
+
+  if (config?.redact?.length) {
+    const keys = config.redact;
+    opts.middleware = [
+      redactionMiddleware({
+        paths: keys,
+        deep: true,
+      }),
+    ];
+  }
 
   if (config?.prettify) {
     opts.transports!.push(prettyTransport());

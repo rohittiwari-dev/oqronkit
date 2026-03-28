@@ -2,6 +2,15 @@ import type { ChronoLoggerConfig } from "../logger/index.js";
 import type { IChronoAdapter } from "./db.types.js";
 import type { ILockAdapter } from "./lock.types.js";
 
+export type DbAdapterType =
+  | "sqlite"
+  | "memory"
+  | "postgres"
+  | "mysql"
+  | "mongodb"
+  | "redis";
+export type LockAdapterType = "db" | "memory" | "redis";
+
 export interface ChronoConfig {
   /**
    * The name of this project/service (e.g. 'acme-billing-svc')
@@ -17,15 +26,33 @@ export interface ChronoConfig {
 
   /**
    * The primary database adapter (State Store).
-   * Required. Instantiate via ../../db/index.js.
+   * Union of explicit DI or declarative config.
    */
-  db: IChronoAdapter;
+  db?:
+    | IChronoAdapter
+    | {
+        adapter: DbAdapterType;
+        url?: string;
+        poolMin?: number;
+        poolMax?: number;
+        tablePrefix?: string;
+        migrations?: "auto" | "manual" | false;
+        ssl?: boolean;
+      };
 
   /**
    * The distributed lock adapter for safe concurrency.
-   * Required. Instantiate via ../../lock/index.js.
+   * Union of explicit DI or declarative config.
    */
-  lock: ILockAdapter;
+  lock?:
+    | ILockAdapter
+    | {
+        adapter: LockAdapterType;
+        url?: string;
+        ttl?: number;
+        retryDelay?: number;
+        retryCount?: number;
+      };
 
   /**
    * The high-throughput message broker (optional, for PubSub/Queueing at scale)
@@ -37,12 +64,37 @@ export interface ChronoConfig {
    * e.g. ['cron', 'queue', 'workflow', 'batch', 'webhook', 'pipeline']
    * @default []
    */
-  modules?: string[];
+  modules?: (
+    | "cron"
+    | "scheduler"
+    | "queue"
+    | "workflow"
+    | "batch"
+    | "webhook"
+    | "pipeline"
+  )[];
+
+  /**
+   * Module-specific configs
+   */
+  cron?: {
+    enable?: boolean;
+    timezone?: string;
+    tickInterval?: number;
+    missedFirePolicy?: "skip" | "run-once" | "run-all";
+    maxConcurrentJobs?: number;
+    leaderElection?: boolean;
+  };
+
+  scheduler?: {
+    enable?: boolean;
+    tickInterval?: number;
+  };
 
   /**
    * Directory to auto-discover job definition files from.
    * ChronoForge.init() scans this directory recursively for .ts/.js files
-   * that export CronDefinitions (via `cron()`) and registers them automatically.
+   * that export definitions and registers them automatically.
    * @default "./src/jobs"
    */
   jobsDir?: string;
@@ -68,4 +120,26 @@ export interface ChronoConfig {
    * Set to `false` to disable logging entirely.
    */
   logger?: ChronoLoggerConfig | false;
+
+  /**
+   * Telemetry configuration
+   */
+  telemetry?: {
+    prometheus?: {
+      enabled?: boolean;
+      path?: string;
+    };
+    opentelemetry?: {
+      enabled?: boolean;
+    };
+  };
+
+  /**
+   * Graceful shutdown configuration
+   */
+  shutdown?: {
+    enabled?: boolean;
+    timeout?: number;
+    signals?: string[];
+  };
 }

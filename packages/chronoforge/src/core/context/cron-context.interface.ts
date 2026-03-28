@@ -8,6 +8,8 @@ export interface ICronContext {
   readonly firedAt: Date;
   readonly scheduleName: string;
   readonly duration: number;
+  readonly environment?: string;
+  readonly project?: string;
   progress(value: number, label?: string): void;
   getProgress(): number;
 }

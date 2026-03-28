@@ -43,6 +43,12 @@ export class ScheduleEngine implements IChronoModule {
     private readonly db: IChronoAdapter,
     private readonly lock: ILockAdapter,
     logger?: Logger,
+    private readonly environment?: string,
+    private readonly project?: string,
+    private readonly config?: {
+      enable?: boolean;
+      tickInterval?: number;
+    },
   ) {
     this.nodeId = randomUUID();
     this.logger =
@@ -101,11 +107,15 @@ export class ScheduleEngine implements IChronoModule {
     );
     await this.leader.start();
 
+    const interval = this.config?.tickInterval ?? 1_000;
     this.tickTimer = setInterval(() => {
       void this.tick();
-    }, 1_000);
+    }, interval);
 
-    this.logger.info("Schedule engine started", { nodeId: this.nodeId });
+    this.logger.info("Schedule engine started", {
+      nodeId: this.nodeId,
+      interval,
+    });
   }
 
   async stop(): Promise<void> {
@@ -242,6 +252,8 @@ export class ScheduleEngine implements IChronoModule {
                 logger: this.logger,
                 signal: new AbortController().signal,
                 payload: def.payload,
+                environment: this.environment,
+                project: this.project,
               }),
             );
             if (!conditionVal) {
@@ -347,6 +359,8 @@ export class ScheduleEngine implements IChronoModule {
         firedAt: startedAt,
         scheduleName: def.name,
         payload: def.payload,
+        environment: this.environment,
+        project: this.project,
         onProgress: (percent, label) => {
           this.db.updateJobProgress(runId, percent, label).catch((err) =>
             this.logger.error("Failed to update schedule progress", {

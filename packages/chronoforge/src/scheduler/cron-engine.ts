@@ -42,6 +42,16 @@ export class SchedulerModule implements IChronoModule {
     private readonly db: IChronoAdapter,
     private readonly lock: ILockAdapter,
     logger?: Logger,
+    private readonly environment?: string,
+    private readonly project?: string,
+    private readonly config?: {
+      enable?: boolean;
+      timezone?: string;
+      tickInterval?: number;
+      missedFirePolicy?: "skip" | "run-once" | "run-all";
+      maxConcurrentJobs?: number;
+      leaderElection?: boolean;
+    },
   ) {
     this.nodeId = randomUUID();
     this.logger =
@@ -68,13 +78,11 @@ export class SchedulerModule implements IChronoModule {
     }
 
     // ── CRITICAL: Seed nextRunAt for schedules that don't have one yet ──
-    // Without this, getDueSchedules returns NULL rows every single tick,
-    // causing every schedule to fire every second indefinitely.
     const existing = await this.db.getSchedules();
     const now = new Date();
 
     for (const record of existing) {
-      if (record.nextRunAt !== null) continue; // already has a next-fire time
+      if (record.nextRunAt !== null) continue;
 
       const def = this.schedules.find((s) => s.name === record.name);
       if (!def) continue;
@@ -91,20 +99,24 @@ export class SchedulerModule implements IChronoModule {
   }
 
   async start(): Promise<void> {
-    this.leader = new LeaderElection(
-      this.lock,
-      this.logger,
-      "chrono:scheduler:leader",
-      this.nodeId,
-      30_000,
-    );
-    await this.leader.start();
+    // leaderElection defaults to true in schema if not provided
+    if (this.config?.leaderElection !== false) {
+      this.leader = new LeaderElection(
+        this.lock,
+        this.logger,
+        "chrono:scheduler:leader",
+        this.nodeId,
+        30_000,
+      );
+      await this.leader.start();
+    }
 
+    const interval = this.config?.tickInterval ?? 1_000;
     this.tickTimer = setInterval(() => {
       void this.tick();
-    }, 1_000);
+    }, interval);
 
-    this.logger.info("Scheduler started", { nodeId: this.nodeId });
+    this.logger.info("Scheduler started", { nodeId: this.nodeId, interval });
   }
 
   async stop(): Promise<void> {
@@ -132,7 +144,8 @@ export class SchedulerModule implements IChronoModule {
   private computeNextRun(def: CronDefinition, from: Date): Date | null {
     if (def.expression) {
       try {
-        return getNextRunDate(def.expression, def.timezone, from);
+        const timezone = def.timezone ?? this.config?.timezone;
+        return getNextRunDate(def.expression, timezone, from);
       } catch (err) {
         this.logger.error("Failed to compute next run from expression", {
           name: def.name,
@@ -228,7 +241,8 @@ export class SchedulerModule implements IChronoModule {
   // ── Tick loop ───────────────────────────────────────────────────────────────
 
   private async tick(): Promise<void> {
-    if (!this.leader?.isLeader) return;
+    // If leader election is disabled, we always run as "leader"
+    if (this.leader && !this.leader.isLeader) return;
 
     if (!this._hasRunLeaderInit) {
       this._hasRunLeaderInit = true;
@@ -250,7 +264,6 @@ export class SchedulerModule implements IChronoModule {
         if (!def) continue;
 
         // CRITICAL: Compute and persist nextRunAt BEFORE firing.
-        // If this fails, we do NOT fire — otherwise the schedule loops every tick.
         const nextRun = this.computeNextRun(def, now);
         if (!nextRun) {
           this.logger.error(
@@ -331,6 +344,8 @@ export class SchedulerModule implements IChronoModule {
         signal: abort.signal,
         firedAt: startedAt,
         scheduleName: def.name,
+        environment: this.environment,
+        project: this.project,
         onProgress: (percent, label) => {
           this.db
             .updateJobProgress(runId, percent, label)
@@ -442,8 +457,7 @@ export class SchedulerModule implements IChronoModule {
 
       this.activeJobs.delete(runId);
 
-      // Update nextRunAt after completion (for interval-based schedules,
-      // this re-anchors from the actual completion time)
+      // Update nextRunAt after completion
       if (def.intervalMs) {
         const nextRun = this.computeNextRun(def, new Date());
         if (nextRun) {

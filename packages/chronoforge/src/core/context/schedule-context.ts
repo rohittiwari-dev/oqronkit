@@ -8,6 +8,8 @@ export interface ScheduleContextOptions<TPayload> {
   payload: TPayload;
   logger: Logger;
   signal: AbortSignal;
+  environment?: string;
+  project?: string;
   onProgress?: (percent: number, label?: string) => void;
 }
 
@@ -18,6 +20,8 @@ export class ScheduleContext<TPayload = unknown>
   public readonly name: string;
   public readonly firedAt: Date;
   public readonly payload: TPayload;
+  public readonly environment?: string;
+  public readonly project?: string;
   private readonly logger: Logger;
   private readonly signal: AbortSignal;
   private readonly startedLocalAt: number;
@@ -30,6 +34,8 @@ export class ScheduleContext<TPayload = unknown>
     this.payload = opts.payload;
     this.logger = opts.logger;
     this.signal = opts.signal;
+    this.environment = opts.environment;
+    this.project = opts.project;
     this.startedLocalAt = Date.now();
     this._onProgress = opts.onProgress;
 

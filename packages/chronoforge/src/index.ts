@@ -10,6 +10,10 @@ import {
   loadConfig,
   type ValidatedConfig,
 } from "./core/index.js";
+import { MemoryChronoAdapter, SqliteAdapter } from "./db/index.js";
+import { DbLockAdapter, MemoryLockAdapter } from "./lock/index.js";
+import { expressRouter } from "./server/express.js";
+import { fastifyPlugin } from "./server/fastify.js";
 
 let _config: ValidatedConfig | null = null;
 let _db: IChronoAdapter | null = null;
@@ -52,22 +56,87 @@ export const ChronoForge = {
    * Initialize ChronoForge: loads config, auto-discovers jobs, and boots modules.
    *
    * @param opts.cwd - Working directory for config file lookup and jobsDir resolution
+   * @param opts.config - Explicit config object (skips loadConfig)
    */
-  async init(opts?: { cwd?: string }): Promise<void> {
+  async init(opts?: { cwd?: string; config?: ValidatedConfig }): Promise<void> {
     const cwd = opts?.cwd ?? process.cwd();
-    _config = await loadConfig(cwd);
+    _config = opts?.config ?? (await loadConfig(cwd));
 
     const loggerConfig =
-      _config.logger === false ? { enabled: false } : _config.logger;
+      _config.logger === false ? { enabled: true } : _config.logger;
+
     _logger = createLogger(loggerConfig, { module: "chronoforge" });
 
     _logger.info(
       `Starting ChronoForge in "${_config.environment}" environment`,
     );
 
-    // --- Assign adapters straight from config ---
-    _db = _config.db;
-    _lock = _config.lock;
+    // --- Infrastructure Resolution ---
+    if (!_config.db) {
+      const msg =
+        "No 'db' adapter configured. Falling back to ephemeral 'MemoryChronoAdapter'. [WARNING: Data will not persist across restarts]";
+      if (_config.environment === "production") {
+        _logger.fatal(`STERN WARNING: ${msg}`);
+      } else {
+        _logger.warn(msg);
+      }
+      _db = new MemoryChronoAdapter();
+    } else if ("adapter" in _config.db) {
+      const { adapter, url } = _config.db;
+      if (adapter === "sqlite") {
+        _db = new SqliteAdapter(url ?? "chrono.sqlite");
+      } else if (adapter === "memory") {
+        const msg =
+          "Using ephemeral 'memory' database adapter. [WARNING: Data will not persist across restarts]";
+        if (_config.environment === "production") {
+          _logger.fatal(`STERN WARNING: ${msg}`);
+        } else {
+          _logger.warn(msg);
+        }
+        _db = new MemoryChronoAdapter();
+      } else {
+        throw new Error(
+          `[ChronoForge] Database adapter '${adapter}' not yet bundled. Please pass a custom IChronoAdapter instance.`,
+        );
+      }
+    } else {
+      _db = _config.db as IChronoAdapter;
+    }
+
+    if (!_config.lock) {
+      _logger.warn(
+        "No 'lock' adapter configured. Falling back to ephemeral 'MemoryLockAdapter'.",
+      );
+      _lock = new MemoryLockAdapter();
+    } else if ("adapter" in _config.lock) {
+      const { adapter, url, ttl } = _config.lock;
+      if (adapter === "db") {
+        // Share the same DB if possible
+        if (_db instanceof SqliteAdapter) {
+          _lock = new DbLockAdapter((_db as any).db, ttl);
+        } else {
+          _lock = new DbLockAdapter(url ?? "chrono.sqlite", ttl);
+        }
+      } else if (adapter === "memory") {
+        _lock = new MemoryLockAdapter();
+      } else {
+        throw new Error(
+          `[ChronoForge] Lock adapter '${adapter}' not yet bundled. Please pass a custom ILockAdapter instance.`,
+        );
+      }
+    } else {
+      _lock = _config.lock as ILockAdapter;
+    }
+
+    // --- Shutdown hooks ---
+    if (_config.shutdown.enabled) {
+      for (const signal of _config.shutdown.signals) {
+        process.on(signal, () => {
+          _logger?.info(`${signal} received — initiating graceful shutdown…`);
+          void this.stop().then(() => process.exit(0));
+        });
+      }
+    }
 
     // --- Boot modules ---
     if (_config.modules.includes("cron")) {
@@ -114,7 +183,20 @@ export const ChronoForge = {
       // Collect all auto-registered definitions
       const schedules = _drainPending();
 
-      const scheduler = new SchedulerModule(schedules, _db!, _lock!, _logger!);
+      // Inject global config tags onto all cron jobs natively
+      for (const s of schedules) {
+        s.tags = [...new Set([...(s.tags ?? []), ..._config.tags])];
+      }
+
+      const scheduler = new SchedulerModule(
+        schedules,
+        _db!,
+        _lock!,
+        _logger!,
+        _config.environment,
+        _config.project,
+        _config.cron,
+      );
       ChronoRegistry.getInstance().register(scheduler);
     }
 
@@ -134,7 +216,20 @@ export const ChronoForge = {
       // Collect all auto-registered definitions
       const schedules = _drainPendingSchedules();
 
-      const engine = new ScheduleEngine(schedules, _db!, _lock!, _logger!);
+      // Inject global config tags onto all schedule jobs natively
+      for (const s of schedules) {
+        s.tags = [...new Set([...(s.tags ?? []), ..._config.tags])];
+      }
+
+      const engine = new ScheduleEngine(
+        schedules,
+        _db!,
+        _lock!,
+        _logger!,
+        _config.environment,
+        _config.project,
+        _config.scheduler,
+      );
       ChronoRegistry.getInstance().register(engine);
     }
 
@@ -164,11 +259,33 @@ export const ChronoForge = {
       _logger ??
       createLogger({ enabled: true, level: "info" }, { module: "chronoforge" });
     log.info("Stopping ChronoForge…");
+
+    const timeoutMs = _config?.shutdown.timeout ?? 30000;
     const registry = ChronoRegistry.getInstance();
-    for (const mod of registry.getAll()) {
-      if (mod.enabled) await mod.stop();
+
+    const stopPromise = Promise.all(
+      registry
+        .getAll()
+        .filter((m) => m.enabled)
+        .map((m) => m.stop()),
+    );
+
+    const timeoutPromise = new Promise((_, reject) =>
+      setTimeout(
+        () =>
+          reject(new Error(`Graceful shutdown timed out after ${timeoutMs}ms`)),
+        timeoutMs,
+      ),
+    );
+
+    try {
+      await Promise.race([stopPromise, timeoutPromise]);
+      log.info("ChronoForge stopped.");
+    } catch (err) {
+      log.error("Error during stop or shutdown timeout", {
+        error: String(err),
+      });
     }
-    log.info("ChronoForge stopped.");
   },
 
   /** Get the current validated config */
@@ -194,12 +311,12 @@ export const ChronoForge = {
 
   /** Get the Express router for monitoring */
   expressRouter() {
-    return require("./server/express.js").expressRouter();
+    return expressRouter();
   },
 
   /** Get the Fastify plugin for monitoring */
   fastifyPlugin(fastify: any, opts: any, done: () => void) {
-    return require("./server/fastify.js").fastifyPlugin(fastify, opts, done);
+    return fastifyPlugin(fastify, opts, done);
   },
 };
 

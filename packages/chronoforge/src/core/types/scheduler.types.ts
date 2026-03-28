@@ -41,6 +41,8 @@ export interface IScheduleContext<TPayload = unknown> {
   firedAt: Date;
   payload: TPayload;
   duration: number;
+  environment?: string;
+  project?: string;
   log(level: string, message: string, meta?: Record<string, unknown>): void;
   progress(percent: number, label?: string): void;
 }

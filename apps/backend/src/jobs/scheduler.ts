@@ -1,9 +1,5 @@
 import { type IScheduleContext, schedule } from "chronoforge";
 
-const sendTrialEndEmail = async (userId: string) => {
-  console.log(`Sending trial end email to ${userId}`);
-};
-
 // ── 1. Advanced Progress & Retry Schedule ──────────────────────────────────────────
 export const dataProcessingJob = schedule({
   name: "data-cruncher",
@@ -35,9 +31,6 @@ export const dataProcessingJob = schedule({
 });
 
 // ── 2. Object Configuration Recurring ────────────────────────────────────────────────
-const runQuarterlyReview = async () =>
-  console.log("Running quarterly review...");
-
 export const quarterlyReview = schedule({
   name: "quarterly-review",
   recurring: {
@@ -49,19 +42,17 @@ export const quarterlyReview = schedule({
   timezone: "Europe/London",
   handler: async (ctx) => {
     ctx.log("info", "Starting quarterly review...");
-    await runQuarterlyReview();
+    console.log("Running quarterly review...");
   },
 });
 
 // ── 3. RRULE Configuration Recurring ─────────────────────────────────────────────────
-const processPayroll = async () => console.log("Processing payroll...");
-
 export const payrollRun = schedule({
   name: "payroll",
   rrule: "FREQ=MONTHLY;BYDAY=-1FR", // last Friday of every month
   handler: async (ctx) => {
     ctx.log("info", "Starting payroll run...");
-    await processPayroll();
+    console.log("Processing payroll...");
   },
 });
 
@@ -69,7 +60,7 @@ export const payrollRun = schedule({
 export const alertCheck = schedule({
   name: "alert-check",
   every: { minutes: 5 },
-  condition: async (ctx) => {
+  condition: async (_ctx) => {
     // Only run if conditions are met
     const queueDepth = 1500; // Simulated
     return queueDepth > 1000;
