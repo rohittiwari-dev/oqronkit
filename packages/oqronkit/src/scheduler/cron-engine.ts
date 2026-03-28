@@ -57,13 +57,19 @@ export class SchedulerModule implements IOqronModule {
       leaderElection?: boolean;
       keepJobHistory?: boolean | number;
       keepFailedJobHistory?: boolean | number;
+      shutdownTimeout?: number;
+      lagMonitor?: { maxLagMs?: number; sampleIntervalMs?: number };
     },
   ) {
     this.nodeId = randomUUID();
     this.logger =
       logger ?? createLogger({ level: "info" }, { module: "scheduler" });
     this.stallDetector = new StallDetector(this.lock, this.logger, 15_000);
-    this.lagMonitor = new LagMonitor(this.logger, 500, 50);
+    this.lagMonitor = new LagMonitor(
+      this.logger,
+      this.config?.lagMonitor?.maxLagMs ?? 500,
+      this.config?.lagMonitor?.sampleIntervalMs ?? 50,
+    );
     this.missedFireHandler = new MissedFireHandler(this.logger, this.db);
   }
 
@@ -160,7 +166,7 @@ export class SchedulerModule implements IOqronModule {
       this.logger.info(
         `Scheduler draining ${activePromises.length} active jobs...`,
       );
-      const drainMs = (this as any)._shutdownTimeout ?? 25_000;
+      const drainMs = this.config?.shutdownTimeout ?? 25_000;
       const drainTimeout = new Promise<void>((r) => setTimeout(r, drainMs));
       await Promise.race([Promise.allSettled(activePromises), drainTimeout]);
     }

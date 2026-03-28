@@ -66,7 +66,10 @@ export async function handleTrigger(
   appendEvent("manual:trigger", { id });
   return {
     status: 200,
-    body: { ok: true, message: `Trigger queued for "${id}"` },
+    body: {
+      ok: true,
+      message: `Manual trigger event recorded for "${id}". Note: This logs the event but does not execute the job.`,
+    },
   };
 }
 

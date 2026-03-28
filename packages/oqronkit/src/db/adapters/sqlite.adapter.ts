@@ -58,6 +58,7 @@ export class SqliteAdapter implements IOqronAdapter {
         progressPercent INTEGER,
         progressLabel TEXT,
         attempts    INTEGER DEFAULT 1,
+        tags        TEXT,
         FOREIGN KEY(scheduleId) REFERENCES oqron_schedules(id) ON DELETE CASCADE
       );
 
@@ -80,6 +81,7 @@ export class SqliteAdapter implements IOqronAdapter {
       "ALTER TABLE oqron_jobs ADD COLUMN progressLabel TEXT",
       "ALTER TABLE oqron_jobs ADD COLUMN attempts INTEGER",
       "ALTER TABLE oqron_jobs ADD COLUMN durationMs INTEGER",
+      "ALTER TABLE oqron_jobs ADD COLUMN tags TEXT",
     ];
     for (const sql of alters) {
       try {

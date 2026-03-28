@@ -57,4 +57,5 @@ export interface JobRecord {
   progressLabel?: string;
   attempts?: number;
   durationMs?: number;
+  tags?: string[];
 }

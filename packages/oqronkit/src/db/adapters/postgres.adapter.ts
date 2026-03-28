@@ -73,7 +73,8 @@ export class PostgresAdapter implements IOqronAdapter {
         "progressPercent" INTEGER,
         "progressLabel" TEXT,
         attempts        INTEGER DEFAULT 1,
-        "durationMs"    INTEGER
+        "durationMs"    INTEGER,
+        tags            TEXT
       );
 
       CREATE TABLE IF NOT EXISTS oqron_locks (
@@ -197,9 +198,9 @@ export class PostgresAdapter implements IOqronAdapter {
     await this.pool.query(
       `INSERT INTO oqron_jobs (
          id, "scheduleId", status, "startedAt", "completedAt",
-         error, result, attempts, "progressPercent", "progressLabel", "durationMs"
+         error, result, attempts, "progressPercent", "progressLabel", "durationMs", tags
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
        ON CONFLICT (id) DO UPDATE SET
          status            = EXCLUDED.status,
          "completedAt"     = EXCLUDED."completedAt",
@@ -208,7 +209,8 @@ export class PostgresAdapter implements IOqronAdapter {
          attempts          = EXCLUDED.attempts,
          "progressPercent" = COALESCE(EXCLUDED."progressPercent", oqron_jobs."progressPercent"),
          "progressLabel"   = COALESCE(EXCLUDED."progressLabel", oqron_jobs."progressLabel"),
-         "durationMs"      = EXCLUDED."durationMs"`,
+         "durationMs"      = EXCLUDED."durationMs",
+         tags              = EXCLUDED.tags`,
       [
         job.id,
         job.scheduleId ?? null,
@@ -221,6 +223,7 @@ export class PostgresAdapter implements IOqronAdapter {
         job.progressPercent ?? null,
         job.progressLabel ?? null,
         job.durationMs ?? null,
+        job.tags ? JSON.stringify(job.tags) : null,
       ],
     );
 

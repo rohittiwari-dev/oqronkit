@@ -334,7 +334,7 @@ export const OqronKit = {
         _logger!,
         _config.environment,
         _config.project,
-        _config.cron,
+        { ..._config.cron, shutdownTimeout: _config.shutdown.timeout },
       );
       OqronRegistry.getInstance().register(scheduler);
     }
@@ -378,7 +378,7 @@ export const OqronKit = {
         _logger!,
         _config.environment,
         _config.project,
-        _config.scheduler,
+        { ..._config.scheduler, shutdownTimeout: _config.shutdown.timeout },
       );
       OqronRegistry.getInstance().register(engine);
     }

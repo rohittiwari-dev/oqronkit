@@ -8,15 +8,7 @@ import { OqronEventBus } from "../core/events/event-bus.js";
  * - Completed/Failed job totals per schedule
  * - Job duration histograms
  *
- * Exposes a text-based `/metrics` endpoint compatible with Prometheus scraping.
- *
- * Usage with Express:
- * ```ts
- * app.get("/metrics", (req, res) => {
- *   res.set("Content-Type", "text/plain");
- *   res.send(telemetry.serialize());
- * });
- * ```
+ * All metrics are collected passively via EventBus — no manual calls needed.
  */
 export class TelemetryManager {
   // ── Counters ────────────────────────────────────────────────────
@@ -26,6 +18,9 @@ export class TelemetryManager {
   private jobsActiveGauge = new Map<string, number>();
   private jobDurationsMs: Array<{ schedule: string; duration: number }> = [];
 
+  // Track start times so we can compute duration on completion
+  private jobStartTimes = new Map<string, { ts: number; schedule: string }>();
+
   private started = false;
 
   /** Start listening for events from the internal OqronKit EventBus */
@@ -33,46 +28,45 @@ export class TelemetryManager {
     if (this.started) return;
     this.started = true;
 
-    OqronEventBus.on("job:start", (_jobId: string, module: string) => {
-      this.increment(this.jobsStartedTotal, module);
-      this.increment(this.jobsActiveGauge, module);
+    OqronEventBus.on("job:start", (jobId: string, schedule: string) => {
+      this.increment(this.jobsStartedTotal, schedule);
+      this.increment(this.jobsActiveGauge, schedule);
+      this.jobStartTimes.set(jobId, { ts: Date.now(), schedule });
     });
 
-    OqronEventBus.on("job:success", (_jobId: string) => {
-      // We can't easily get the module name from just jobId here,
-      // so we track via a broader "global" counter.
-      this.increment(this.jobsCompletedTotal, "_global");
+    OqronEventBus.on("job:success", (jobId: string) => {
+      const entry = this.jobStartTimes.get(jobId);
+      const schedule = entry?.schedule ?? "_unknown";
+
+      this.increment(this.jobsCompletedTotal, schedule);
+      this.decrement(this.jobsActiveGauge, schedule);
+
+      // Record duration if we have a start time
+      if (entry) {
+        const duration = Date.now() - entry.ts;
+        this.jobDurationsMs.push({ schedule, duration });
+        this.jobStartTimes.delete(jobId);
+
+        // Cap duration samples to prevent memory leak
+        if (this.jobDurationsMs.length > 10_000) {
+          this.jobDurationsMs = this.jobDurationsMs.slice(-5_000);
+        }
+      }
     });
 
-    OqronEventBus.on("job:fail", (_jobId: string, _error: Error) => {
-      this.increment(this.jobsFailedTotal, "_global");
+    OqronEventBus.on("job:fail", (jobId: string, _error: Error) => {
+      const entry = this.jobStartTimes.get(jobId);
+      const schedule = entry?.schedule ?? "_unknown";
+
+      this.increment(this.jobsFailedTotal, schedule);
+      this.decrement(this.jobsActiveGauge, schedule);
+
+      if (entry) {
+        const duration = Date.now() - entry.ts;
+        this.jobDurationsMs.push({ schedule, duration });
+        this.jobStartTimes.delete(jobId);
+      }
     });
-  }
-
-  /** Record a completed job with its duration (called from engine internals) */
-  recordCompletion(
-    scheduleName: string,
-    durationMs: number,
-    status: "completed" | "failed",
-  ): void {
-    if (status === "completed") {
-      this.increment(this.jobsCompletedTotal, scheduleName);
-    } else {
-      this.increment(this.jobsFailedTotal, scheduleName);
-    }
-    this.decrement(this.jobsActiveGauge, scheduleName);
-    this.jobDurationsMs.push({ schedule: scheduleName, duration: durationMs });
-
-    // Keep only the last 10,000 duration samples to prevent memory leak
-    if (this.jobDurationsMs.length > 10_000) {
-      this.jobDurationsMs = this.jobDurationsMs.slice(-5_000);
-    }
-  }
-
-  /** Record a job start */
-  recordStart(scheduleName: string): void {
-    this.increment(this.jobsStartedTotal, scheduleName);
-    this.increment(this.jobsActiveGauge, scheduleName);
   }
 
   /** Stop listening and reset all counters */
@@ -84,13 +78,13 @@ export class TelemetryManager {
     this.jobsFailedTotal.clear();
     this.jobsActiveGauge.clear();
     this.jobDurationsMs = [];
+    this.jobStartTimes.clear();
   }
 
   // ── Prometheus Serializer ───────────────────────────────────────
 
   /**
    * Serialize all collected metrics into Prometheus text format.
-   * Mount this on an Express/Fastify route:
    *
    * ```ts
    * app.get("/metrics", (req, res) => {
@@ -102,7 +96,6 @@ export class TelemetryManager {
   serialize(): string {
     const lines: string[] = [];
 
-    // ── HELP and TYPE declarations ──
     lines.push(
       "# HELP oqronkit_jobs_started_total Total number of jobs started",
     );
@@ -142,7 +135,7 @@ export class TelemetryManager {
       }
     }
 
-    // ── Duration summary (avg, p50, p95, p99) ──
+    // ── Duration summary (p50, p95, p99) ──
     if (this.jobDurationsMs.length > 0) {
       const schedules = new Set(this.jobDurationsMs.map((d) => d.schedule));
 
