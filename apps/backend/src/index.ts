@@ -15,7 +15,14 @@ async function main(): Promise<void> {
   console.log("Booting ChronoForge…");
 
   // Zero boilerplate: reads chronoforge.config.js, uses jobsDir to load crons
-  await ChronoForge.init();
+  await ChronoForge.init({
+    config: {
+      modules: ["cron", "scheduler"],
+      logger: {
+        prettify: true,
+      },
+    },
+  });
 
   // Test dynamic schedule triggers!
   const { scheduleOnboardingDrip } = await import("./jobs/scheduler.js");
@@ -42,24 +49,8 @@ async function main(): Promise<void> {
   });
 
   const PORT = Number(process.env.PORT ?? 3000);
-  const server = app.listen(PORT, () => {
+  app.listen(PORT, () => {
     console.log(`Server ready on http://localhost:${PORT}`);
-  });
-
-  // Graceful shutdown
-  const shutdown = async (signal: string): Promise<void> => {
-    console.log(`${signal} received — shutting down…`);
-    server.close();
-    await ChronoForge.stop();
-    console.log("Bye!");
-    process.exit(0);
-  };
-
-  process.on("SIGINT", () => {
-    void shutdown("SIGINT");
-  });
-  process.on("SIGTERM", () => {
-    void shutdown("SIGTERM");
   });
 }
 

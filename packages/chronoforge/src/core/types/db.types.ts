@@ -9,10 +9,13 @@ export interface IChronoAdapter {
   getDueSchedules(
     now: Date,
     limit: number,
+    prefix?: string,
   ): Promise<Pick<CronDefinition | ScheduleDefinition, "name">[]>;
 
   /** Get all registered schedules and their run metadata */
-  getSchedules(): Promise<
+  getSchedules(
+    prefix?: string,
+  ): Promise<
     Array<{ name: string; lastRunAt: Date | null; nextRunAt: Date | null }>
   >;
 

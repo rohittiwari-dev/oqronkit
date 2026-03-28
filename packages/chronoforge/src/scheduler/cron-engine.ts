@@ -269,9 +269,10 @@ export class SchedulerModule implements IChronoModule {
         const nextRun = this.computeNextRun(def, now);
         if (!nextRun) {
           this.logger.error(
-            "Cannot compute next run — skipping fire to prevent runaway loop",
+            "Cannot compute next run — suspending cron to prevent runaway loop",
             { name: def.name },
           );
+          await this.db.updateNextRun(def.name, null).catch(() => {});
           continue;
         }
         await this.db.updateNextRun(def.name, nextRun);

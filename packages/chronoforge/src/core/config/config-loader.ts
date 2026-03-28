@@ -1,5 +1,6 @@
 import { pathToFileURL } from "node:url";
 import { findUp } from "find-up";
+import { reconfigureConfig } from "./default-config.js";
 import { ChronoConfigSchema, type ValidatedConfig } from "./schema.js";
 
 export async function loadConfig(
@@ -42,5 +43,5 @@ export async function loadConfig(
     );
   }
 
-  return parseResult.data;
+  return reconfigureConfig(parseResult.data);
 }

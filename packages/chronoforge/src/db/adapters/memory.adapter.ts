@@ -27,10 +27,12 @@ export class MemoryChronoAdapter implements IChronoAdapter {
   async getDueSchedules(
     now: Date,
     limit: number,
+    prefix?: string,
   ): Promise<Pick<CronDefinition | ScheduleDefinition, "name">[]> {
     const due: { name: string }[] = [];
     for (const s of this.schedules.values()) {
-      if (s.nextRunAt === null || s.nextRunAt <= now) {
+      if (prefix && !s.name.startsWith(prefix)) continue;
+      if (s.nextRunAt !== null && s.nextRunAt <= now) {
         due.push({ name: s.name });
       }
       if (due.length >= limit) break;
@@ -38,10 +40,18 @@ export class MemoryChronoAdapter implements IChronoAdapter {
     return due;
   }
 
-  async getSchedules(): Promise<
+  async getSchedules(
+    prefix?: string,
+  ): Promise<
     Array<{ name: string; lastRunAt: Date | null; nextRunAt: Date | null }>
   > {
-    return Array.from(this.schedules.values()).map((s) => ({
+    const filtered = prefix
+      ? Array.from(this.schedules.values()).filter((s) =>
+          s.name.startsWith(prefix),
+        )
+      : Array.from(this.schedules.values());
+
+    return filtered.map((s) => ({
       name: s.name,
       lastRunAt: s.lastRunAt,
       nextRunAt: s.nextRunAt,

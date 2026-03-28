@@ -1,7 +1,9 @@
 // Config
 export { loadConfig } from "./config/config-loader.js";
+export { reconfigureConfig } from "./config/default-config.js";
 export { defineConfig } from "./config/define-config.js";
 export type { ValidatedConfig } from "./config/schema.js";
+
 export { ChronoConfigSchema } from "./config/schema.js";
 
 // Context

@@ -2,16 +2,26 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
+  type ChronoConfig,
   ChronoRegistry,
   createLogger,
   type IChronoAdapter,
   type ILockAdapter,
   type Logger,
   loadConfig,
+  reconfigureConfig,
   type ValidatedConfig,
 } from "./core/index.js";
-import { MemoryChronoAdapter, SqliteAdapter } from "./db/index.js";
-import { DbLockAdapter, MemoryLockAdapter } from "./lock/index.js";
+import {
+  MemoryChronoAdapter,
+  NamespacedChronoAdapter,
+  SqliteAdapter,
+} from "./db/index.js";
+import {
+  DbLockAdapter,
+  MemoryLockAdapter,
+  NamespacedLockAdapter,
+} from "./lock/index.js";
 import { expressRouter } from "./server/express.js";
 import { fastifyPlugin } from "./server/fastify.js";
 
@@ -58,9 +68,9 @@ export const ChronoForge = {
    * @param opts.cwd - Working directory for config file lookup and jobsDir resolution
    * @param opts.config - Explicit config object (skips loadConfig)
    */
-  async init(opts?: { cwd?: string; config?: ValidatedConfig }): Promise<void> {
+  async init(opts?: { cwd?: string; config?: ChronoConfig }): Promise<void> {
     const cwd = opts?.cwd ?? process.cwd();
-    _config = opts?.config ?? (await loadConfig(cwd));
+    _config = reconfigureConfig(opts?.config ?? (await loadConfig(cwd)));
 
     const loggerConfig =
       _config.logger === false ? { enabled: true } : _config.logger;
@@ -188,10 +198,21 @@ export const ChronoForge = {
         s.tags = [...new Set([...(s.tags ?? []), ..._config.tags])];
       }
 
+      const nsDb = new NamespacedChronoAdapter(
+        _db!,
+        _config.project,
+        _config.environment,
+      );
+      const nsLock = new NamespacedLockAdapter(
+        _lock!,
+        _config.project,
+        _config.environment,
+      );
+
       const scheduler = new SchedulerModule(
         schedules,
-        _db!,
-        _lock!,
+        nsDb,
+        nsLock,
         _logger!,
         _config.environment,
         _config.project,
@@ -221,10 +242,21 @@ export const ChronoForge = {
         s.tags = [...new Set([...(s.tags ?? []), ..._config.tags])];
       }
 
+      const nsDb = new NamespacedChronoAdapter(
+        _db!,
+        _config.project,
+        _config.environment,
+      );
+      const nsLock = new NamespacedLockAdapter(
+        _lock!,
+        _config.project,
+        _config.environment,
+      );
+
       const engine = new ScheduleEngine(
         schedules,
-        _db!,
-        _lock!,
+        nsDb,
+        nsLock,
         _logger!,
         _config.environment,
         _config.project,

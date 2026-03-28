@@ -76,6 +76,9 @@ export const onboardingEmailJob = schedule<{
   template: string;
 }>({
   name: "onboarding-email",
+  every: {
+    seconds: 30,
+  },
   handler: async (ctx) => {
     ctx.log("info", `Sending onboarding drip email: ${ctx.payload.template}`, {
       userId: ctx.payload.userId,

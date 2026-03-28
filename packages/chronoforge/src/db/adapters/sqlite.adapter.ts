@@ -137,22 +137,36 @@ export class SqliteAdapter implements IChronoAdapter {
   async getDueSchedules(
     now: Date,
     limit: number,
+    prefix?: string,
   ): Promise<Pick<CronDefinition, "name">[]> {
-    return this.db
-      .prepare(
-        `SELECT id as name FROM chrono_schedules
-         WHERE nextRunAt <= ?
-         LIMIT ?`,
-      )
-      .all(now.toISOString(), limit) as { name: string }[];
+    let sql = `SELECT id as name FROM chrono_schedules WHERE nextRunAt <= ?`;
+    const params: any[] = [now.toISOString()];
+
+    if (prefix) {
+      sql += ` AND id LIKE ?`;
+      params.push(`${prefix}%`);
+    }
+
+    sql += ` LIMIT ?`;
+    params.push(limit);
+
+    return this.db.prepare(sql).all(...params) as { name: string }[];
   }
 
-  async getSchedules(): Promise<
+  async getSchedules(
+    prefix?: string,
+  ): Promise<
     Array<{ name: string; lastRunAt: Date | null; nextRunAt: Date | null }>
   > {
-    const rows = this.db
-      .prepare(`SELECT id, lastRunAt, nextRunAt FROM chrono_schedules`)
-      .all() as Array<{
+    let sql = `SELECT id, lastRunAt, nextRunAt FROM chrono_schedules`;
+    const params: any[] = [];
+
+    if (prefix) {
+      sql += ` WHERE id LIKE ?`;
+      params.push(`${prefix}%`);
+    }
+
+    const rows = this.db.prepare(sql).all(...params) as Array<{
       id: string;
       lastRunAt: string | null;
       nextRunAt: string | null;
