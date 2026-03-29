@@ -1,6 +1,6 @@
-# OqronKit Documentation
+# OqronKit Documentation (v1.0)
 
-Welcome to the definitive documentation for **OqronKit** — the enterprise-grade, framework-agnostic background computation engine for Node.js.
+Welcome to the definitive documentation for **OqronKit v1.0** — the enterprise-grade, framework-agnostic background computation engine for Node.js. Features 4 production-ready modules, 3 adapter backends (Memory/Redis/PostgreSQL), DI container, AbortController cancellation, and FIFO/LIFO/Priority job ordering.
 
 ## Table of Contents
 

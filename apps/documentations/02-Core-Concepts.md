@@ -71,14 +71,79 @@ When a `SIGINT` or `SIGTERM` is received, OqronKit:
 
 ---
 
-## 5. Adapter-Driven Architecture
+## 5. Adapter-Driven Architecture & DI Container
 
-OqronKit never makes direct database calls. All persistence goes through three adapter interfaces:
+OqronKit never makes direct database calls. All persistence goes through three adapter interfaces, managed by the `OqronContainer`:
 
 | Adapter | Purpose | In-Memory (dev) | Production |
 |---------|---------|------------------|------------|
-| `IStorageEngine` | Job records, history, schedules | `Map<string, any>` | Postgres, SQLite |
-| `IBrokerEngine` | Job signaling, claim/ack/nack | In-process queue | Redis Pub/Sub |
-| `ILockAdapter` | Distributed locking | Simple mutex | Redis Redlock |
+| `IStorageEngine` | Job records, history, schedules | `Map<string, any>` | PostgreSQL (JSONB+GIN) |
+| `IBrokerEngine` | Job signaling, claim/ack/nack | In-process queue | Redis Sorted Sets |
+| `ILockAdapter` | Distributed locking | Simple mutex | Redis Redlock / PG Advisory |
 
 Switching from in-memory to Redis/Postgres requires **zero code changes** in your job definitions — you only change the adapter config. Business logic stays identical whether you're running monolith or microservices.
+
+### DI Container (`OqronContainer`)
+
+Adapters are held in a central `OqronContainer`, which replaces the legacy module-level globals:
+
+```typescript
+import { OqronContainer } from "oqronkit";
+
+// Global singleton (default — backward compatible):
+await OqronKit.init({ config: { /* auto-selects adapters */ } });
+const storage = OqronContainer.get().storage;
+
+// Multi-instance (advanced — isolated adapters):
+const container = new OqronContainer(myStore, myBroker, myLock);
+const engine = new TaskQueueEngine(config, logger, container);
+```
+
+The existing `Storage`, `Broker`, `Lock` imports continue to work unchanged — they are Proxy objects that delegate to the global container.
+
+---
+
+## 6. Job Cancellation (`AbortController`)
+
+Active jobs can be cancelled mid-execution via `AbortController`:
+
+```typescript
+import { OqronManager } from "oqronkit";
+
+const mgr = OqronManager.from(config);
+await mgr.cancelJob("job-id"); // Fires AbortSignal if job is active
+```
+
+Handlers receive `ctx.signal` (an `AbortSignal`) and should check it periodically:
+
+```typescript
+handler: async (ctx) => {
+  for (const chunk of chunks) {
+    if (ctx.signal.aborted) return; // Respect cancellation
+    await processChunk(chunk);
+    await ctx.progress((chunk.index / chunks.length) * 100);
+  }
+}
+```
+
+When cancelled, the job is marked as `failed` with error `"Cancelled"`, the heartbeat is stopped, and the broker is acknowledged.
+
+---
+
+## 7. Job Ordering Strategies
+
+Both `taskQueue()` and `Worker` support configurable ordering:
+
+| Strategy | Behavior |
+|----------|----------|
+| `"fifo"` | First-In, First-Out (default) |
+| `"lifo"` | Last-In, First-Out — newest jobs processed first |
+| `"priority"` | Priority-weighted — lower `priority` number = processed first |
+
+```typescript
+// Per-queue:
+taskQueue({ name: "urgent-tasks", strategy: "priority", handler: ... });
+
+// Or globally:
+defineConfig({ taskQueue: { strategy: "lifo" } });
+```

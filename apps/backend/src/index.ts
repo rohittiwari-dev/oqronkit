@@ -10,13 +10,19 @@
  *  • taskQueue  — Monolithic background tasks (see jobs/task-queues.ts)
  *  • worker     — Distributed publisher/consumer (see jobs/distributed-workers.ts)
  *
+ *  v1 Features showcased:
+ *  • DI Container (OqronContainer) — automatic adapter selection
+ *  • AbortController — cancel active jobs via ctx.signal
+ *  • Job Ordering — FIFO / LIFO / Priority strategies
+ *  • PostgreSQL / Redis / Memory adapters
+ *
  *  The OqronKit engine auto-discovers all job definitions from the `jobsDir`
  *  directory and boots them into their respective modules during init().
  */
 
 import { mkdirSync } from "node:fs";
 import express from "express";
-import { OqronKit } from "oqronkit";
+import { OqronKit, OqronManager } from "oqronkit";
 
 // ─── 1. Prepare data directory ───────────────────────────────────────────────
 mkdirSync("data", { recursive: true });
@@ -135,6 +141,17 @@ async function main(): Promise<void> {
       const { imageId, sourceUrl } = req.body;
       await handleImageUpload(imageId, sourceUrl);
       res.status(202).json({ message: "Image processing started", imageId });
+    } catch (err: unknown) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  });
+
+  // Example API route: cancel a running job (AbortController support)
+  app.delete("/api/jobs/:jobId", async (req, res) => {
+    try {
+      const mgr = OqronManager.from(OqronKit.getConfig());
+      await mgr.cancelJob(req.params.jobId);
+      res.json({ message: "Job cancelled", jobId: req.params.jobId });
     } catch (err: unknown) {
       res.status(500).json({ error: (err as Error).message });
     }

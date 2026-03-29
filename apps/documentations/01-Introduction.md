@@ -27,8 +27,13 @@ OqronKit is a **unified background computation engine** that replaces all of the
 - Dead letter queue hooks for failed jobs
 - Progress tracking and real-time event streaming
 - Crash-safe heartbeat workers with stall detection
+- Mid-execution job cancellation via `AbortController` (`ctx.signal`)
+- Job ordering strategies: FIFO, LIFO, and Priority
+- DI Container (`OqronContainer`) for multi-instance and testability
 - Multi-tenant environment isolation
 - Typed input/output generics for full type safety
+- PostgreSQL adapter with `FOR UPDATE SKIP LOCKED` atomic claiming
+- Redis adapter suite (sorted sets, Lua scripts, Redlock)
 
 ## Architecture at a Glance
 
@@ -44,7 +49,9 @@ OqronKit is a **unified background computation engine** that replaces all of the
 │  │ Storage  │ │  Broker  │ │   Lock   │ │  Backoff / Prune   │  │
 │  └─────────┘ └──────────┘ └──────────┘ └────────────────────┘  │
 ├─────────────────────────────────────────────────────────────────┤
+│            OqronContainer (DI)  →  Proxy Shims                   │
+├─────────────────────────────────────────────────────────────────┤
 │                     Adapter Layer                                │
-│         Memory (dev) ←──→ Redis / Postgres (production)          │
+│     Memory (dev) ←──→ Redis ←──→ PostgreSQL (production)          │
 └──────────────────────────────────────────────────────────────────┘
 ```

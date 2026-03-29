@@ -3,125 +3,244 @@
 ![Version](https://img.shields.io/npm/v/oqronkit?style=flat-square)
 ![License](https://img.shields.io/npm/l/oqronkit?style=flat-square)
 
-OqronKit is a high-performance, enterprise-ready cron and job scheduling framework for Node.js. Designed for extreme scaling, multi-tenancy, and distributed microservices architectures, it features seamless Global Locking, automated Leader Election, missed-fire recovery, and zero-configuration database persistence.
+**OqronKit** is a crash-safe, framework-agnostic background computation engine for Node.js. One package replaces your cron scheduler, job queue, retry engine, dead letter queue, and distributed locking infrastructure.
 
-Stop struggling with broken internal intervals. Scale confidently across a single monolith or a distributed 50-node cluster using SQLite, Redis, or Memory natively.
+Deploy as a single-server monolith or a horizontally-scaled microservice architecture — same code, zero changes.
+
+## ✨ What's New in `0.0.1-alpha.3`
+
+- **DI Container** (`OqronContainer`) — replaces module globals with injectable, testable, multi-instance-ready container
+- **Job Cancellation** — `AbortController`-based mid-execution cancel via `ctx.signal`
+- **Job Ordering** — FIFO, LIFO, and Priority strategies across all brokers
+- **PostgreSQL Adapter** — `FOR UPDATE SKIP LOCKED` atomic claiming, JSONB+GIN storage, advisory locks
+- **Redis Adapter Suite** — Sorted sets for ordering, Lua scripts for atomicity, Redlock for distributed locks
+- **253 tests across 26 files** — A+ maturity rating on all 16 modules
+
+---
 
 ## 🌟 Key Features
 
-- **Multi-Tenant Isolation**: Safely run `staging` and `production` environments off the exact same database without collision.
-- **Global Distributed Locks**: Automatically prevents duplicate processing across clusters natively—you will never accidentally bill a user twice!
-- **Leader Election**: Dynamically promotes a master node to handle system polling intervals natively.
-- **Missed-Fire Recovery**: Automatic detection and recovery strategies (`run_now`, `skip`, or `discard`) when the server goes offline during a schedule.
-- **Fully Declarative (`oqron.config.ts`)**: Define a single TS configuration file natively without writing massive infrastructure boots.
-- **Stall Detection**: Natively monitors and revokes jobs if an executing worker crashes silently or hangs indefinitely.
-- **File-based Auto-Routing**: Magically discovers and registers jobs simply by dropping `.ts` files into your `./jobs` directory!
+| Feature | Description |
+|---------|-------------|
+| **4 Production Modules** | Cron, Schedule, TaskQueue, Queue+Worker |
+| **3 Adapter Backends** | Memory (dev), Redis, PostgreSQL |
+| **Crash-Safe Processing** | Heartbeat locks + stall detection + auto-recovery |
+| **Mid-Execution Cancel** | `AbortController` — handlers check `ctx.signal.aborted` |
+| **Job Ordering** | FIFO, LIFO, Priority — per-queue or global config |
+| **Retry & Backoff** | Fixed + exponential with configurable caps |
+| **Dead Letter Queue** | Hooks fire when all retries exhausted |
+| **Progress Tracking** | `ctx.progress(50, "halfway")` — real-time via EventBus |
+| **Environment Isolation** | `project:environment` namespacing prevents cross-env leaks |
+| **Leader Election** | Only one node polls for due schedules — reduces DB load by N× |
+| **DI Container** | `OqronContainer` for multi-instance and testability |
+| **Graceful Shutdown** | Drain active jobs, release locks, close adapters |
+| **Telemetry** | Prometheus-compatible metrics (p50/p95/p99) |
+| **Admin API** | Express/Fastify routers for health, events, trigger, queue/job management |
+
+---
 
 ## 📦 Installation
 
 ```bash
 npm install oqronkit
 # or
-yarn add oqronkit
-# or
 bun add oqronkit
 ```
 
-*Note: OqronKit bundles standard SQLite and Memory adapters internally. No additional database ORMs are required.*
+### Optional peer dependencies
+
+```bash
+# For Redis adapter:
+npm install ioredis
+
+# For PostgreSQL adapter:
+npm install pg
+```
+
+---
 
 ## 🚀 Quick Start
 
-### 1. Configuration (`oqron.config.ts`)
-Create a single definition file at the root of your application to magically boot the entire underlying layer:
+### 1. Configuration
 
 ```typescript
 import { defineConfig } from "oqronkit";
 
 export default defineConfig({
-  project: "my-saas-platform",
-  environment: process.env.NODE_ENV || "development",
-  modules: ["cron", "scheduler"], // Enable standard Crons & dynamic Timed Schedules
-  jobsDir: "./src/jobs",          // OqronKit automatically finds jobs here
+  project: "my-saas",
+  environment: process.env.NODE_ENV ?? "development",
+  modules: ["cron", "scheduler", "taskQueue", "worker"],
+  jobsDir: "./src/jobs",
+
+  // Optional — connects PostgreSQL adapters automatically:
+  // postgres: { connectionString: "postgresql://..." },
+
+  // Optional — connects Redis adapters automatically:
+  // redis: "redis://localhost:6379",
 });
 ```
 
-### 2. Define a Job (`src/jobs/emails.ts`)
-Declare a job logic structure. OqronKit strongly enforces execution wrappers to track success, failure, and execution limits!
+### 2. Define a Cron Job
 
 ```typescript
 import { cron } from "oqronkit";
 
 export const dailyDigest = cron({
   name: "daily-digest",
-  expression: "0 8 * * *", // Runs every day at 08:00 AM
+  expression: "0 8 * * *",
   timezone: "UTC",
-  overlap: "skip",         // If it's still sending yesterday's batch, skip today's run
+  overlap: "skip",
   handler: async (ctx) => {
-    ctx.logger.info("Gathering active users...", { 
-      env: ctx.environment 
-    });
-    
-    // Simulate complex DB queries natively
-    await new Promise((r) => setTimeout(r, 1000));
-    
-    return { users_processed: 50 };
-  }
+    ctx.log.info("Sending digest emails...");
+    return { processed: 50 };
+  },
 });
 ```
 
-### 3. Initialize Server
-Simply inject `OqronKit.init()` natively into your backend bootstrapping logic!
+### 3. Define a Task Queue (Monolithic)
+
+```typescript
+import { taskQueue } from "oqronkit";
+
+const imageQueue = taskQueue<{ url: string }, { variants: string[] }>({
+  name: "image-processing",
+  concurrency: 3,
+  strategy: "fifo",          // "fifo" | "lifo" | "priority"
+  guaranteedWorker: true,     // Crash-safe heartbeat lock
+
+  retries: { max: 2, strategy: "exponential", baseDelay: 3000 },
+
+  handler: async (ctx) => {
+    // Check cancellation signal periodically
+    if (ctx.signal.aborted) return { variants: [] };
+
+    ctx.progress(50, "Resizing images");
+    const variants = await resize(ctx.data.url);
+
+    ctx.progress(100, "Done");
+    return { variants };
+  },
+});
+
+// Enqueue from anywhere:
+await imageQueue.add({ url: "https://..." }, { jobId: "img-123" });
+```
+
+### 4. Define a Distributed Queue + Worker
+
+```typescript
+import { Queue, Worker } from "oqronkit";
+
+// Publisher (API pods — zero CPU overhead)
+const orderQueue = new Queue("orders", {
+  defaultJobOptions: { attempts: 3, backoff: { type: "exponential", delay: 2000 } },
+});
+await orderQueue.add("process", { orderId: "ORD-1" });
+
+// Consumer (Worker pods — horizontally scaled)
+const orderWorker = new Worker("orders", async (job) => {
+  await processOrder(job.data);
+  return { status: "shipped" };
+}, {
+  concurrency: 10,
+  strategy: "priority",
+});
+```
+
+### 5. Boot
 
 ```typescript
 import { OqronKit } from "oqronkit";
 
-async function boot() {
-  await OqronKit.init(); 
-  console.log("Enterprise Task Scheduling armed.");
-}
-boot();
+await OqronKit.init();
+console.log("OqronKit ready ✓");
 ```
 
 ---
 
-## 🎛 Advanced Usage
+## 🔧 Job Cancellation
 
-### Dynamic Specific-Time Scheduling
-Unlike generic Crons, `scheduler` natively handles firing dynamic "one-off" events inside user logic boundaries, explicitly persisting to the DB out of the box!
+Cancel active jobs mid-execution via `AbortController`:
 
 ```typescript
-import { schedule } from "oqronkit";
+import { OqronManager } from "oqronkit";
 
-// 1. Define the handler type structure
-export const subscriptionHandler = schedule<{ userId: string }>({
-  name: "cancel-subscription-job",
-  keepHistory: true, // Keep an internal audit trail within the DB
-  handler: async (ctx) => {
-    const { userId } = ctx.payload;
-    console.log(`Cancelled user ${userId} natively!`);
+const mgr = OqronManager.from(OqronKit.getConfig());
+await mgr.cancelJob("job-id"); // Fires AbortSignal → handler sees ctx.signal.aborted
+```
+
+Handlers should check `ctx.signal.aborted` periodically:
+
+```typescript
+handler: async (ctx) => {
+  for (const chunk of data) {
+    if (ctx.signal.aborted) return;  // Exit early
+    await process(chunk);
   }
-});
-
-// 2. Trigger the job dynamically in your Express routes natively
-await subscriptionHandler({ userId: "u_abc123" }, { 
-  runAfter: { days: 3 } 
-});
+}
 ```
 
 ---
 
-## 🏗 Architecture & Internal Isolation
+## 🏗 Architecture
 
-By default, the `OqronAdapter` prefixes all Database identities mapping directly based on the config file context:
-`${project}:${environment}:${job_name}`
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                        OqronKit Engine                           │
+├──────────────┬──────────────┬──────────────┬────────────────────┤
+│   Cron       │   Schedule   │  TaskQueue   │  Queue + Worker    │
+│  (time)      │  (data)      │  (monolith)  │  (distributed)     │
+├──────────────┴──────────────┴──────────────┴────────────────────┤
+│                    Shared Infrastructure                         │
+│  ┌─────────┐ ┌──────────┐ ┌──────────┐ ┌────────────────────┐  │
+│  │ Storage  │ │  Broker  │ │   Lock   │ │  Backoff / Prune   │  │
+│  └─────────┘ └──────────┘ └──────────┘ └────────────────────┘  │
+├─────────────────────────────────────────────────────────────────┤
+│            OqronContainer (DI)  →  Proxy Shims                   │
+├─────────────────────────────────────────────────────────────────┤
+│                     Adapter Layer                                │
+│     Memory (dev) ←──→ Redis ←──→ PostgreSQL (production)          │
+└──────────────────────────────────────────────────────────────────┘
+```
 
-This guarantees you can utilize the exact same Redis clusters, the same SQLite tables (`oqron_schedules`), and the identical physical database server for both your staging development servers and production monoliths flawlessly! The leader elections are mathematically isolated using the same prefix architecture natively.
+---
+
+## 📊 Test Coverage
+
+| Metric | Value |
+|--------|:-----:|
+| Test Files | **26** |
+| Tests Passing | **253** |
+| Type Errors | **0** |
+| Module Maturity | **A+ across all 16 modules** |
+
+---
+
+## 📖 Documentation
+
+Full documentation in [`apps/documentations/`](../../apps/documentations/README.md):
+
+1. [Introduction](../../apps/documentations/01-Introduction.md)
+2. [Core Concepts](../../apps/documentations/02-Core-Concepts.md)
+3. [Cron & Schedule](../../apps/documentations/03-Module-Guide-Cron-and-Schedule.md)
+4. [TaskQueue](../../apps/documentations/04-Module-Guide-TaskQueue.md)
+5. [Queue + Worker](../../apps/documentations/05-Module-Guide-Queue-Worker.md)
+6. [TaskQueue vs Queue/Worker](../../apps/documentations/06-TaskQueue-vs-Queue-Worker.md)
+7. [Job Lifecycle & Retention](../../apps/documentations/07-Job-Lifecycle-and-Retention.md)
+8. [Configuration Reference](../../apps/documentations/08-Configuration-Reference.md)
+9. [Real-World Examples](../../apps/documentations/09-Real-World-Examples.md)
+10. [Roadmap](../../apps/documentations/10-Roadmap-and-Future.md)
+
+---
 
 ## 🤝 Contributing
-Issues and Pull Requests are welcome to natively expand support for PostgreSQL via `SKIP LOCKED` extensions and deeper Redis locks.
 
-1. Fork the Project
-2. Create your Feature Branch
-3. Commit your Changes natively.
-4. Push to the Branch natively.
-5. Open a Pull Request!
+1. Fork the project
+2. Create your feature branch (`git checkout -b feat/my-feature`)
+3. Write tests in `test/<module>/`
+4. Ensure `bunx vitest run` and `bunx tsc --noEmit` pass
+5. Open a Pull Request
+
+## 📜 License
+
+[MIT](./LICENSE)

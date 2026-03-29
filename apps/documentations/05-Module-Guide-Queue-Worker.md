@@ -109,6 +109,7 @@ const orderWorker = new Worker(
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `concurrency` | `number` | `5` | Parallel job limit |
+| `strategy` | `"fifo" \| "lifo" \| "priority"` | `"fifo"` | Job ordering strategy |
 | `autorun` | `boolean` | `true` | Start polling when OqronKit boots |
 | `connection` | `IBrokerEngine` | — | Override the broker adapter |
 | `limiter` | `{ max, duration, groupKey? }` | — | Rate limiting |

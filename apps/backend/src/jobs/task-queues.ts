@@ -21,6 +21,8 @@
  *  ✓ Success/failure hooks
  *  ✓ Crash-safe guaranteedWorker
  *  ✓ Discard (permanent fail without retry)
+ *  ✓ Job ordering strategy (FIFO / LIFO / Priority)
+ *  ✓ AbortController cancellation (ctx.signal)
  */
 
 import { taskQueue } from "oqronkit";
@@ -87,6 +89,12 @@ export const imageProcessingQueue = taskQueue<ImageInput, ImageOutput>({
     const variants: ImageOutput["variants"] = [];
 
     for (let i = 0; i < sizes.length; i++) {
+      // ✅ Check cancellation signal between each resize operation
+      if (ctx.signal.aborted) {
+        ctx.log("warn", `Image ${imageId} processing cancelled mid-resize`);
+        return { imageId, variants }; // Return partial results
+      }
+
       const size = sizes[i];
       const percent = 20 + Math.floor((70 * (i + 1)) / sizes.length);
       ctx.progress(
@@ -180,7 +188,8 @@ export const emailQueue = taskQueue<EmailInput, EmailOutput>({
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 3. PDF REPORT GENERATION
-//    Heavy CPU task • Low concurrency • Long timeout • Discard support
+//    Heavy CPU task • Priority ordering • Long timeout • Discard support
+//    Uses strategy: "priority" so urgent reports are processed first
 // ─────────────────────────────────────────────────────────────────────────────
 type PdfInput = {
   reportId: string;
@@ -199,6 +208,7 @@ export const pdfGenerationQueue = taskQueue<PdfInput, PdfOutput>({
   name: "pdf-generation",
 
   concurrency: 1, // CPU-heavy — one at a time
+  strategy: "priority", // ✅ Urgent reports (lower priority number) go first
   guaranteedWorker: true,
   heartbeatMs: 10_000,
   lockTtlMs: 60_000,
@@ -231,12 +241,15 @@ export const pdfGenerationQueue = taskQueue<PdfInput, PdfOutput>({
 
     ctx.progress(10, "Querying financial data");
     await new Promise((r) => setTimeout(r, 200));
+    if (ctx.signal.aborted) return { pdfUrl: "", pages: 0, sizeKb: 0 };
 
     ctx.progress(40, "Building charts and visualizations");
     await new Promise((r) => setTimeout(r, 200));
+    if (ctx.signal.aborted) return { pdfUrl: "", pages: 0, sizeKb: 0 };
 
     ctx.progress(70, "Rendering PDF with Puppeteer");
     await new Promise((r) => setTimeout(r, 300));
+    if (ctx.signal.aborted) return { pdfUrl: "", pages: 0, sizeKb: 0 };
 
     ctx.progress(90, "Uploading to S3");
     await new Promise((r) => setTimeout(r, 100));

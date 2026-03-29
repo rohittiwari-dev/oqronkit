@@ -44,6 +44,7 @@ const myQueue = taskQueue<InputType, OutputType>({
 | `name` | `string` | required | Unique queue identifier |
 | `handler` | `(ctx: TaskJobContext<T>) => Promise<R>` | required | The processing function |
 | `concurrency` | `number` | `5` | Parallel execution limit |
+| `strategy` | `"fifo" \| "lifo" \| "priority"` | `"fifo"` | Job ordering strategy |
 | `guaranteedWorker` | `boolean` | `true` | Enable heartbeat lock for crash safety |
 | `heartbeatMs` | `number` | `5000` | Heartbeat ping interval |
 | `lockTtlMs` | `number` | `30000` | Lock expiry for crash detection |
@@ -66,9 +67,21 @@ Your handler receives a context object with these capabilities:
 handler: async (ctx) => {
   ctx.id;                           // Job UUID
   ctx.data;                         // Typed input payload
+  ctx.signal;                       // AbortSignal — check ctx.signal.aborted
   ctx.progress(50, "Halfway done"); // Update progress (0-100)
   ctx.log("info", "Processing...");  // Structured logging
   ctx.discard();                     // Permanently fail — skip all retries
+}
+```
+
+The `signal` property is an `AbortSignal` that fires when the job is cancelled via `OqronManager.cancelJob()`. Long-running handlers should periodically check `ctx.signal.aborted`:
+
+```typescript
+handler: async (ctx) => {
+  for (const item of ctx.data.items) {
+    if (ctx.signal.aborted) return; // Exit early on cancel
+    await processItem(item);
+  }
 }
 ```
 

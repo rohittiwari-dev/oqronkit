@@ -25,7 +25,8 @@ export default defineConfig({
 | `project` | `string` | `"oqronkit"` | Service/project name — used in lock keys and namespacing |
 | `environment` | `string` | `"development"` | Environment isolation key — workers only process same-env jobs |
 | `modules` | `string[]` | `[]` | Which modules to activate: `"cron"`, `"scheduler"`, `"taskQueue"`, `"queue"`, `"worker"` |
-| `redis` | `object` | — | Redis connection for production broker/lock adapters |
+| `redis` | `string \| object` | — | Redis connection URL or ioredis instance |
+| `postgres` | `object` | — | PostgreSQL connection config (see below) |
 | `jobsDir` | `string` | `"./src/jobs"` | Directory for auto-discovery of job definition files |
 | `tags` | `string[]` | `[]` | Global tags applied to every job processed by this node |
 
@@ -96,6 +97,7 @@ scheduler: {
 ```typescript
 taskQueue: {
   concurrency: 5,
+  strategy: "fifo",
   heartbeatMs: 5000,
   lockTtlMs: 30000,
   retries: {
@@ -116,6 +118,7 @@ taskQueue: {
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `concurrency` | `number` | `5` | Default parallel execution limit |
+| `strategy` | `"fifo" \| "lifo" \| "priority"` | `"fifo"` | Job ordering strategy |
 | `heartbeatMs` | `number` | `5000` | Polling interval for job pickup |
 | `lockTtlMs` | `number` | `30000` | Lock TTL for crash detection |
 | `retries.max` | `number` | `3` | Default max retry attempts |
@@ -153,7 +156,27 @@ worker: {
 }
 ```
 
-Same options as TaskQueue — these serve as global defaults for all `Worker` instances. Per-worker options override these.
+Same options as TaskQueue (plus `strategy`) — these serve as global defaults for all `Worker` instances. Per-worker options override these.
+
+---
+
+## PostgreSQL Adapter (`config.postgres`)
+
+```typescript
+postgres: {
+  connectionString: "postgresql://user:pass@localhost:5432/oqronkit",
+  tablePrefix: "oqron",
+  poolSize: 10,
+}
+```
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `connectionString` | `string` | required | PostgreSQL connection URL |
+| `tablePrefix` | `string` | `"oqron"` | Table name prefix for all OqronKit tables |
+| `poolSize` | `number` | `10` | Connection pool size |
+
+> **Adapter priority:** If `postgres` is set, PostgreSQL adapters are used. Otherwise if `redis` is set, Redis adapters are used. Otherwise, in-memory adapters are used (development).
 
 ---
 
