@@ -7,6 +7,7 @@ import type { OqronConfig } from "../engine/types/config.types.js";
 import type { BrokerStrategy } from "../engine/types/engine.js";
 import type { OqronJob } from "../engine/types/job.types.js";
 import { calculateBackoff } from "../engine/utils/backoffs.js";
+import { DependencyResolver } from "../engine/utils/dependency-resolver.js";
 import { pruneAfterCompletion } from "../engine/utils/job-retention.js";
 import { getRegisteredTaskQueues } from "./registry.js";
 import type { TaskJobContext, TaskQueueConfig } from "./types.js";
@@ -409,6 +410,15 @@ export class TaskQueueEngine implements IOqronModule {
 
     await this.di.storage.save("jobs", job.id, job);
     await this.di.broker.ack(q.name, job.id);
+
+    // ── Notify dependent children ────────────────────────────────────
+    if (job.childrenIds?.length) {
+      await DependencyResolver.notifyChildren(
+        this.di.storage,
+        this.di.broker,
+        job.id,
+      );
+    }
 
     // ── EventBus emissions ──────────────────────────────────────────────
     if (status === "completed") {

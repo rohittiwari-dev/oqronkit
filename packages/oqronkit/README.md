@@ -7,14 +7,13 @@
 
 Deploy as a single-server monolith or a horizontally-scaled microservice architecture — same code, zero changes.
 
-## ✨ What's New in `0.0.1-alpha.3`
+## ✨ What's New in `0.0.1-alpha.4`
 
-- **DI Container** (`OqronContainer`) — replaces module globals with injectable, testable, multi-instance-ready container
-- **Job Cancellation** — `AbortController`-based mid-execution cancel via `ctx.signal`
-- **Job Ordering** — FIFO, LIFO, and Priority strategies across all brokers
-- **PostgreSQL Adapter** — `FOR UPDATE SKIP LOCKED` atomic claiming, JSONB+GIN storage, advisory locks
-- **Redis Adapter Suite** — Sorted sets for ordering, Lua scripts for atomicity, Redlock for distributed locks
-- **253 tests across 26 files** — A+ maturity rating on all 16 modules
+- **Job Dependencies (DAG)** — `dependsOn: [parentId]` with configurable `parentFailurePolicy` (block/cascade-fail/ignore)
+- **Cron Clustering** — `ShardedLeaderElection` for multi-region geo-distributed scheduling
+- **Sandboxed Processors** — `worker_threads` isolation with `resourceLimits` (memory caps + timeout)
+- **Full DI Container Migration** — All engines now use `OqronContainer` injection, no more global Proxy dependencies
+- **275 tests across 29 files** — A+ maturity rating on all modules
 
 ---
 
@@ -24,6 +23,9 @@ Deploy as a single-server monolith or a horizontally-scaled microservice archite
 |---------|-------------|
 | **4 Production Modules** | Cron, Schedule, TaskQueue, Queue+Worker |
 | **3 Adapter Backends** | Memory (dev), Redis, PostgreSQL |
+| **Job Dependencies (DAG)** | `dependsOn` parent IDs — children wait for parents to complete |
+| **Cron Clustering** | Sharded multi-region leader election across geo-regions |
+| **Sandboxed Processors** | `worker_threads` isolation with memory + timeout limits |
 | **Crash-Safe Processing** | Heartbeat locks + stall detection + auto-recovery |
 | **Mid-Execution Cancel** | `AbortController` — handlers check `ctx.signal.aborted` |
 | **Job Ordering** | FIFO, LIFO, Priority — per-queue or global config |
@@ -156,6 +158,40 @@ await OqronKit.init();
 console.log("OqronKit ready ✓");
 ```
 
+### 6. Job Dependencies (DAG)
+
+```typescript
+import { taskQueue } from "oqronkit";
+
+const extractQueue = taskQueue({ name: "extract", handler: async (ctx) => { /* ... */ } });
+const loadQueue = taskQueue({ name: "load", handler: async (ctx) => { /* ... */ } });
+
+const parent = await extractQueue.add({ source: "data.csv" });
+const child = await loadQueue.add(
+  { target: "warehouse" },
+  { dependsOn: [parent.id], parentFailurePolicy: "cascade-fail" }
+);
+// child stays in "waiting-children" until parent completes
+```
+
+### 7. Sandboxed Processor
+
+```typescript
+import { Worker } from "oqronkit";
+
+const sandboxedWorker = new Worker(
+  "code-runner",
+  "./processors/untrusted.js",
+  {
+    sandbox: {
+      enabled: true,
+      timeout: 10_000,    // Force-kill after 10s
+      maxMemoryMb: 128,   // Cap V8 heap at 128MB
+    },
+  }
+);
+```
+
 ---
 
 ## 🔧 Job Cancellation
@@ -209,10 +245,10 @@ handler: async (ctx) => {
 
 | Metric | Value |
 |--------|:-----:|
-| Test Files | **26** |
-| Tests Passing | **253** |
+| Test Files | **29** |
+| Tests Passing | **275** |
 | Type Errors | **0** |
-| Module Maturity | **A+ across all 16 modules** |
+| Module Maturity | **A+ across all modules** |
 
 ---
 

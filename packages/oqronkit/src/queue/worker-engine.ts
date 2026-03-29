@@ -8,7 +8,9 @@ import type { OqronConfig } from "../engine/types/config.types.js";
 import type { BrokerStrategy, IBrokerEngine } from "../engine/types/engine.js";
 import type { OqronJob } from "../engine/types/job.types.js";
 import { calculateBackoff } from "../engine/utils/backoffs.js";
+import { DependencyResolver } from "../engine/utils/dependency-resolver.js";
 import { pruneAfterCompletion } from "../engine/utils/job-retention.js";
+import { SandboxWorker } from "./sandbox-worker.js";
 import { getRegisteredWorkers, type Worker } from "./worker.js";
 
 export class WorkerEngine implements IOqronModule {
@@ -306,7 +308,17 @@ export class WorkerEngine implements IOqronModule {
     let result: any;
 
     try {
-      if (typeof w.processor === "string") {
+      if (w.options?.sandbox?.enabled && typeof w.processor === "string") {
+        // ── Sandboxed execution via SandboxWorker ─────────────────────────
+        const sandbox = new SandboxWorker({
+          enabled: true,
+          timeout: w.options.sandbox.timeout ?? 30_000,
+          maxMemoryMb: w.options.sandbox.maxMemoryMb ?? 512,
+          transferOnly: w.options.sandbox.transferOnly ?? true,
+        });
+        result = await sandbox.execute(w.processor as string, job);
+      } else if (typeof w.processor === "string") {
+        // ── Basic thread worker (no resource limits) ────────────────────
         result = await new Promise((resolve, reject) => {
           const thread = new ThreadWorker(w.processor as string, {
             workerData: job,
@@ -318,6 +330,7 @@ export class WorkerEngine implements IOqronModule {
           });
         });
       } else {
+        // ── Inline processor function (main thread) ──────────────────
         result = await w.processor(job as any);
       }
 
@@ -394,6 +407,15 @@ export class WorkerEngine implements IOqronModule {
 
     await this.di.storage.save("jobs", job.id, job);
     await broker.ack(job.queueName, job.id);
+
+    // ── Notify dependent children ────────────────────────────────────
+    if (job.childrenIds?.length) {
+      await DependencyResolver.notifyChildren(
+        this.di.storage,
+        this.di.broker,
+        job.id,
+      );
+    }
 
     // ── Events & Hooks ──────────────────────────────────────────────────
     if (status === "completed") {

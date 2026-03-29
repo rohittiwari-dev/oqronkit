@@ -4,16 +4,16 @@ import {
   createLogger,
   type IOqronModule,
   LagMonitor,
-  Lock,
   type Logger,
+  OqronContainer,
   OqronEventBus,
   ScheduleContext,
   type ScheduleDefinition,
-  Storage,
 } from "../engine/index.js";
 import {
   HeartbeatWorker,
   LeaderElection,
+  ShardedLeaderElection,
   StallDetector,
 } from "../engine/lock/index.js";
 import {
@@ -37,6 +37,7 @@ export class ScheduleEngine implements IOqronModule {
   private readonly nodeId: string;
   private readonly logger: Logger;
   private leader?: LeaderElection;
+  private shardedLeader?: ShardedLeaderElection;
   private stallDetector: StallDetector;
   private lagMonitor: LagMonitor;
   private tickTimer?: ReturnType<typeof setInterval>;
@@ -58,12 +59,18 @@ export class ScheduleEngine implements IOqronModule {
       keepFailedJobHistory?: boolean | number;
       shutdownTimeout?: number;
       lagMonitor?: { maxLagMs?: number; sampleIntervalMs?: number };
+      clustering?: {
+        totalShards?: number;
+        ownedShards?: number[];
+        region?: string;
+      };
     },
+    private readonly container?: OqronContainer,
   ) {
     this.nodeId = randomUUID();
     this.logger =
       logger ?? createLogger({ level: "info" }, { module: "scheduler" });
-    this.stallDetector = new StallDetector(Lock, this.logger, 15_000);
+    this.stallDetector = new StallDetector(this.di.lock, this.logger, 15_000);
     this.lagMonitor = new LagMonitor(
       this.logger,
       this.config?.lagMonitor?.maxLagMs ?? 500,
@@ -73,6 +80,10 @@ export class ScheduleEngine implements IOqronModule {
     for (const def of staticSchedules) {
       this.schedules.set(def.name, def);
     }
+  }
+
+  private get di(): OqronContainer {
+    return this.container ?? OqronContainer.get();
   }
 
   // ── Lifecycle ───────────────────────────────────────────────────────────────
@@ -92,11 +103,12 @@ export class ScheduleEngine implements IOqronModule {
   }
 
   private async upsertAndSeed(def: ScheduleDefinition, now: Date) {
-    await Storage.save("schedules", def.name, def);
+    await this.di.storage.save("schedules", def.name, def);
     const nextRun = this.computeNextRun(def, now);
     if (nextRun) {
-      const existing = (await Storage.get<any>("schedules", def.name)) || {};
-      await Storage.save("schedules", def.name, {
+      const existing =
+        (await this.di.storage.get<any>("schedules", def.name)) || {};
+      await this.di.storage.save("schedules", def.name, {
         ...existing,
         nextRunAt: nextRun,
       });
@@ -115,14 +127,31 @@ export class ScheduleEngine implements IOqronModule {
   }
 
   async start(): Promise<void> {
-    this.leader = new LeaderElection(
-      Lock,
-      this.logger,
-      "oqron:scheduleengine:leader",
-      this.nodeId,
-      30_000,
-    );
-    await this.leader.start();
+    const clustering = this.config?.clustering;
+
+    if (clustering && (clustering.totalShards ?? 1) > 1) {
+      // ── Sharded multi-region leader election ─────────────────────
+      this.shardedLeader = new ShardedLeaderElection(
+        this.di.lock,
+        this.logger,
+        "oqron:scheduleengine:leader",
+        this.nodeId,
+        clustering.totalShards!,
+        clustering.ownedShards ?? [0],
+        30_000,
+      );
+      await this.shardedLeader.start();
+    } else {
+      // ── Single-leader election (default) ──────────────────────────
+      this.leader = new LeaderElection(
+        this.di.lock,
+        this.logger,
+        "oqron:scheduleengine:leader",
+        this.nodeId,
+        30_000,
+      );
+      await this.leader.start();
+    }
 
     const interval = this.config?.tickInterval ?? 1_000;
     this.tickTimer = setInterval(() => {
@@ -132,6 +161,12 @@ export class ScheduleEngine implements IOqronModule {
     this.logger.info("Schedule engine started", {
       nodeId: this.nodeId,
       interval,
+      clustering: clustering
+        ? {
+            totalShards: clustering.totalShards,
+            ownedShards: clustering.ownedShards,
+          }
+        : undefined,
     });
     this.lagMonitor.start();
     this.stallDetector.start(
@@ -158,6 +193,7 @@ export class ScheduleEngine implements IOqronModule {
   async stop(): Promise<void> {
     if (this.tickTimer) clearInterval(this.tickTimer);
     if (this.leader) await this.leader.stop();
+    if (this.shardedLeader) await this.shardedLeader.stop();
     this.stallDetector.stop();
     this.lagMonitor.stop();
 
@@ -179,7 +215,7 @@ export class ScheduleEngine implements IOqronModule {
       if (job.worker) {
         await job.worker.stop();
       } else {
-        await Lock.release(job.lockKey, this.nodeId).catch(() => {});
+        await this.di.lock.release(job.lockKey, this.nodeId).catch(() => {});
       }
     }
     this.activeJobs.clear();
@@ -274,7 +310,11 @@ export class ScheduleEngine implements IOqronModule {
   }
 
   private async tick(): Promise<void> {
-    if (!this.leader?.isLeader) return;
+    // Check leadership: either single-leader or at least one shard
+    const isLeader = this.shardedLeader
+      ? this.shardedLeader.isLeader
+      : this.leader?.isLeader;
+    if (!isLeader) return;
 
     if (!this._hasRunLeaderInit) {
       this._hasRunLeaderInit = true;
@@ -288,10 +328,14 @@ export class ScheduleEngine implements IOqronModule {
       }
 
       const now = new Date();
-      const allSchedules = await Storage.list<any>("schedules");
+      const allSchedules = await this.di.storage.list<any>("schedules");
       const due = allSchedules
         .filter((s) => s.nextRunAt && new Date(s.nextRunAt) <= now && !s.paused)
-        .map((s) => s.name);
+        .map((s) => s.name)
+        // If using sharded leader, only process schedules that hash to our owned shards
+        .filter((name) =>
+          this.shardedLeader ? this.shardedLeader.ownsJob(name) : true,
+        );
 
       for (const name of due) {
         const def = this.schedules.get(name);
@@ -315,8 +359,8 @@ export class ScheduleEngine implements IOqronModule {
               const nextRun = this.computeNextRun(def, now);
               if (nextRun) {
                 const existing =
-                  (await Storage.get<any>("schedules", def.name)) || {};
-                await Storage.save("schedules", def.name, {
+                  (await this.di.storage.get<any>("schedules", def.name)) || {};
+                await this.di.storage.save("schedules", def.name, {
                   ...existing,
                   nextRunAt: nextRun,
                 });
@@ -341,8 +385,8 @@ export class ScheduleEngine implements IOqronModule {
               { name: def.name },
             );
             const existing =
-              (await Storage.get<any>("schedules", def.name)) || {};
-            await Storage.save("schedules", def.name, {
+              (await this.di.storage.get<any>("schedules", def.name)) || {};
+            await this.di.storage.save("schedules", def.name, {
               ...existing,
               nextRunAt: null,
             });
@@ -350,8 +394,9 @@ export class ScheduleEngine implements IOqronModule {
           }
         }
 
-        const existing = (await Storage.get<any>("schedules", def.name)) || {};
-        await Storage.save("schedules", def.name, {
+        const existing =
+          (await this.di.storage.get<any>("schedules", def.name)) || {};
+        await this.di.storage.save("schedules", def.name, {
           ...existing,
           nextRunAt: nextRun,
         });
@@ -402,7 +447,7 @@ export class ScheduleEngine implements IOqronModule {
 
     if (def.guaranteedWorker) {
       worker = new HeartbeatWorker(
-        Lock,
+        this.di.lock,
         this.logger,
         lockKey,
         this.nodeId,
@@ -411,7 +456,7 @@ export class ScheduleEngine implements IOqronModule {
       );
       acquired = await worker.start();
     } else {
-      acquired = await Lock.acquire(
+      acquired = await this.di.lock.acquire(
         lockKey,
         this.nodeId,
         def.lockTtlMs ?? 30_000,
@@ -424,7 +469,7 @@ export class ScheduleEngine implements IOqronModule {
     this.activeJobs.set(runId, entry);
 
     // Persist running job state
-    await Storage.save("schedule_history", runId, {
+    await this.di.storage.save("schedule_history", runId, {
       id: runId,
       type: "schedule",
       queueName: "system_schedule",
@@ -452,9 +497,12 @@ export class ScheduleEngine implements IOqronModule {
         project: this.project,
         onProgress: async (percent, label) => {
           try {
-            const job = await Storage.get<any>("schedule_history", runId);
+            const job = await this.di.storage.get<any>(
+              "schedule_history",
+              runId,
+            );
             if (job) {
-              await Storage.save("schedule_history", runId, {
+              await this.di.storage.save("schedule_history", runId, {
                 ...job,
                 progressPercent: percent,
                 progressLabel: label,
@@ -545,7 +593,7 @@ export class ScheduleEngine implements IOqronModule {
       }
 
       const finishedAt = new Date();
-      await Storage.save("schedule_history", runId, {
+      await this.di.storage.save("schedule_history", runId, {
         id: runId,
         type: "schedule",
         queueName: "system_schedule",
@@ -571,7 +619,7 @@ export class ScheduleEngine implements IOqronModule {
       if (worker) {
         await worker.stop();
       } else {
-        await Lock.release(lockKey, this.nodeId).catch(() => {});
+        await this.di.lock.release(lockKey, this.nodeId).catch(() => {});
       }
       this.activeJobs.delete(runId);
 

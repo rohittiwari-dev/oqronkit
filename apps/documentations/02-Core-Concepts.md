@@ -147,3 +147,122 @@ taskQueue({ name: "urgent-tasks", strategy: "priority", handler: ... });
 // Or globally:
 defineConfig({ taskQueue: { strategy: "lifo" } });
 ```
+
+---
+
+## 8. Job Dependencies (DAG)
+
+Jobs can declare parent dependencies, forming a Directed Acyclic Graph (DAG). Children wait in a `"waiting-children"` status until all parents complete:
+
+```typescript
+import { taskQueue } from "oqronkit";
+
+const extractQueue = taskQueue({ name: "extract", handler: async (ctx) => { /* ... */ } });
+const transformQueue = taskQueue({ name: "transform", handler: async (ctx) => { /* ... */ } });
+
+// Parent jobs
+const extract1 = await extractQueue.add({ source: "users.csv" });
+const extract2 = await extractQueue.add({ source: "orders.csv" });
+
+// Child waits for both parents to complete
+const transform = await transformQueue.add(
+  { mergeFrom: ["users", "orders"] },
+  { dependsOn: [extract1.id, extract2.id] }
+);
+```
+
+### Failure Policies
+
+When a parent job fails, the child's behavior is configurable:
+
+| Policy | Behavior |
+|--------|----------|
+| `"block"` (default) | Child stays in `"waiting-children"` indefinitely |
+| `"cascade-fail"` | Child is immediately marked as `"failed"` |
+| `"ignore"` | Child proceeds as if the parent succeeded |
+
+```typescript
+await transformQueue.add(data, {
+  dependsOn: [parentId],
+  parentFailurePolicy: "cascade-fail",
+});
+```
+
+---
+
+## 9. Cron Clustering (Multi-Region)
+
+In geo-distributed deployments, a single leader becomes a bottleneck. OqronKit's **Sharded Leader Election** distributes schedule ownership across multiple regions:
+
+```typescript
+import { defineConfig } from "oqronkit";
+
+// Region A nodes — own shards 0-3
+export default defineConfig({
+  scheduler: {
+    clustering: {
+      totalShards: 8,
+      ownedShards: [0, 1, 2, 3],
+      region: "us-east",
+    },
+  },
+});
+
+// Region B nodes — own shards 4-7
+export default defineConfig({
+  scheduler: {
+    clustering: {
+      totalShards: 8,
+      ownedShards: [4, 5, 6, 7],
+      region: "eu-west",
+    },
+  },
+});
+```
+
+Each schedule name is deterministically hashed (MD5) to a shard index. A node only processes schedules that hash to shards it currently leads. If a region goes down, its shard locks expire and surviving nodes can recover them.
+
+> **Backward Compatible:** `totalShards: 1` (default) works identically to the original single-leader election.
+
+---
+
+## 10. Sandboxed Processors
+
+For processing untrusted or user-submitted code, OqronKit provides **worker_threads isolation** with enforced resource limits:
+
+```typescript
+import { Worker } from "oqronkit";
+
+const sandboxedWorker = new Worker(
+  "user-code-runner",
+  "./processors/user-script.js",     // Must be a file path for sandbox
+  {
+    sandbox: {
+      enabled: true,
+      timeout: 15_000,      // Force-kill after 15 seconds
+      maxMemoryMb: 256,     // Cap V8 heap at 256MB
+    },
+  }
+);
+```
+
+### How It Works
+
+1. The processor file is loaded in a **separate V8 isolate** (`worker_threads.Worker`)
+2. `resourceLimits.maxOldGenerationSizeMb` caps memory — exceeding it crashes the thread, not the host
+3. A `setTimeout` enforces execution deadlines — the thread is `terminate()`d on timeout
+4. Job data is deep-cloned via structured clone — no shared state with the main thread
+
+### Processor File Format
+
+The sandboxed file must export a default async function:
+
+```typescript
+// ./processors/user-script.js
+import { parentPort, workerData } from "node:worker_threads";
+
+const job = workerData.job;
+const result = await processUserCode(job.data);
+parentPort?.postMessage(result);
+```
+

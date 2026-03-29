@@ -34,6 +34,17 @@ export interface WorkerOptions {
     onSuccess?: (job: OqronJob<any, any>, result: any) => Promise<void> | void;
     onFail?: (job: OqronJob<any, any>, error: Error) => Promise<void> | void;
   };
+  /** Sandboxed processor isolation via worker_threads */
+  sandbox?: {
+    /** Enable worker_threads isolation. @default false */
+    enabled: boolean;
+    /** Max execution time in ms before force-kill. @default 30000 */
+    timeout?: number;
+    /** Max memory in MB (sets resourceLimits.maxOldGenerationSizeMb). @default 512 */
+    maxMemoryMb?: number;
+    /** Transfer only serializable data (no shared references). @default true */
+    transferOnly?: boolean;
+  };
 }
 
 // Internal registry tracking all Worker instances

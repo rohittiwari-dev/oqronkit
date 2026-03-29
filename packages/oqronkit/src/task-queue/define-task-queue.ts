@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
-import { Broker, Storage } from "../engine/index.js";
+import { OqronContainer } from "../engine/index.js";
 import type { OqronJob } from "../engine/types/job.types.js";
+import { DependencyResolver } from "../engine/utils/dependency-resolver.js";
 import { registerTaskQueue } from "./registry.js";
 import type { ITaskQueue, TaskQueueConfig } from "./types.js";
 
@@ -16,13 +17,19 @@ export function taskQueue<T = any, R = any>(
   return {
     name: config.name,
     add: async (data, opts) => {
+      const di = OqronContainer.get();
       const jobId = opts?.jobId ?? randomUUID();
+      const hasDeps = opts?.dependsOn && opts.dependsOn.length > 0;
 
       const job: OqronJob = {
         id: jobId,
         type: "task",
         queueName: config.name,
-        status: opts?.delay ? "delayed" : "waiting",
+        status: hasDeps
+          ? "waiting-children"
+          : opts?.delay
+            ? "delayed"
+            : "waiting",
         data,
         opts: opts ?? {},
         attemptMade: 0,
@@ -33,10 +40,25 @@ export function taskQueue<T = any, R = any>(
       };
 
       // 1. Storage
-      await Storage.save("jobs", jobId, job);
+      await di.storage.save("jobs", jobId, job);
 
-      // 2. Transport
-      await Broker.publish(config.name, jobId, opts?.delay);
+      // 2. Register dependencies (add childId to parent jobs)
+      if (hasDeps) {
+        await DependencyResolver.registerDependencies(
+          di.storage,
+          jobId,
+          opts!.dependsOn!,
+        );
+        // Don't publish to broker — job stays in waiting-children until parents finish
+      } else {
+        // 3. Transport
+        await di.broker.publish(
+          config.name,
+          jobId,
+          opts?.delay,
+          opts?.priority,
+        );
+      }
 
       return job as any;
     },

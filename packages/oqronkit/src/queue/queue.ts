@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { Broker, Storage } from "../engine/index.js";
+import { OqronContainer } from "../engine/index.js";
 import type { OqronJob, OqronJobOptions } from "../engine/types/job.types.js";
 
 export interface QueueOptions {
@@ -14,7 +14,12 @@ export class Queue<T = any, R = any> {
   constructor(
     public readonly name: string,
     private options?: QueueOptions,
+    private container?: OqronContainer,
   ) {}
+
+  private get di(): OqronContainer {
+    return this.container ?? OqronContainer.get();
+  }
 
   /**
    * Pushes a new job into the persistent data store and signals the broker.
@@ -44,10 +49,15 @@ export class Queue<T = any, R = any> {
     };
 
     // 1. Persist to Storage (Source of Truth)
-    await Storage.save("jobs", jobId, job);
+    await this.di.storage.save("jobs", jobId, job);
 
     // 2. Signal Broker (Execution Trigger) — forward priority for sorted-set ordering
-    await Broker.publish(this.name, jobId, finalOpts.delay, finalOpts.priority);
+    await this.di.broker.publish(
+      this.name,
+      jobId,
+      finalOpts.delay,
+      finalOpts.priority,
+    );
 
     return job;
   }

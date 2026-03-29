@@ -1,16 +1,26 @@
-# OqronKit Documentation (v1.0)
+# OqronKit Documentation
 
-Welcome to the definitive documentation for **OqronKit v1.0** — the enterprise-grade, framework-agnostic background computation engine for Node.js. Features 4 production-ready modules, 3 adapter backends (Memory/Redis/PostgreSQL), DI container, AbortController cancellation, and FIFO/LIFO/Priority job ordering.
+Start with the Introduction and work through each chapter sequentially:
 
-## Table of Contents
+1. [Introduction — The Problem & The Solution](./01-Introduction.md)
+2. [Core Concepts](./02-Core-Concepts.md) — Modules, Leader Election, Crash Safety, DI, Cancellation, Ordering, **Job Dependencies (DAG)**, **Cron Clustering**, **Sandboxed Processors**
+3. [Module Guide: Cron & Schedule](./03-Module-Guide-Cron-and-Schedule.md)
+4. [Module Guide: TaskQueue](./04-Module-Guide-TaskQueue.md)
+5. [Module Guide: Queue + Worker](./05-Module-Guide-Queue-Worker.md)
+6. [TaskQueue vs Queue/Worker](./06-TaskQueue-vs-Queue-Worker.md)
+7. [Job Lifecycle & Retention](./07-Job-Lifecycle-and-Retention.md)
+8. [Configuration Reference](./08-Configuration-Reference.md) — All options including `clustering` and `sandbox`
+9. [Real-World Examples](./09-Real-World-Examples.md) — 10 production-grade examples including ETL DAGs, multi-region cron, and sandboxed code runners
+10. [Roadmap & Future](./10-Roadmap-and-Future.md)
 
-1. [01-Introduction.md](./01-Introduction.md) — The Problem & The Solution
-2. [02-Core-Concepts.md](./02-Core-Concepts.md) — Multi-Tenancy, Leader Election, Crash Safety
-3. [03-Module-Guide-Cron-and-Schedule.md](./03-Module-Guide-Cron-and-Schedule.md) — Time-Driven vs Data-Driven Scheduling
-4. [04-Module-Guide-TaskQueue.md](./04-Module-Guide-TaskQueue.md) — Monolithic Task Processing
-5. [05-Module-Guide-Queue-Worker.md](./05-Module-Guide-Queue-Worker.md) — Distributed Queue/Worker Architecture
-6. [06-TaskQueue-vs-Queue-Worker.md](./06-TaskQueue-vs-Queue-Worker.md) — When to Use Which (Detailed Comparison)
-7. [07-Job-Lifecycle-and-Retention.md](./07-Job-Lifecycle-and-Retention.md) — States, Retries, Backoff, History Pruning
-8. [08-Configuration-Reference.md](./08-Configuration-Reference.md) — Every Config Option Documented
-9. [09-Real-World-Examples.md](./09-Real-World-Examples.md) — Production-Grade Code Examples
-10. [10-Roadmap-and-Future.md](./10-Roadmap-and-Future.md) — Upcoming Features
+## Backend Example App
+
+Working examples in [`apps/backend/src/jobs/`](../backend/src/jobs/):
+
+| File | Demonstrates |
+|------|-------------|
+| `crons.ts` | Cron definitions with overlap, timeouts, and progress |
+| `scheduler.ts` | Data-driven parameterized schedules |
+| `task-queues.ts` | Monolithic task queues with typed I/O |
+| `distributed-workers.ts` | Queue + Worker decoupled architecture |
+| `advanced-patterns.ts` | **NEW** — Job Dependencies (DAG), Cron Clustering, Sandboxed Processors |

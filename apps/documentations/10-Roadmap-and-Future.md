@@ -16,8 +16,11 @@ OqronKit v1.0 is a production-grade, enterprise-ready distributed processing eng
 ### Infrastructure — Completed
 
 - ✅ **Multi-Adapter Architecture** — Memory, Redis, and PostgreSQL
-- ✅ **DI Container** (`OqronContainer`) — Replaces globals with Proxy shims for backward compatibility
+- ✅ **DI Container** (`OqronContainer`) — Full injection across all engines, no Proxy shim dependencies
 - ✅ **Job Cancellation** — `AbortController`-based mid-execution cancel via `ctx.signal`
+- ✅ **Job Dependencies (DAG)** — `dependsOn` parent IDs with configurable failure policy
+- ✅ **Cron Clustering** — Sharded multi-region leader election for geo-distributed scheduling
+- ✅ **Sandboxed Processors** — `worker_threads` isolation with resource limits for untrusted code
 - ✅ **Job Ordering Strategies** — FIFO, LIFO, and Priority across all brokers
 - ✅ **PostgreSQL Adapter** — `FOR UPDATE SKIP LOCKED` atomic claiming, JSONB+GIN storage, advisory locks
 - ✅ **Redis Adapter Suite** — Sorted sets, Lua scripts, Redlock
@@ -38,8 +41,8 @@ OqronKit v1.0 is a production-grade, enterprise-ready distributed processing eng
 
 | Metric | Value |
 |--------|:-----:|
-| Test Files | **26** |
-| Tests Passing | **253** |
+| Test Files | **29** |
+| Tests Passing | **275** |
 | Type Errors | **0** |
 | Module Grades | **A+ across all 16 modules** |
 
@@ -76,12 +79,6 @@ A standalone Next.js server-rendered dashboard to:
 - **Kafka** — For ultra-high-throughput event streaming
 - **RabbitMQ** — For advanced routing and exchange topologies
 - **AWS SQS** — For serverless-native deployments
-
-### Advanced Patterns
-- **Job Dependencies** — `waitForJob("parent-id")` before processing
-- **Cron Clustering** — Multiple cron leaders across regions for geo-distributed scheduling
-- **Sandboxed Processors** — Worker thread isolation for untrusted handler code
-- **Full DI Container Migration** — Replace remaining Proxy shims in ScheduleEngine, Queue, QueueEvents
 
 ---
 

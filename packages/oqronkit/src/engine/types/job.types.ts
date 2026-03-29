@@ -20,6 +20,7 @@ export type JobType =
 
 export type JobStatus =
   | "waiting" // Signaled to broker, ready for worker
+  | "waiting-children" // Blocked until all parent jobs complete
   | "active" // Claimed by a worker
   | "completed" // Finished successfully
   | "failed" // Finished with error (retries exhausted)
@@ -99,6 +100,21 @@ export interface OqronJobOptions {
    * Same semantics as removeOnComplete.
    */
   removeOnFail?: RemoveOnConfig;
+
+  /**
+   * Parent job IDs this job depends on.
+   * Job stays in `waiting-children` status until all parents are `completed`.
+   */
+  dependsOn?: string[];
+
+  /**
+   * What to do when a parent job fails.
+   * - `"block"` → child stays in `waiting-children` forever (default)
+   * - `"cascade-fail"` → child automatically fails
+   * - `"ignore"` → child proceeds regardless of parent failure
+   * @default "block"
+   */
+  parentFailurePolicy?: "block" | "cascade-fail" | "ignore";
 }
 
 // ── Flow Jobs (DAG) ─────────────────────────────────────────────────────────
@@ -177,6 +193,9 @@ export interface OqronJob<T = any, R = any> {
 
   /** Parent job ID (for flow/DAG) */
   parentId?: string;
+
+  /** IDs of child jobs that depend on this job */
+  childrenIds?: string[];
 
   /** Linked cron/schedule definition name */
   scheduleId?: string;
