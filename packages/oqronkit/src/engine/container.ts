@@ -1,3 +1,4 @@
+import type { OqronConfig } from "./types/config.types.js";
 import type {
   IBrokerEngine,
   ILockAdapter,
@@ -30,7 +31,13 @@ export class OqronContainer {
     public readonly storage: IStorageEngine,
     public readonly broker: IBrokerEngine,
     public readonly lock: ILockAdapter,
+    private readonly _config?: OqronConfig,
   ) {}
+
+  /** Access the resolved config (environment, project, etc.) */
+  get config(): OqronConfig | undefined {
+    return this._config;
+  }
 
   /**
    * Initialize the global singleton container.
@@ -40,8 +47,14 @@ export class OqronContainer {
     storage: IStorageEngine,
     broker: IBrokerEngine,
     lock: ILockAdapter,
+    config?: OqronConfig,
   ): OqronContainer {
-    OqronContainer._instance = new OqronContainer(storage, broker, lock);
+    OqronContainer._instance = new OqronContainer(
+      storage,
+      broker,
+      lock,
+      config,
+    );
     return OqronContainer._instance;
   }
 

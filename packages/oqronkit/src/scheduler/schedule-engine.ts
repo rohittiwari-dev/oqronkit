@@ -86,6 +86,11 @@ export class ScheduleEngine implements IOqronModule {
     return this.container ?? OqronContainer.get();
   }
 
+  /** Scoped key prefix for locks and leader election. */
+  private get lockPrefix(): string {
+    return `oqron:${this.project ?? "default"}:${this.environment ?? "development"}`;
+  }
+
   // ── Lifecycle ───────────────────────────────────────────────────────────────
 
   async init(): Promise<void> {
@@ -134,7 +139,7 @@ export class ScheduleEngine implements IOqronModule {
       this.shardedLeader = new ShardedLeaderElection(
         this.di.lock,
         this.logger,
-        "oqron:scheduleengine:leader",
+        `${this.lockPrefix}:scheduleengine:leader`,
         this.nodeId,
         clustering.totalShards!,
         clustering.ownedShards ?? [0],
@@ -146,7 +151,7 @@ export class ScheduleEngine implements IOqronModule {
       this.leader = new LeaderElection(
         this.di.lock,
         this.logger,
-        "oqron:scheduleengine:leader",
+        `${this.lockPrefix}:scheduleengine:leader`,
         this.nodeId,
         30_000,
       );
@@ -413,7 +418,7 @@ export class ScheduleEngine implements IOqronModule {
 
     if (isOverlapSkip) {
       for (const job of this.activeJobs.values()) {
-        if (job.lockKey === `oqron:schedule:run:${def.name}`) {
+        if (job.lockKey === `${this.lockPrefix}:schedule:run:${def.name}`) {
           this.logger.debug("Skipping overlapping run", { name: def.name });
           return;
         }
@@ -423,7 +428,9 @@ export class ScheduleEngine implements IOqronModule {
     if (def.maxConcurrent) {
       let activeCount = 0;
       for (const job of this.activeJobs.values()) {
-        if (job.lockKey.startsWith(`oqron:schedule:run:${def.name}`))
+        if (
+          job.lockKey.startsWith(`${this.lockPrefix}:schedule:run:${def.name}`)
+        )
           activeCount++;
       }
       if (activeCount >= def.maxConcurrent) {
@@ -438,8 +445,8 @@ export class ScheduleEngine implements IOqronModule {
 
     const runId = randomUUID();
     const lockKey = isOverlapSkip
-      ? `oqron:schedule:run:${def.name}`
-      : `oqron:schedule:run:${def.name}:${runId}`;
+      ? `${this.lockPrefix}:schedule:run:${def.name}`
+      : `${this.lockPrefix}:schedule:run:${def.name}:${runId}`;
     const startedAt = new Date();
 
     let worker: HeartbeatWorker | undefined;

@@ -213,16 +213,17 @@ export class TaskQueueEngine implements IOqronModule {
         continue;
       }
 
-      // Environment isolation: skip jobs from different environments
+      // Environment isolation: nack jobs from different environments
       if (
         job.environment &&
         this.config.environment &&
         job.environment !== this.config.environment
       ) {
-        this.logger.debug(`Skipping job ${id} — wrong environment`, {
+        this.logger.warn(`Returning job ${id} — wrong environment`, {
           jobEnv: job.environment,
           workerEnv: this.config.environment,
         });
+        await this.di.broker.nack(q.name, id);
         continue;
       }
 

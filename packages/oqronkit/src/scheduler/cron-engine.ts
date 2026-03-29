@@ -73,6 +73,11 @@ export class SchedulerModule implements IOqronModule {
     this.missedFireHandler = new MissedFireHandler(this.logger);
   }
 
+  /** Scoped key prefix for locks and leader election. */
+  private get lockPrefix(): string {
+    return `oqron:${this.project ?? "default"}:${this.environment ?? "development"}`;
+  }
+
   // ── Lifecycle ───────────────────────────────────────────────────────────────
 
   async init(): Promise<void> {
@@ -111,7 +116,7 @@ export class SchedulerModule implements IOqronModule {
       this.leader = new LeaderElection(
         Lock,
         this.logger,
-        "oqron:scheduler:leader",
+        `${this.lockPrefix}:scheduler:leader`,
         this.nodeId,
         30_000,
       );
@@ -351,7 +356,7 @@ export class SchedulerModule implements IOqronModule {
     // Local overlap check
     if (isOverlapSkip) {
       for (const job of this.activeJobs.values()) {
-        if (job.lockKey === `oqron:run:${def.name}`) {
+        if (job.lockKey === `${this.lockPrefix}:run:${def.name}`) {
           this.logger.debug("Skipping overlapping run", { name: def.name });
           return;
         }
@@ -362,7 +367,8 @@ export class SchedulerModule implements IOqronModule {
     if (def.maxConcurrent) {
       let activeCount = 0;
       for (const job of this.activeJobs.values()) {
-        if (job.lockKey.startsWith(`oqron:run:${def.name}`)) activeCount++;
+        if (job.lockKey.startsWith(`${this.lockPrefix}:run:${def.name}`))
+          activeCount++;
       }
       if (activeCount >= def.maxConcurrent) {
         this.logger.debug("Skipping — maxConcurrent reached", {
@@ -376,8 +382,8 @@ export class SchedulerModule implements IOqronModule {
 
     const runId = randomUUID();
     const lockKey = isOverlapSkip
-      ? `oqron:run:${def.name}`
-      : `oqron:run:${def.name}:${runId}`;
+      ? `${this.lockPrefix}:run:${def.name}`
+      : `${this.lockPrefix}:run:${def.name}:${runId}`;
     const startedAt = new Date();
 
     // ── Acquire lock ──────────────────────────────────────────────────────

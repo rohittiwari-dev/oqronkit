@@ -87,9 +87,10 @@ export async function initEngine(config: OqronConfig): Promise<void> {
       _redisClientOwned = false;
     }
 
-    storage = new RedisStore(_redisClient, config.project);
-    broker = new RedisBroker(_redisClient, config.project);
-    lock = new RedisLock(_redisClient, config.project);
+    const prefix = `${config.project}:${config.environment ?? "development"}`;
+    storage = new RedisStore(_redisClient, prefix);
+    broker = new RedisBroker(_redisClient, prefix);
+    lock = new RedisLock(_redisClient, prefix);
     _pgAdapters = null;
   } else {
     // ── Memory Adapters (monolith / development) ───────────────────────────
@@ -102,7 +103,7 @@ export async function initEngine(config: OqronConfig): Promise<void> {
   }
 
   // Initialize the DI container — both the global singleton and the proxy shims
-  OqronContainer.init(storage, broker, lock);
+  OqronContainer.init(storage, broker, lock, config);
 }
 
 /**

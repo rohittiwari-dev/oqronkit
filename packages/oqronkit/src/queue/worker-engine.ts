@@ -223,16 +223,17 @@ export class WorkerEngine implements IOqronModule {
         continue;
       }
 
-      // Environment isolation
+      // Environment isolation: nack jobs from different environments
       if (
         job.environment &&
         this.config.environment &&
         job.environment !== this.config.environment
       ) {
-        this.logger.debug(`Skipping job ${id} — wrong environment`, {
+        this.logger.warn(`Returning job ${id} — wrong environment`, {
           jobEnv: job.environment,
           workerEnv: this.config.environment,
         });
+        await broker.nack(w.name, id);
         continue;
       }
 

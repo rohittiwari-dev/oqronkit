@@ -35,6 +35,8 @@ export function taskQueue<T = any, R = any>(
         attemptMade: 0,
         progressPercent: 0,
         tags: [],
+        environment: di.config?.environment,
+        project: di.config?.project,
         createdAt: new Date(),
         runAt: opts?.delay ? new Date(Date.now() + opts.delay) : undefined,
       };

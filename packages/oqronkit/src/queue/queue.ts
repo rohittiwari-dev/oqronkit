@@ -42,6 +42,8 @@ export class Queue<T = any, R = any> {
       attemptMade: 0,
       progressPercent: 0,
       tags: [],
+      environment: this.di.config?.environment,
+      project: this.di.config?.project,
       createdAt: new Date(),
       runAt: finalOpts.delay
         ? new Date(Date.now() + finalOpts.delay)
