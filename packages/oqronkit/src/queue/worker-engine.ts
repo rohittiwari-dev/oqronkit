@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { Worker as ThreadWorker } from "node:worker_threads";
 import type { IOqronModule, Logger } from "../engine/index.js";
-import { Broker, Lock, OqronEventBus, Storage } from "../engine/index.js";
+import { OqronContainer, OqronEventBus } from "../engine/index.js";
 import { HeartbeatWorker } from "../engine/lock/heartbeat-worker.js";
 import { StallDetector } from "../engine/lock/stall-detector.js";
 import type { OqronConfig } from "../engine/types/config.types.js";
@@ -20,13 +20,20 @@ export class WorkerEngine implements IOqronModule {
   private activeJobs = new Map<string, Promise<void>>();
   /** Active heartbeat workers keyed by job ID */
   private heartbeats = new Map<string, HeartbeatWorker>();
+  /** AbortControllers keyed by job ID — for mid-execution cancellation */
+  private abortControllers = new Map<string, AbortController>();
   /** Stall detector — reclaims jobs whose heartbeat locks have expired */
   private stallDetector: StallDetector | null = null;
 
   constructor(
     private config: OqronConfig,
     private logger: Logger,
+    private container?: OqronContainer,
   ) {}
+
+  private get di(): OqronContainer {
+    return this.container ?? OqronContainer.get();
+  }
 
   async init(): Promise<void> {
     const modules = this.config.modules || [];
@@ -54,7 +61,11 @@ export class WorkerEngine implements IOqronModule {
 
     // Start stall detector
     const stalledInterval = this.config.worker?.stalledInterval ?? 30000;
-    this.stallDetector = new StallDetector(Lock, this.logger, stalledInterval);
+    this.stallDetector = new StallDetector(
+      this.di.lock,
+      this.logger,
+      stalledInterval,
+    );
     this.stallDetector.start(
       () =>
         Array.from(this.heartbeats.entries()).map(([jobId]) => ({
@@ -75,7 +86,7 @@ export class WorkerEngine implements IOqronModule {
         if (workerName) {
           const broker =
             workers.find((w) => w.name === workerName)?.options?.connection ??
-            Broker;
+            this.di.broker;
           void broker.nack(workerName, jobId);
         }
       },
@@ -93,6 +104,12 @@ export class WorkerEngine implements IOqronModule {
     // Stop stall detector
     this.stallDetector?.stop();
     this.stallDetector = null;
+
+    // Abort all active jobs
+    for (const controller of this.abortControllers.values()) {
+      controller.abort();
+    }
+    this.abortControllers.clear();
 
     // Stop all active heartbeats
     for (const hb of this.heartbeats.values()) {
@@ -122,6 +139,44 @@ export class WorkerEngine implements IOqronModule {
     return false;
   }
 
+  /**
+   * Cancel an actively running job via AbortController.
+   * Aborts the handler, stops the heartbeat, marks the job as failed.
+   */
+  async cancelActiveJob(jobId: string): Promise<boolean> {
+    const controller = this.abortControllers.get(jobId);
+    if (!controller) return false;
+
+    controller.abort();
+    this.abortControllers.delete(jobId);
+
+    // Stop heartbeat
+    const hb = this.heartbeats.get(jobId);
+    if (hb) {
+      await hb.stop();
+      this.heartbeats.delete(jobId);
+    }
+
+    // Mark job as failed/cancelled in storage
+    const job = await this.di.storage.get<OqronJob>("jobs", jobId);
+    if (job) {
+      job.status = "failed";
+      job.error = "Cancelled";
+      job.finishedAt = new Date();
+      await this.di.storage.save("jobs", jobId, job);
+
+      await this.di.broker.ack(job.queueName, jobId);
+      OqronEventBus.emit(
+        "job:fail",
+        job.queueName,
+        jobId,
+        new Error("Cancelled"),
+      );
+    }
+
+    return true;
+  }
+
   private startPolling(w: Worker) {
     const heartbeatMs = this.config.worker?.heartbeatMs ?? 5000;
     const t = setInterval(() => {
@@ -144,7 +199,7 @@ export class WorkerEngine implements IOqronModule {
     const freeSlots = concurrency - this.activeJobs.size;
     if (freeSlots <= 0) return;
 
-    const broker = w.options?.connection ?? Broker;
+    const broker = w.options?.connection ?? this.di.broker;
 
     // Claim IDs from Broker with ordering strategy
     const strategy: BrokerStrategy =
@@ -159,7 +214,7 @@ export class WorkerEngine implements IOqronModule {
 
     for (const id of jobIds) {
       // Fetch full payload from Storage
-      const job = await Storage.get<OqronJob>("jobs", id);
+      const job = await this.di.storage.get<OqronJob>("jobs", id);
       if (!job) {
         this.logger.error(`Claimed job ${id} not found in Storage!`, { id });
         await broker.ack(w.name, id);
@@ -218,7 +273,7 @@ export class WorkerEngine implements IOqronModule {
     // ── Start HeartbeatWorker for crash-safe lock renewal ─────────────────
     const lockKey = `worker:job:${job.id}`;
     const heartbeat = new HeartbeatWorker(
-      Lock,
+      this.di.lock,
       this.logger,
       lockKey,
       this.workerIdStr,
@@ -233,6 +288,10 @@ export class WorkerEngine implements IOqronModule {
     }
     this.heartbeats.set(job.id, heartbeat);
 
+    // ── Create AbortController for cancellation support ────────────────────
+    const abortController = new AbortController();
+    this.abortControllers.set(job.id, abortController);
+
     OqronEventBus.emit("job:start", job.queueName, job.id, job.queueName);
 
     // Update DB to active
@@ -240,7 +299,7 @@ export class WorkerEngine implements IOqronModule {
     job.workerId = this.workerIdStr;
     job.startedAt = new Date();
     job.attemptMade = (job.attemptMade ?? 0) + 1;
-    await Storage.save("jobs", job.id, job);
+    await this.di.storage.save("jobs", job.id, job);
 
     let status: "completed" | "failed" = "completed";
     let error: string | undefined;
@@ -262,6 +321,11 @@ export class WorkerEngine implements IOqronModule {
         result = await w.processor(job as any);
       }
 
+      // Check if cancelled mid-execution
+      if (abortController.signal.aborted) {
+        throw new Error("Cancelled");
+      }
+
       status = "completed";
       error = undefined;
     } catch (e: any) {
@@ -269,8 +333,12 @@ export class WorkerEngine implements IOqronModule {
       status = "failed";
       job.stacktrace = e.stack ? [e.stack] : [];
 
+      // If cancelled, don't retry
+      if (abortController.signal.aborted) {
+        this.logger.info(`Worker job ${job.id} was cancelled`);
+      }
       // Check for broker-level retry via nack
-      if (job.attemptMade <= effectiveMaxRetries) {
+      else if (job.attemptMade <= effectiveMaxRetries) {
         const backoffOpts = job.opts?.backoff ?? {
           type: retryStrategy,
           delay: baseDelay,
@@ -287,11 +355,12 @@ export class WorkerEngine implements IOqronModule {
 
         job.status = "delayed";
         job.error = error;
-        await Storage.save("jobs", job.id, job);
+        await this.di.storage.save("jobs", job.id, job);
 
         // Stop heartbeat before nack
         await heartbeat.stop();
         this.heartbeats.delete(job.id);
+        this.abortControllers.delete(job.id);
 
         // Nack back to broker with delay — crash-safe
         await broker.nack(w.name, job.id, delay);
@@ -304,6 +373,9 @@ export class WorkerEngine implements IOqronModule {
         error,
       });
     }
+
+    // ── Clean up abort controller ────────────────────────────────────────
+    this.abortControllers.delete(job.id);
 
     // ── Stop heartbeat ──────────────────────────────────────────────────
     await heartbeat.stop();
@@ -320,7 +392,7 @@ export class WorkerEngine implements IOqronModule {
       job.progressLabel = "Completed";
     }
 
-    await Storage.save("jobs", job.id, job);
+    await this.di.storage.save("jobs", job.id, job);
     await broker.ack(job.queueName, job.id);
 
     // ── Events & Hooks ──────────────────────────────────────────────────

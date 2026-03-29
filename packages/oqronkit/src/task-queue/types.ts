@@ -8,6 +8,12 @@ export interface TaskJobContext<T = any> {
   /** The typed payload provided during tracking */
   data: T;
 
+  /**
+   * AbortSignal — fired when the job is cancelled mid-execution.
+   * Handlers should check `ctx.signal.aborted` periodically for long-running work.
+   */
+  signal: AbortSignal;
+
   /** Update the progression of the job, propagated to events */
   progress: (percent: number, label?: string) => Promise<void>;
 

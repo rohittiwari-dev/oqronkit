@@ -118,6 +118,20 @@ export class OqronManager {
   }
 
   async cancelJob(jobId: string): Promise<void> {
+    const job = await Storage.get<OqronJob>("jobs", jobId);
+
+    // If the job is actively running, try to abort it via the engine
+    if (job && job.status === "active") {
+      const registry = OqronRegistry.getInstance();
+      for (const mod of registry.getAll()) {
+        if (mod.cancelActiveJob) {
+          const cancelled = await mod.cancelActiveJob(jobId);
+          if (cancelled) return; // Engine handled cleanup + storage update
+        }
+      }
+    }
+
+    // For non-active jobs or if no engine claimed it, just delete from storage
     await Storage.delete("jobs", jobId);
   }
 }

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { IOqronModule, Logger } from "../engine/index.js";
-import { Broker, Lock, OqronEventBus, Storage } from "../engine/index.js";
+import { OqronContainer, OqronEventBus } from "../engine/index.js";
 import { HeartbeatWorker } from "../engine/lock/heartbeat-worker.js";
 import { StallDetector } from "../engine/lock/stall-detector.js";
 import type { OqronConfig } from "../engine/types/config.types.js";
@@ -20,13 +20,20 @@ export class TaskQueueEngine implements IOqronModule {
   private activeJobs = new Map<string, Promise<void>>();
   /** Active heartbeat workers keyed by job ID — for crash-safe lock renewal */
   private heartbeats = new Map<string, HeartbeatWorker>();
+  /** AbortControllers keyed by job ID — for mid-execution cancellation */
+  private abortControllers = new Map<string, AbortController>();
   /** Stall detector — reclaims jobs whose heartbeat locks have expired */
   private stallDetector: StallDetector | null = null;
 
   constructor(
     private config: OqronConfig,
     private logger: Logger,
+    private container?: OqronContainer,
   ) {}
+
+  private get di(): OqronContainer {
+    return this.container ?? OqronContainer.get();
+  }
 
   async init(): Promise<void> {
     const modules = this.config.modules || [];
@@ -53,7 +60,11 @@ export class TaskQueueEngine implements IOqronModule {
     // Start stall detector — checks for jobs whose heartbeat locks have expired
     const stalledInterval = this.config.taskQueue?.stalledInterval ?? 30000;
 
-    this.stallDetector = new StallDetector(Lock, this.logger, stalledInterval);
+    this.stallDetector = new StallDetector(
+      this.di.lock,
+      this.logger,
+      stalledInterval,
+    );
     this.stallDetector.start(
       () =>
         Array.from(this.heartbeats.entries()).map(([jobId, _hb]) => ({
@@ -71,7 +82,7 @@ export class TaskQueueEngine implements IOqronModule {
         // Find the queue name for nack
         const queueName = qs.find((_q) => this.activeJobs.has(jobId))?.name;
         if (queueName) {
-          void Broker.nack(queueName, jobId);
+          void this.di.broker.nack(queueName, jobId);
         }
       },
     );
@@ -86,6 +97,45 @@ export class TaskQueueEngine implements IOqronModule {
     return false;
   }
 
+  /**
+   * Cancel an actively running job via AbortController.
+   * Aborts the handler, stops the heartbeat, and marks the job as failed.
+   */
+  async cancelActiveJob(jobId: string): Promise<boolean> {
+    const controller = this.abortControllers.get(jobId);
+    if (!controller) return false;
+
+    controller.abort();
+    this.abortControllers.delete(jobId);
+
+    // Stop heartbeat
+    const hb = this.heartbeats.get(jobId);
+    if (hb) {
+      await hb.stop();
+      this.heartbeats.delete(jobId);
+    }
+
+    // Mark job as failed/cancelled in storage
+    const job = await this.di.storage.get<OqronJob>("jobs", jobId);
+    if (job) {
+      job.status = "failed";
+      job.error = "Cancelled";
+      job.finishedAt = new Date();
+      await this.di.storage.save("jobs", jobId, job);
+
+      // Ack from broker so it's not re-processed
+      await this.di.broker.ack(job.queueName, jobId);
+      OqronEventBus.emit(
+        "job:fail",
+        job.queueName,
+        jobId,
+        new Error("Cancelled"),
+      );
+    }
+
+    return true;
+  }
+
   async stop(): Promise<void> {
     this.running = false;
     for (const t of this.timers) clearInterval(t);
@@ -94,6 +144,12 @@ export class TaskQueueEngine implements IOqronModule {
     // Stop stall detector
     this.stallDetector?.stop();
     this.stallDetector = null;
+
+    // Abort all active jobs
+    for (const controller of this.abortControllers.values()) {
+      controller.abort();
+    }
+    this.abortControllers.clear();
 
     // Stop all active heartbeats
     for (const hb of this.heartbeats.values()) {
@@ -139,7 +195,7 @@ export class TaskQueueEngine implements IOqronModule {
     // 1. Claim IDs from Broker with ordering strategy
     const strategy: BrokerStrategy =
       q.strategy ?? this.config.taskQueue?.strategy ?? "fifo";
-    const jobIds = await Broker.claim(
+    const jobIds = await this.di.broker.claim(
       q.name,
       this.workerIdStr,
       freeSlots,
@@ -149,10 +205,10 @@ export class TaskQueueEngine implements IOqronModule {
 
     for (const id of jobIds) {
       // 2. Fetch full payload from Storage
-      const job = await Storage.get<OqronJob>("jobs", id);
+      const job = await this.di.storage.get<OqronJob>("jobs", id);
       if (!job) {
         this.logger.error(`Claimed job ${id} not found in Storage!`, { id });
-        await Broker.ack(q.name, id);
+        await this.di.broker.ack(q.name, id);
         continue;
       }
 
@@ -205,7 +261,7 @@ export class TaskQueueEngine implements IOqronModule {
     if (useGuaranteed) {
       const lockKey = `taskqueue:job:${job.id}`;
       heartbeat = new HeartbeatWorker(
-        Lock,
+        this.di.lock,
         this.logger,
         lockKey,
         this.workerIdStr,
@@ -216,19 +272,24 @@ export class TaskQueueEngine implements IOqronModule {
       if (!acquired) {
         this.logger.warn(`Failed to acquire heartbeat lock for job ${job.id}`);
         // Another worker may have claimed this — nack back to broker
-        await Broker.nack(q.name, job.id);
+        await this.di.broker.nack(q.name, job.id);
         return;
       }
       this.heartbeats.set(job.id, heartbeat);
     }
 
+    // ── Create AbortController for cancellation support ────────────────────
+    const abortController = new AbortController();
+    this.abortControllers.set(job.id, abortController);
+
     const ctx: TaskJobContext<any> = {
       id: job.id,
       data: job.data,
+      signal: abortController.signal,
       progress: async (percent, label) => {
         job.progressPercent = percent;
         job.progressLabel = label;
-        await Storage.save("jobs", job.id, job);
+        await this.di.storage.save("jobs", job.id, job);
         OqronEventBus.emit("job:progress", job.queueName, job.id, percent);
       },
       log: (level, msg) => {
@@ -247,7 +308,7 @@ export class TaskQueueEngine implements IOqronModule {
     job.workerId = this.workerIdStr;
     job.startedAt = new Date();
     job.attemptMade = (job.attemptMade ?? 0) + 1;
-    await Storage.save("jobs", job.id, job);
+    await this.di.storage.save("jobs", job.id, job);
 
     OqronEventBus.emit("job:start", job.queueName, job.id, q.name);
 
@@ -262,6 +323,11 @@ export class TaskQueueEngine implements IOqronModule {
         throw new Error("Job discarded by handler");
       }
 
+      // Check if we were cancelled mid-execution
+      if (abortController.signal.aborted) {
+        throw new Error("Cancelled");
+      }
+
       status = "completed";
       error = undefined;
     } catch (e: any) {
@@ -271,8 +337,12 @@ export class TaskQueueEngine implements IOqronModule {
       // Capture stacktrace
       job.stacktrace = e.stack ? [e.stack] : [];
 
+      // If cancelled, don't retry
+      if (abortController.signal.aborted) {
+        this.logger.info(`TaskQueue job ${job.id} was cancelled`);
+      }
       // Check if we should retry via nack (broker-level, crash-safe)
-      if (!internalDiscarded && job.attemptMade <= effectiveMaxRetries) {
+      else if (!internalDiscarded && job.attemptMade <= effectiveMaxRetries) {
         const backoffOpts = job.opts?.backoff ?? {
           type: retryStrategy,
           delay: baseDelay,
@@ -290,7 +360,7 @@ export class TaskQueueEngine implements IOqronModule {
         // Mark as delayed in storage so dashboards see the correct state
         job.status = "delayed";
         job.error = error;
-        await Storage.save("jobs", job.id, job);
+        await this.di.storage.save("jobs", job.id, job);
 
         // Stop heartbeat before nack
         if (heartbeat) {
@@ -298,9 +368,12 @@ export class TaskQueueEngine implements IOqronModule {
           this.heartbeats.delete(job.id);
         }
 
+        // Clean up abort controller
+        this.abortControllers.delete(job.id);
+
         // Nack back to broker with delay — crash-safe: if this process dies,
         // the job is already back in the broker's delayed set
-        await Broker.nack(q.name, job.id, delay);
+        await this.di.broker.nack(q.name, job.id, delay);
         return; // Exit — the job will be re-claimed on the next poll cycle
       }
 
@@ -312,6 +385,9 @@ export class TaskQueueEngine implements IOqronModule {
         error,
       });
     }
+
+    // ── Clean up abort controller ────────────────────────────────────────
+    this.abortControllers.delete(job.id);
 
     // ── Stop heartbeat ──────────────────────────────────────────────────
     if (heartbeat) {
@@ -331,8 +407,8 @@ export class TaskQueueEngine implements IOqronModule {
       job.progressLabel = "Completed";
     }
 
-    await Storage.save("jobs", job.id, job);
-    await Broker.ack(q.name, job.id);
+    await this.di.storage.save("jobs", job.id, job);
+    await this.di.broker.ack(q.name, job.id);
 
     // ── EventBus emissions ──────────────────────────────────────────────
     if (status === "completed") {

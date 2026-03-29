@@ -1,3 +1,4 @@
+import { OqronContainer } from "./container.js";
 import { MemoryBroker } from "./memory/memory-broker.js";
 import { MemoryLock } from "./memory/memory-lock.js";
 import { MemoryStore } from "./memory/memory-store.js";
@@ -11,10 +12,32 @@ import type {
   IStorageEngine,
 } from "./types/engine.js";
 
-// Global unified singletons
-export let Storage: IStorageEngine;
-export let Broker: IBrokerEngine;
-export let Lock: ILockAdapter;
+// ── Backward-Compatible Global Accessors ────────────────────────────────────
+// These proxy objects delegate all property access to the container singleton.
+// Existing code that imports `Storage`, `Broker`, `Lock` will continue to work
+// without any changes — including destructured imports.
+//
+// The trick: we export a Proxy that lazily resolves from OqronContainer.get().
+
+function createProxy<T extends object>(accessor: () => T): T {
+  return new Proxy({} as T, {
+    get(_target, prop, receiver) {
+      const real = accessor();
+      const val = Reflect.get(real, prop, receiver);
+      return typeof val === "function" ? val.bind(real) : val;
+    },
+  });
+}
+
+export const Storage: IStorageEngine = createProxy(
+  () => OqronContainer.get().storage,
+);
+export const Broker: IBrokerEngine = createProxy(
+  () => OqronContainer.get().broker,
+);
+export const Lock: ILockAdapter = createProxy(() => OqronContainer.get().lock);
+
+// ── Internal state for owned connections ────────────────────────────────────
 
 /**
  * Hold a reference to the Redis client so we can cleanly disconnect on shutdown.
@@ -31,6 +54,10 @@ let _pgAdapters: Array<{ close(): Promise<void> }> | null = null;
  * Priority: postgres > redis > memory (in-process monolith).
  */
 export async function initEngine(config: OqronConfig): Promise<void> {
+  let storage: IStorageEngine;
+  let broker: IBrokerEngine;
+  let lock: ILockAdapter;
+
   if (config.postgres) {
     // ── PostgreSQL Adapters ────────────────────────────────────────────────
     const { PostgresStore } = await import("./postgres/postgres-store.js");
@@ -41,11 +68,11 @@ export async function initEngine(config: OqronConfig): Promise<void> {
     const pool = config.postgres.poolSize ?? 10;
     const conn = config.postgres.connectionString;
 
-    Storage = new PostgresStore(conn, prefix, pool);
-    Broker = new PostgresBroker(conn, prefix, pool);
-    Lock = new PostgresLock(conn, prefix, pool);
+    storage = new PostgresStore(conn, prefix, pool);
+    broker = new PostgresBroker(conn, prefix, pool);
+    lock = new PostgresLock(conn, prefix, pool);
 
-    _pgAdapters = [Storage, Broker, Lock] as any[];
+    _pgAdapters = [storage, broker, lock] as any[];
     _redisClient = null;
     _redisClientOwned = false;
   } else if (config.redis) {
@@ -60,19 +87,22 @@ export async function initEngine(config: OqronConfig): Promise<void> {
       _redisClientOwned = false;
     }
 
-    Storage = new RedisStore(_redisClient, config.project);
-    Broker = new RedisBroker(_redisClient, config.project);
-    Lock = new RedisLock(_redisClient, config.project);
+    storage = new RedisStore(_redisClient, config.project);
+    broker = new RedisBroker(_redisClient, config.project);
+    lock = new RedisLock(_redisClient, config.project);
     _pgAdapters = null;
   } else {
     // ── Memory Adapters (monolith / development) ───────────────────────────
     _redisClient = null;
     _redisClientOwned = false;
     _pgAdapters = null;
-    Storage = new MemoryStore();
-    Broker = new MemoryBroker();
-    Lock = new MemoryLock();
+    storage = new MemoryStore();
+    broker = new MemoryBroker();
+    lock = new MemoryLock();
   }
+
+  // Initialize the DI container — both the global singleton and the proxy shims
+  OqronContainer.init(storage, broker, lock);
 }
 
 /**
@@ -107,4 +137,7 @@ export async function stopEngine(): Promise<void> {
   }
   _redisClient = null;
   _redisClientOwned = false;
+
+  // Reset the DI container
+  OqronContainer.reset();
 }

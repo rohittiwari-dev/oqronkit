@@ -37,7 +37,12 @@ export type {
   ScheduleRunAfter,
 } from "./engine/index.js";
 // ── Re-exports: single source of truth for ALL user-facing APIs ─────────────
-export { createLogger, defineConfig, OqronEventBus } from "./engine/index.js";
+export {
+  createLogger,
+  defineConfig,
+  OqronContainer,
+  OqronEventBus,
+} from "./engine/index.js";
 
 export { OqronManager } from "./manager/oqron-manager.js";
 export { Queue } from "./queue/queue.js";

@@ -6,6 +6,8 @@ export { reconfigureConfig } from "./config/default-config.js";
 export { defineConfig } from "./config/define-config.js";
 export type { ValidatedConfig } from "./config/schema.js";
 export { OqronConfigSchema } from "./config/schema.js";
+// ── DI Container ─────────────────────────────────────────────────────────────
+export { OqronContainer } from "./container.js";
 // ── Context ──────────────────────────────────────────────────────────────────
 export type { ICronContext } from "./context/cron-context.interface.js";
 export type { CronContextOptions } from "./context/cron-context.js";
