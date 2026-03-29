@@ -10,11 +10,12 @@
     "start": "tsx src/index.ts"
   },
   "dependencies": {
-    "oqronkit": "*",
+    "better-sqlite3": "^12.8.0",
     "express": "^4.21.2",
     "fastify": "^4.29.0",
     "hono": "^4.4.13",
-    "better-sqlite3": "^12.8.0"
+    "ioredis": "^5.10.1",
+    "oqronkit": "*"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",

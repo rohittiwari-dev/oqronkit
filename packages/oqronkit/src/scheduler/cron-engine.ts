@@ -3,18 +3,22 @@ import {
   CronContext,
   type CronDefinition,
   createLogger,
-  type ILockAdapter,
-  type IOqronAdapter,
   type IOqronModule,
   LagMonitor,
+  Lock,
   type Logger,
   OqronEventBus,
-} from "../core/index.js";
+  Storage,
+} from "../engine/index.js";
 import {
   HeartbeatWorker,
   LeaderElection,
   StallDetector,
-} from "../lock/index.js";
+} from "../engine/lock/index.js";
+import {
+  keepHistoryToRemoveConfig,
+  pruneAfterCompletion,
+} from "../engine/utils/job-retention.js";
 import { getNextRunDate } from "./expression-parser.js";
 import { MissedFireHandler } from "./missed-fire.handler.js";
 
@@ -43,8 +47,6 @@ export class SchedulerModule implements IOqronModule {
 
   constructor(
     private readonly schedules: CronDefinition[],
-    private readonly db: IOqronAdapter,
-    private readonly lock: ILockAdapter,
     logger?: Logger,
     private readonly environment?: string,
     private readonly project?: string,
@@ -52,8 +54,6 @@ export class SchedulerModule implements IOqronModule {
       enable?: boolean;
       timezone?: string;
       tickInterval?: number;
-      missedFirePolicy?: "skip" | "run-once" | "run-all";
-      maxConcurrentJobs?: number;
       leaderElection?: boolean;
       keepJobHistory?: boolean | number;
       keepFailedJobHistory?: boolean | number;
@@ -64,48 +64,42 @@ export class SchedulerModule implements IOqronModule {
     this.nodeId = randomUUID();
     this.logger =
       logger ?? createLogger({ level: "info" }, { module: "scheduler" });
-    this.stallDetector = new StallDetector(this.lock, this.logger, 15_000);
+    this.stallDetector = new StallDetector(Lock, this.logger, 15_000);
     this.lagMonitor = new LagMonitor(
       this.logger,
       this.config?.lagMonitor?.maxLagMs ?? 500,
       this.config?.lagMonitor?.sampleIntervalMs ?? 50,
     );
-    this.missedFireHandler = new MissedFireHandler(this.logger, this.db);
+    this.missedFireHandler = new MissedFireHandler(this.logger);
   }
 
   // ── Lifecycle ───────────────────────────────────────────────────────────────
 
   async init(): Promise<void> {
-    this.logger.info("Initializing scheduler", {
+    this.logger.info("Initializing scheduler (Unified Model)", {
       nodeId: this.nodeId,
       count: this.schedules.length,
     });
 
     for (const def of this.schedules) {
-      await this.db.upsertSchedule(def);
-      this.logger.debug("Registered schedule", {
-        name: def.name,
-        expression: def.expression,
-        intervalMs: def.intervalMs,
-      });
+      await Storage.save("schedules", def.name, def);
     }
 
-    // ── CRITICAL: Seed nextRunAt for schedules that don't have one yet ──
-    const existing = await this.db.getSchedules();
+    // Seed initial nextRunAt
+    const existing = await Storage.list<any>("schedules");
     const now = new Date();
 
     for (const record of existing) {
-      if (record.nextRunAt !== null) continue;
+      if (record.nextRunAt !== null && record.nextRunAt !== undefined) continue;
 
       const def = this.schedules.find((s) => s.name === record.name);
       if (!def) continue;
 
       const nextRun = this.computeNextRun(def, now);
       if (nextRun) {
-        await this.db.updateNextRun(def.name, nextRun);
-        this.logger.debug("Seeded nextRunAt", {
-          name: def.name,
-          nextRunAt: nextRun.toISOString(),
+        await Storage.save("schedules", def.name, {
+          ...record,
+          nextRunAt: nextRun,
         });
       }
     }
@@ -115,7 +109,7 @@ export class SchedulerModule implements IOqronModule {
     // leaderElection defaults to true in schema if not provided
     if (this.config?.leaderElection !== false) {
       this.leader = new LeaderElection(
-        this.lock,
+        Lock,
         this.logger,
         "oqron:scheduler:leader",
         this.nodeId,
@@ -176,17 +170,13 @@ export class SchedulerModule implements IOqronModule {
       if (job.worker) {
         await job.worker.stop();
       } else {
-        await this.lock.release(job.lockKey, this.nodeId).catch(() => {});
+        await Lock.release(job.lockKey, this.nodeId).catch(() => {});
       }
     }
     this.activeJobs.clear();
     this.logger.info("Scheduler stopped");
   }
 
-  /**
-   * Manually trigger a cron schedule by name (admin API).
-   * Returns true if the schedule was found and fire() was called.
-   */
   async triggerManual(scheduleId: string): Promise<boolean> {
     const def = this.schedules.find((s) => s.name === scheduleId);
     if (!def) return false;
@@ -197,10 +187,6 @@ export class SchedulerModule implements IOqronModule {
 
   // ── Core scheduling helpers ─────────────────────────────────────────────────
 
-  /**
-   * Compute the next fire time for a definition.
-   * Returns null if computation fails (invalid expression, etc).
-   */
   private computeNextRun(def: CronDefinition, from: Date): Date | null {
     if (def.expression) {
       try {
@@ -220,9 +206,6 @@ export class SchedulerModule implements IOqronModule {
       return new Date(from.getTime() + def.intervalMs);
     }
 
-    this.logger.error("Schedule has neither expression nor intervalMs", {
-      name: def.name,
-    });
     return null;
   }
 
@@ -232,7 +215,7 @@ export class SchedulerModule implements IOqronModule {
     this.logger.info("Performing leader initialization...");
 
     // 1. Evaluate missed fires
-    const knownSchedules = await this.db.getSchedules();
+    const knownSchedules = await Storage.list<any>("schedules");
     const now = new Date();
 
     for (const record of knownSchedules) {
@@ -241,7 +224,7 @@ export class SchedulerModule implements IOqronModule {
 
       const missed = await this.missedFireHandler.checkMissed(
         def,
-        record.lastRunAt,
+        record.lastRunAt ? new Date(record.lastRunAt) : null,
         now,
       );
       if (missed) {
@@ -270,23 +253,23 @@ export class SchedulerModule implements IOqronModule {
 
   private async detectClusterStalls() {
     try {
-      const activeDbJobs = await this.db.getActiveJobs();
+      const activeDbJobs = await Storage.list<any>("cron_history", {
+        status: "running",
+      });
       for (const job of activeDbJobs) {
         if (!job.scheduleId) continue;
         const def = this.schedules.find((s) => s.name === job.scheduleId);
         if (!def?.guaranteedWorker) continue;
 
-        const ageMs = Date.now() - job.startedAt.getTime();
+        const ageMs = Date.now() - new Date(job.startedAt).getTime();
         const ttl = def.lockTtlMs ?? 50_000;
 
         if (ageMs > ttl + 10_000) {
           this.logger.warn("Cluster stall detected", { runId: job.id });
-          await this.db.recordExecution({
-            id: job.id,
-            scheduleId: job.scheduleId,
+          await Storage.save("cron_history", job.id, {
+            ...job,
             status: "failed",
             error: "Stall detected (lock assumed expired)",
-            startedAt: job.startedAt,
             completedAt: new Date(),
           });
         }
@@ -323,10 +306,14 @@ export class SchedulerModule implements IOqronModule {
 
       // 2. Fire due schedules
       const now = new Date();
-      const due = await this.db.getDueSchedules(now, 50);
+      const allSchedules = await Storage.list<any>("schedules");
 
-      for (const { name } of due) {
-        const def = this.schedules.find((s) => s.name === name);
+      const due = allSchedules.filter(
+        (s: any) => s.nextRunAt && new Date(s.nextRunAt) <= now && !s.paused,
+      );
+
+      for (const record of due) {
+        const def = this.schedules.find((s) => s.name === record.name);
         if (!def) continue;
 
         // CRITICAL: Compute and persist nextRunAt BEFORE firing.
@@ -336,10 +323,18 @@ export class SchedulerModule implements IOqronModule {
             "Cannot compute next run — suspending cron to prevent runaway loop",
             { name: def.name },
           );
-          await this.db.updateNextRun(def.name, null).catch(() => {});
+          await Storage.save("schedules", def.name, {
+            ...record,
+            nextRunAt: null,
+          });
           continue;
         }
-        await this.db.updateNextRun(def.name, nextRun);
+
+        await Storage.save("schedules", def.name, {
+          ...record,
+          nextRunAt: nextRun,
+          lastRunAt: now,
+        });
 
         void this.fire(def);
       }
@@ -391,7 +386,7 @@ export class SchedulerModule implements IOqronModule {
 
     if (def.guaranteedWorker) {
       worker = new HeartbeatWorker(
-        this.lock,
+        Lock,
         this.logger,
         lockKey,
         this.nodeId,
@@ -400,7 +395,7 @@ export class SchedulerModule implements IOqronModule {
       );
       acquired = await worker.start();
     } else {
-      acquired = await this.lock.acquire(
+      acquired = await Lock.acquire(
         lockKey,
         this.nodeId,
         def.lockTtlMs ?? 30_000,
@@ -413,15 +408,26 @@ export class SchedulerModule implements IOqronModule {
     const entry: ActiveJobEntry = { runId, lockKey, worker, abort };
     this.activeJobs.set(runId, entry);
 
-    await this.db.recordExecution({
+    await Storage.save("cron_history", runId, {
       id: runId,
+      type: "cron",
+      queueName: "system_cron",
       scheduleId: def.name,
-      status: "running",
+      status: "active",
+      data: null,
+      opts: {},
+      attemptMade: 0,
+      progressPercent: 0,
+      workerId: this.nodeId,
+      tags: def.tags ?? [],
+      environment: this.environment,
+      project: this.project,
+      createdAt: startedAt,
       startedAt,
     });
 
     // ── Execute handler (non-blocking) ────────────────────────────────────
-    OqronEventBus.emit("job:start", runId, def.name);
+    OqronEventBus.emit("job:start", "cron", runId, def.name);
     entry.promise = Promise.resolve().then(async () => {
       const ctx = new CronContext({
         id: runId,
@@ -431,12 +437,19 @@ export class SchedulerModule implements IOqronModule {
         scheduleName: def.name,
         environment: this.environment,
         project: this.project,
-        onProgress: (percent, label) => {
-          this.db
-            .updateJobProgress(runId, percent, label)
-            .catch((err) =>
-              this.logger.error("Failed to update progress", { runId, err }),
-            );
+        onProgress: async (percent, label) => {
+          try {
+            const job = await Storage.get<any>("cron_history", runId);
+            if (job) {
+              await Storage.save("cron_history", runId, {
+                ...job,
+                progressPercent: percent,
+                progressLabel: label,
+              });
+            }
+          } catch (err) {
+            this.logger.error("Failed to update progress", { runId, err });
+          }
         },
       });
 
@@ -517,27 +530,34 @@ export class SchedulerModule implements IOqronModule {
         }
       }
 
-      const completedAt = new Date();
-      await this.db.recordExecution({
+      const finishedAt = new Date();
+      await Storage.save("cron_history", runId, {
         id: runId,
+        type: "cron",
+        queueName: "system_cron",
         scheduleId: def.name,
         status,
-        startedAt,
-        completedAt,
+        data: null,
+        opts: {},
+        attemptMade: attempts,
+        progressPercent: status === "completed" ? 100 : 0,
+        progressLabel: status === "completed" ? "Completed" : undefined,
+        workerId: this.nodeId,
+        tags: def.tags ?? [],
+        environment: this.environment,
+        project: this.project,
+        returnValue: finalResult !== undefined ? finalResult : undefined,
         error,
-        result:
-          finalResult !== undefined ? JSON.stringify(finalResult) : undefined,
-        attempts,
-        durationMs: completedAt.getTime() - startedAt.getTime(),
-        ...(status === "completed"
-          ? { progressPercent: 100, progressLabel: "Completed" }
-          : {}),
+        stacktrace: error && status === "failed" ? [error] : undefined,
+        createdAt: startedAt,
+        startedAt,
+        finishedAt,
       });
 
       if (worker) {
         await worker.stop();
       } else {
-        await this.lock.release(lockKey, this.nodeId).catch(() => {});
+        await Lock.release(lockKey, this.nodeId).catch(() => {});
       }
 
       this.activeJobs.delete(runId);
@@ -546,26 +566,32 @@ export class SchedulerModule implements IOqronModule {
       if (def.intervalMs) {
         const nextRun = this.computeNextRun(def, new Date());
         if (nextRun) {
-          await this.db.updateNextRun(def.name, nextRun).catch(() => {});
+          const record = await Storage.get<any>("schedules", def.name);
+          if (record) {
+            await Storage.save("schedules", def.name, {
+              ...record,
+              nextRunAt: nextRun,
+            });
+          }
         }
       }
 
-      // Handle history pruning based on configured cascade
-      const keepJobHistory =
+      // History pruning via shared utility
+      const keepHistory =
         def.keepHistory ?? this.config?.keepJobHistory ?? true;
-      const keepFailedHistory =
+      const keepFailed =
         def.keepFailedHistory ?? this.config?.keepFailedJobHistory ?? true;
 
-      if (keepJobHistory !== true || keepFailedHistory !== true) {
-        this.db
-          .pruneHistoryForSchedule(def.name, keepJobHistory, keepFailedHistory)
-          .catch((err) =>
-            this.logger.debug("Failed to prune history", {
-              err,
-              name: def.name,
-            }),
-          );
-      }
+      await pruneAfterCompletion({
+        namespace: "cron_history",
+        jobId: runId,
+        status,
+        jobRemoveConfig: keepHistoryToRemoveConfig(
+          status === "completed" ? keepHistory : keepFailed,
+        ),
+        filterKey: "scheduleId",
+        filterValue: def.name,
+      });
 
       this.logger.info("Job finished", {
         name: def.name,
@@ -574,12 +600,12 @@ export class SchedulerModule implements IOqronModule {
         attempts,
       });
 
-      // Emit EventBus events for telemetry and monitoring
       if (status === "completed") {
-        OqronEventBus.emit("job:success", runId);
+        OqronEventBus.emit("job:success", "cron", runId);
       } else {
         OqronEventBus.emit(
           "job:fail",
+          "cron",
           runId,
           new Error(error ?? "Unknown error"),
         );

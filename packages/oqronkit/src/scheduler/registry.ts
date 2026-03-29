@@ -1,4 +1,4 @@
-import type { CronDefinition } from "../core/index.js";
+import type { CronDefinition } from "../engine/index.js";
 
 /**
  * Internal pending registry for auto-registered cron definitions.

@@ -7,7 +7,7 @@ import type {
   ScheduleHooks,
   ScheduleRecurring,
   ScheduleRunAfter,
-} from "../core/index.js";
+} from "../engine/index.js";
 import { _registerSchedule } from "./registry-schedule.js";
 
 type EnqueueOptions<TPayload> = {
@@ -42,6 +42,10 @@ export type DefineScheduleOptions<TPayload> = {
   lockTtlMs?: number;
   timeout?: number;
   tags?: string[];
+  /** Override global history rolling. `true` = infinite, `false` = none, `number` = max retained jobs. */
+  keepHistory?: boolean | number;
+  /** Keep specific bounded history length for failed jobs */
+  keepFailedHistory?: boolean | number;
   condition?: (ctx: IScheduleContext<TPayload>) => Promise<boolean> | boolean;
   handler: (ctx: IScheduleContext<TPayload>) => Promise<unknown>;
   hooks?: ScheduleHooks<TPayload>;
@@ -81,6 +85,8 @@ export const schedule = <TPayload = unknown>(
     lockTtlMs: options.lockTtlMs,
     timeout: options.timeout,
     tags: options.tags ?? [],
+    keepHistory: options.keepHistory,
+    keepFailedHistory: options.keepFailedHistory,
     condition: options.condition,
     handler: options.handler,
     hooks: options.hooks,

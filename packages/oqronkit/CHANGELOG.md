@@ -1,10 +1,44 @@
 # Changelog
 
+
+### Patch Changes
+
+- ## 0.0.1-alpha.3
+
+  ### New Features
+
+  - **DI Container** (`OqronContainer`) — replaces module globals with injectable, multi-instance-ready container. Backward-compatible Proxy shims ensure zero breaking changes.
+  - **Job Cancellation** — `AbortController`-based mid-execution cancel. Handlers receive `ctx.signal` (AbortSignal) and can check `ctx.signal.aborted` periodically. `OqronManager.cancelJob()` aborts active jobs, stops heartbeats, and acks the broker.
+  - **Job Ordering Strategies** — FIFO, LIFO, and Priority strategies configurable per-queue or globally via `strategy` option.
+  - **PostgreSQL Adapter** — `PostgresStore` (JSONB+GIN), `PostgresBroker` (`FOR UPDATE SKIP LOCKED`), `PostgresLock` (advisory locks).
+  - **Redis Adapter Suite** — `RedisStore`, `RedisBroker` (sorted sets + Lua), `RedisLock` (Redlock).
+
+  ### Infrastructure
+
+  - `IOqronModule.cancelActiveJob()` — new optional method for engines to support mid-execution cancellation
+  - `TaskJobContext.signal` — AbortSignal passed to all taskQueue handlers
+  - `OqronContainer.init()` / `.get()` / `.reset()` / `.tryGet()` lifecycle
+  - `core.ts` exports `Storage`, `Broker`, `Lock` as Proxy shims (backward-compatible)
+  - Updated all engine constructors to accept optional `OqronContainer` for multi-instance support
+
+  ### Tests
+
+  - **253 tests across 26 files** (up from 163 tests across 20 files)
+  - New test suites: `container.test.ts` (14 tests), `cancel-job.test.ts` (13 tests)
+  - A+ maturity rating across all 16 modules
+
+  ### Documentation
+
+  - Updated all 10 documentation chapters for v1 features
+  - Updated backend example with `ctx.signal`, `strategy`, and cancel endpoint
+  - Complete README rewrite with v1 feature showcase
+
 All notable changes to OqronKit will be documented in this file.
 
-## [1.0.0] - 2026-03-29
+## [0.0.1-alpha.1] - 2026-03-29
 
 ### Added
+
 - **Core Scheduling:** Cron expressions, interval-based, and `every` syntax scheduling
 - **Schedule Engine:** One-shot (`runAt`/`runAfter`), recurring, and RRule-based scheduling
 - **Database Adapters:** Memory, SQLite (`better-sqlite3`), PostgreSQL (`pg`), Redis (`ioredis`)
@@ -28,6 +62,7 @@ All notable changes to OqronKit will be documented in this file.
 - **Optional Peer Dependencies:** `better-sqlite3`, `pg`, and `ioredis` are optional — install only what you need
 
 ### Changed
+
 - Renamed `ChronoError` → `OqronError` (backwards-compatible alias retained)
 - Renamed `chrono_locks` table → `oqron_locks`
 - Renamed `CHRONO_ENV` environment variable → `OQRON_ENV`

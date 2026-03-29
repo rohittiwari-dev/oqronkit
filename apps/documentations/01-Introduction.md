@@ -1,13 +1,57 @@
 # Chapter 1: The Problem & The Solution
 
-## The "Why"
-Historically, scheduling tasks in Node.js (via `setInterval` or `node-cron`) works perfectly on a single developer machine. However, the moment you deploy your application to a massive horizontal server cluster (e.g., Kubernetes with 50 pods), **every single pod runs the same `setInterval`**. If that interval happens to send a billing invoice to a customer, your customer gets billed 50 times simultaneously!
+## The Problem
 
-To securely fix this double-execution problem historically, developers are forced to manually install massive message brokers like RabbitMQ or heavy Redis-Queue abstractions, which require extensive DevOps configuration, manual queue declarations, and complex polling logic spread across thousands of lines of boilerplate.
+Historically, scheduling tasks in Node.js (via `setInterval` or `node-cron`) works perfectly on a single developer machine. However, the moment you deploy to a horizontal cluster (e.g., Kubernetes with 50 pods), **every pod runs the same `setInterval`**. If that interval sends a billing invoice, your customer gets billed 50 times.
+
+To fix this, developers are forced to manually install massive message brokers like RabbitMQ or heavy Redis-Queue abstractions, requiring extensive DevOps configuration, manual queue declarations, and complex polling logic across thousands of lines of boilerplate.
+
+And that only solves scheduling. What about background task processing? You need another library. Retry logic? Another. Dead letter queues? Job history? Rate limiting? Each concern brings another dependency, another API surface, and another failure point.
 
 ## The OqronKit Solution
-OqronKit is a **Zero-Config, Self-Healing, Multi-Tenant Job Processing Scheduler.** 
 
-- **Automatic Leader Election:** It automatically designates one single server as the "Master Poller" natively. No matter how many pods boot up, only one calculates due tasks, dramatically dropping CPU utilization globally.
-- **Distributed Locks:** Even if the Leader fails and two servers simultaneously try to execute the exact same job, OqronKit places a microsecond lock on the underlying persistence layer (Database/Redis), mathematically guaranteeing only ONE worker begins executing the logic.
-- **Zero-Boilerplate:** You don't create queues. You don't wire up topics. You simply define `.ts` files inside a `/jobs` folder, and OqronKit maps, discovers, and executes them entirely out-of-the-box.
+OqronKit is a **unified background computation engine** that replaces all of these with a single, framework-agnostic package. One `import`, one configuration, and you get:
+
+### Scheduling (Cron + Schedule)
+- **Automatic Leader Election:** Only one server calculates due tasks, no matter how many pods boot, dramatically reducing CPU utilization.
+- **Distributed Locks:** Even if two servers simultaneously try to execute the same job, OqronKit's lock adapter guarantees only ONE worker executes.
+- **Zero-Boilerplate:** Define `.ts` files in a `/jobs` folder — OqronKit discovers, maps, and executes them out-of-the-box.
+
+### Task Processing (TaskQueue + Queue/Worker)
+- **Monolithic Mode (`taskQueue`):** Publisher and consumer live in the same process. Perfect for single-server apps and API-triggered backgrounds tasks.
+- **Distributed Mode (`Queue` + `Worker`):** Publisher and consumer are completely decoupled across separate processes. Perfect for microservices and horizontal scaling.
+
+### Enterprise Features — Built In
+- Retry/backoff (fixed + exponential) with configurable delay caps
+- Job history with automatic lazy pruning
+- Dead letter queue hooks for failed jobs
+- Progress tracking and real-time event streaming
+- Crash-safe heartbeat workers with stall detection
+- Mid-execution job cancellation via `AbortController` (`ctx.signal`)
+- Job ordering strategies: FIFO, LIFO, and Priority
+- DI Container (`OqronContainer`) for multi-instance and testability
+- Multi-tenant environment isolation
+- Typed input/output generics for full type safety
+- PostgreSQL adapter with `FOR UPDATE SKIP LOCKED` atomic claiming
+- Redis adapter suite (sorted sets, Lua scripts, Redlock)
+
+## Architecture at a Glance
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                        OqronKit Engine                           │
+├──────────────┬──────────────┬──────────────┬────────────────────┤
+│   Cron       │   Schedule   │  TaskQueue   │  Queue + Worker    │
+│  (time)      │  (data)      │  (monolith)  │  (distributed)     │
+├──────────────┴──────────────┴──────────────┴────────────────────┤
+│                    Shared Infrastructure                         │
+│  ┌─────────┐ ┌──────────┐ ┌──────────┐ ┌────────────────────┐  │
+│  │ Storage  │ │  Broker  │ │   Lock   │ │  Backoff / Prune   │  │
+│  └─────────┘ └──────────┘ └──────────┘ └────────────────────┘  │
+├─────────────────────────────────────────────────────────────────┤
+│            OqronContainer (DI)  →  Proxy Shims                   │
+├─────────────────────────────────────────────────────────────────┤
+│                     Adapter Layer                                │
+│     Memory (dev) ←──→ Redis ←──→ PostgreSQL (production)          │
+└──────────────────────────────────────────────────────────────────┘
+```
