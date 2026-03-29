@@ -9,7 +9,7 @@ Whenever you are invoked via the CLI or IDE to assist with this repository, you 
 
 ## 📚 1. Knowledge Base & External Artifact Links
 
-You must maintain a perfectly robust understanding of exactly how modern distributed systems function. To guide your implementation, an exhaustive `implementation_plan.md` has been artifacts-generated alongside reference LLM-dumps from leading industry tools. 
+You must maintain a perfectly robust understanding of exactly how modern distributed systems function. To guide your implementation, an exhaustive `C:\Users\Rohit\.gemini\antigravity\brain\2ea01659-985e-4471-a45d-5f1f8c909cb2` has all the artifacts and knowledge and research gathering we have done so far. 
 
 If you are confused about how a module should operate, you are **required** to look at:
 1. **The Core Implementation Plan:** Outlines the exact API specifications for all 12 modules we are building.
@@ -86,3 +86,5 @@ When modifying or writing code, act as a Senior Platform Engineer. You are build
    - Ensure you honor environment isolation (`config.environment`), so a "production" worker does not accidentally claim "development" tasks.
 
 Use this document as your immutable source of truth and personality primer for all OqronKit modifications. Proceed with excellence.
+
+ **ALOWED RESOURCE** : `C:\Users\Rohit\.gemini\antigravity\brain\2ea01659-985e-4471-a45d-5f1f8c909cb2`

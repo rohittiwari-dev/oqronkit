@@ -4,54 +4,26 @@ import {
   createLogger,
   type IOqronModule,
   LagMonitor,
+  Lock,
   type Logger,
   OqronEventBus,
   ScheduleContext,
   type ScheduleDefinition,
   Storage,
 } from "../engine/index.js";
-import { LeaderElection, StallDetector } from "../engine/lock/index.js";
+import {
+  HeartbeatWorker,
+  LeaderElection,
+  StallDetector,
+} from "../engine/lock/index.js";
 import { _attachScheduleEngine } from "./define-schedule.js";
 
 type ActiveJobEntry = {
   runId: string;
   lockKey: string;
+  worker?: HeartbeatWorker;
   abort?: AbortController;
   promise?: Promise<void>;
-};
-
-// Internal lock adapter implementation backing onto Storage engine
-const memoryLockObj = {
-  async acquire(key: string, ownerId: string, ttlMs: number): Promise<boolean> {
-    const existing = await Storage.get<any>("locks", key);
-    if (!existing || existing.expiresAt < Date.now()) {
-      await Storage.save("locks", key, {
-        ownerId,
-        expiresAt: Date.now() + ttlMs,
-      });
-      return true;
-    }
-    return existing.ownerId === ownerId;
-  },
-  async renew(key: string, ownerId: string, ttlMs: number): Promise<boolean> {
-    const existing = await Storage.get<any>("locks", key);
-    if (existing?.ownerId === ownerId) {
-      existing.expiresAt = Date.now() + ttlMs;
-      await Storage.save("locks", key, existing);
-      return true;
-    }
-    return false;
-  },
-  async release(key: string, ownerId: string): Promise<void> {
-    const existing = await Storage.get<any>("locks", key);
-    if (existing?.ownerId === ownerId) {
-      await Storage.delete("locks", key);
-    }
-  },
-  async isOwner(key: string, ownerId: string): Promise<boolean> {
-    const existing = await Storage.get<any>("locks", key);
-    return existing?.ownerId === ownerId && existing.expiresAt > Date.now();
-  },
 };
 
 export class ScheduleEngine implements IOqronModule {
@@ -87,7 +59,7 @@ export class ScheduleEngine implements IOqronModule {
     this.nodeId = randomUUID();
     this.logger =
       logger ?? createLogger({ level: "info" }, { module: "scheduler" });
-    this.stallDetector = new StallDetector(memoryLockObj, this.logger, 15_000);
+    this.stallDetector = new StallDetector(Lock, this.logger, 15_000);
     this.lagMonitor = new LagMonitor(
       this.logger,
       this.config?.lagMonitor?.maxLagMs ?? 500,
@@ -140,7 +112,7 @@ export class ScheduleEngine implements IOqronModule {
 
   async start(): Promise<void> {
     this.leader = new LeaderElection(
-      memoryLockObj,
+      Lock,
       this.logger,
       "oqron:scheduleengine:leader",
       this.nodeId,
@@ -200,7 +172,11 @@ export class ScheduleEngine implements IOqronModule {
 
     for (const job of this.activeJobs.values()) {
       if (job.abort) job.abort.abort();
-      await memoryLockObj.release(job.lockKey, this.nodeId).catch(() => {});
+      if (job.worker) {
+        await job.worker.stop();
+      } else {
+        await Lock.release(job.lockKey, this.nodeId).catch(() => {});
+      }
     }
     this.activeJobs.clear();
     this.logger.info("Schedule engine stopped");
@@ -280,10 +256,12 @@ export class ScheduleEngine implements IOqronModule {
     this.logger.info("Schedule Engine: Performing leader initialization...");
     this.stallDetector.start(
       () => {
-        return Array.from(this.activeJobs.values()).map((job) => ({
-          key: job.lockKey,
-          ownerId: this.nodeId,
-        }));
+        return Array.from(this.activeJobs.values())
+          .filter((job) => job.worker !== undefined)
+          .map((job) => ({
+            key: job.lockKey,
+            ownerId: this.nodeId,
+          }));
       },
       (key: string) => {
         this.logger.warn("Local stall detected", { key });
@@ -415,21 +393,36 @@ export class ScheduleEngine implements IOqronModule {
       : `oqron:schedule:run:${def.name}:${runId}`;
     const startedAt = new Date();
 
-    const acquired = await memoryLockObj.acquire(
-      lockKey,
-      this.nodeId,
-      def.lockTtlMs ?? 30_000,
-    );
+    let worker: HeartbeatWorker | undefined;
+    let acquired = false;
+
+    if (def.guaranteedWorker) {
+      worker = new HeartbeatWorker(
+        Lock,
+        this.logger,
+        lockKey,
+        this.nodeId,
+        def.lockTtlMs ?? 30_000,
+        def.heartbeatMs ?? 10_000,
+      );
+      acquired = await worker.start();
+    } else {
+      acquired = await Lock.acquire(
+        lockKey,
+        this.nodeId,
+        def.lockTtlMs ?? 30_000,
+      );
+    }
     if (!acquired) return;
 
     const abort = new AbortController();
-    const entry: ActiveJobEntry = { runId, lockKey, abort };
+    const entry: ActiveJobEntry = { runId, lockKey, worker, abort };
     this.activeJobs.set(runId, entry);
 
     // Persist running job state
-    await Storage.save("jobs", runId, {
+    await Storage.save("schedule_history", runId, {
       id: runId,
-      type: "cron",
+      type: "schedule",
       queueName: "system_schedule",
       status: "running" as any,
       data: def.payload,
@@ -455,11 +448,13 @@ export class ScheduleEngine implements IOqronModule {
         project: this.project,
         onProgress: async (percent, label) => {
           try {
-            const job = await Storage.get<any>("jobs", runId);
+            const job = await Storage.get<any>("schedule_history", runId);
             if (job) {
-              job.progressPercent = percent;
-              job.progressLabel = label;
-              await Storage.save("jobs", runId, job);
+              await Storage.save("schedule_history", runId, {
+                ...job,
+                progressPercent: percent,
+                progressLabel: label,
+              });
             }
           } catch (err) {
             this.logger.error("Failed to update schedule progress", {
@@ -546,9 +541,9 @@ export class ScheduleEngine implements IOqronModule {
       }
 
       const completedAt = new Date();
-      await Storage.save("jobs", runId, {
+      await Storage.save("schedule_history", runId, {
         id: runId,
-        type: "cron",
+        type: "schedule",
         queueName: "system_schedule",
         status: status as any,
         data: def.payload,
@@ -565,8 +560,63 @@ export class ScheduleEngine implements IOqronModule {
         finishedAt: completedAt,
       });
 
-      await memoryLockObj.release(lockKey, this.nodeId).catch(() => {});
+      if (worker) {
+        await worker.stop();
+      } else {
+        await Lock.release(lockKey, this.nodeId).catch(() => {});
+      }
       this.activeJobs.delete(runId);
+
+      // Handle history pruning based on configured cascade
+      const keepJobHistory =
+        def.keepHistory ?? this.config?.keepJobHistory ?? true;
+      const keepFailedHistory =
+        def.keepFailedHistory ?? this.config?.keepFailedJobHistory ?? true;
+
+      if (keepJobHistory !== true || keepFailedHistory !== true) {
+        try {
+          const history = await Storage.list<any>("schedule_history", {
+            scheduleId: def.name,
+          });
+          history.sort(
+            (a: any, b: any) =>
+              new Date(b.finishedAt ?? b.startedAt).getTime() -
+              new Date(a.finishedAt ?? a.startedAt).getTime(),
+          );
+          const successJobs = history.filter(
+            (h: any) => h.status === "completed",
+          );
+          const failJobs = history.filter((h: any) => h.status === "failed");
+
+          if (
+            typeof keepJobHistory === "number" &&
+            successJobs.length > keepJobHistory
+          ) {
+            for (const j of successJobs.slice(keepJobHistory))
+              await Storage.delete("schedule_history", j.id);
+          }
+          if (
+            typeof keepFailedHistory === "number" &&
+            failJobs.length > keepFailedHistory
+          ) {
+            for (const j of failJobs.slice(keepFailedHistory))
+              await Storage.delete("schedule_history", j.id);
+          }
+          if (keepJobHistory === false) {
+            for (const j of successJobs)
+              await Storage.delete("schedule_history", j.id);
+          }
+          if (keepFailedHistory === false) {
+            for (const j of failJobs)
+              await Storage.delete("schedule_history", j.id);
+          }
+        } catch (e) {
+          this.logger.debug("Failed to prune history", {
+            err: e,
+            name: def.name,
+          });
+        }
+      }
 
       this.logger.info("Schedule finished", {
         name: def.name,

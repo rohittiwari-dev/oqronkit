@@ -1,13 +1,20 @@
 import { MemoryBroker } from "./memory/memory-broker.js";
+import { MemoryLock } from "./memory/memory-lock.js";
 import { MemoryStore } from "./memory/memory-store.js";
 import { RedisBroker } from "./redis/redis-broker.js";
+import { RedisLock } from "./redis/redis-lock.js";
 import { RedisStore } from "./redis/redis-store.js";
 import type { OqronConfig } from "./types/config.types.js";
-import type { IBrokerEngine, IStorageEngine } from "./types/engine.js";
+import type {
+  IBrokerEngine,
+  ILockAdapter,
+  IStorageEngine,
+} from "./types/engine.js";
 
 // Global unified singletons
 export let Storage: IStorageEngine;
 export let Broker: IBrokerEngine;
+export let Lock: ILockAdapter;
 
 /**
  * Bootstraps the engines dynamically based on config.
@@ -23,10 +30,12 @@ export async function initEngine(config: OqronConfig): Promise<void> {
 
     Storage = new RedisStore(redisClient as any, config.project);
     Broker = new RedisBroker(redisClient as any, config.project);
+    Lock = new RedisLock(redisClient as any, config.project);
   } else {
     // Zero dependencies Memory fallback
     Storage = new MemoryStore();
     Broker = new MemoryBroker();
+    Lock = new MemoryLock();
   }
 }
 

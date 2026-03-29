@@ -28,6 +28,10 @@ export type DefineCronOptions = CronScheduleConfig & {
   lockTtlMs?: number;
   timeout?: number;
   tags?: string[];
+  /** Override global history rolling. `true` = infinite, `false` = none, `number` = max retained jobs. */
+  keepHistory?: boolean | number;
+  /** Keep specific bounded history length for failed jobs */
+  keepFailedHistory?: boolean | number;
   handler: (ctx: ICronContext) => Promise<unknown>;
   hooks?: CronHooks;
   retries?: RetryConfig;
@@ -96,6 +100,8 @@ export const cron = (options: DefineCronOptions): CronDefinition => {
     lockTtlMs: options.lockTtlMs,
     timeout: options.timeout,
     tags: options.tags ?? [],
+    keepHistory: options.keepHistory,
+    keepFailedHistory: options.keepFailedHistory,
     handler: options.handler,
     hooks: options.hooks,
     retries: options.retries,

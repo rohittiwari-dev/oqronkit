@@ -14,7 +14,7 @@ export type { BaseJobContextOptions } from "./context/job-context.js";
 export { JobContext } from "./context/job-context.js";
 export type { ScheduleContextOptions } from "./context/schedule-context.js";
 export { ScheduleContext } from "./context/schedule-context.js";
-export { Broker, initEngine, Storage, stopEngine } from "./core.js";
+export { Broker, initEngine, Lock, Storage, stopEngine } from "./core.js";
 
 // ── Errors ───────────────────────────────────────────────────────────────────
 export { OqronError } from "./errors/base.error.js";

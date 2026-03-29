@@ -89,30 +89,29 @@ export const OqronKit = {
       }
     }
 
+    // --- Auto-discover jobs ---
+    if (_config.jobsDir) {
+      const jobsPath = path.resolve(cwd, _config.jobsDir);
+      try {
+        async function scan(dir: string) {
+          const entries = await fs.readdir(dir, { withFileTypes: true });
+          for (const entry of entries) {
+            const fullPath = path.join(dir, entry.name);
+            if (entry.isDirectory()) await scan(fullPath);
+            else if (entry.isFile() && /\.(js|ts|mjs|cjs)$/.test(entry.name)) {
+              await import(pathToFileURL(fullPath).toString());
+            }
+          }
+        }
+        await scan(jobsPath);
+      } catch (_err) {}
+    }
+
     // --- Boot modules ---
     if (_config.modules.includes("cron")) {
       const { SchedulerModule, _drainPending } = await import(
         "./scheduler/index.js"
       );
-      if (_config.jobsDir) {
-        const jobsPath = path.resolve(cwd, _config.jobsDir);
-        try {
-          async function scan(dir: string) {
-            const entries = await fs.readdir(dir, { withFileTypes: true });
-            for (const entry of entries) {
-              const fullPath = path.join(dir, entry.name);
-              if (entry.isDirectory()) await scan(fullPath);
-              else if (
-                entry.isFile() &&
-                /\.(js|ts|mjs|cjs)$/.test(entry.name)
-              ) {
-                await import(pathToFileURL(fullPath).toString());
-              }
-            }
-          }
-          await scan(jobsPath);
-        } catch (_err) {}
-      }
       const schedules = _drainPending();
       for (const s of schedules)
         s.tags = [...new Set([...(s.tags ?? []), ..._config.tags])];
@@ -124,6 +123,23 @@ export const OqronKit = {
         _config.cron,
       );
       OqronRegistry.getInstance().register(scheduler);
+    }
+
+    if (_config.modules.includes("scheduler")) {
+      const { ScheduleEngine, _drainPendingSchedules } = await import(
+        "./scheduler/index.js"
+      );
+      const schedules = _drainPendingSchedules();
+      for (const s of schedules)
+        s.tags = [...new Set([...(s.tags ?? []), ..._config.tags])];
+      const scheduleEngine = new ScheduleEngine(
+        schedules,
+        _logger!,
+        _config.environment,
+        _config.project,
+        _config.scheduler,
+      );
+      OqronRegistry.getInstance().register(scheduleEngine);
     }
 
     if (_config.modules.includes("taskQueue")) {
