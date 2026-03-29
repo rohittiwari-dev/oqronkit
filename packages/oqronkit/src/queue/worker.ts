@@ -1,6 +1,6 @@
-import { Broker } from "../../engine/index.js";
-import type { IBrokerEngine } from "../../engine/types/engine.js";
-import type { OqronJob } from "../../engine/types/job.types.js";
+import { Broker } from "../engine/index.js";
+import type { IBrokerEngine } from "../engine/types/engine.js";
+import type { OqronJob } from "../engine/types/job.types.js";
 
 export interface WorkerOptions {
   connection?: IBrokerEngine; // Optional override
@@ -24,9 +24,9 @@ export interface WorkerOptions {
     onDead?: (job: OqronJob<any, any>) => Promise<void>;
   };
   /** Auto-remove completed jobs. Overrides global config. */
-  removeOnComplete?: import("../../engine/types/job.types.js").RemoveOnConfig;
+  removeOnComplete?: import("../engine/types/job.types.js").RemoveOnConfig;
   /** Auto-remove failed jobs. Overrides global config. */
-  removeOnFail?: import("../../engine/types/job.types.js").RemoveOnConfig;
+  removeOnFail?: import("../engine/types/job.types.js").RemoveOnConfig;
   /** Callbacks executed directly on the CPU node doing the worker processing natively */
   hooks?: {
     onSuccess?: (job: OqronJob<any, any>, result: any) => Promise<void> | void;

@@ -1,12 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { Worker as ThreadWorker } from "node:worker_threads";
-import type { IOqronModule, Logger } from "../../engine/index.js";
-import { Broker, OqronEventBus, Storage } from "../../engine/index.js";
-import type { OqronConfig } from "../../engine/types/config.types.js";
-import type { IBrokerEngine } from "../../engine/types/engine.js";
-import type { OqronJob } from "../../engine/types/job.types.js";
-import { calculateBackoff } from "../../engine/utils/backoffs.js";
-import { pruneAfterCompletion } from "../../engine/utils/job-retention.js";
+import type { IOqronModule, Logger } from "../engine/index.js";
+import { Broker, OqronEventBus, Storage } from "../engine/index.js";
+import type { OqronConfig } from "../engine/types/config.types.js";
+import type { IBrokerEngine } from "../engine/types/engine.js";
+import type { OqronJob } from "../engine/types/job.types.js";
+import { calculateBackoff } from "../engine/utils/backoffs.js";
+import { pruneAfterCompletion } from "../engine/utils/job-retention.js";
 import { getRegisteredWorkers, type Worker } from "./worker.js";
 
 export class WorkerEngine implements IOqronModule {

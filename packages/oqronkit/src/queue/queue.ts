@@ -1,9 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { Broker, Storage } from "../../engine/index.js";
-import type {
-  OqronJob,
-  OqronJobOptions,
-} from "../../engine/types/job.types.js";
+import { Broker, Storage } from "../engine/index.js";
+import type { OqronJob, OqronJobOptions } from "../engine/types/job.types.js";
 
 export interface QueueOptions {
   defaultJobOptions?: OqronJobOptions;

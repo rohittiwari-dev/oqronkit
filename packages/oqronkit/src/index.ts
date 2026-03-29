@@ -40,10 +40,9 @@ export type {
 export { createLogger, defineConfig, OqronEventBus } from "./engine/index.js";
 
 export { OqronManager } from "./manager/oqron-manager.js";
-export { FlowProducer } from "./queue/distributed/flow-producer.js";
-export { Queue } from "./queue/distributed/queue.js";
-export { QueueEvents } from "./queue/distributed/queue-events.js";
-export { Worker } from "./queue/distributed/worker.js";
+export { Queue } from "./queue/queue.js";
+export { QueueEvents } from "./queue/queue-events.js";
+export { Worker } from "./queue/worker.js";
 export {
   cron,
   type DefineCronOptions,
@@ -151,9 +150,7 @@ export const OqronKit = {
     }
 
     if (_config.modules.includes("worker")) {
-      const { WorkerEngine } = await import(
-        "./queue/distributed/worker-engine.js"
-      );
+      const { WorkerEngine } = await import("./queue/worker-engine.js");
       const engine = new WorkerEngine(_config, _logger!);
       OqronRegistry.getInstance().register(engine);
     }

@@ -1,6 +1,6 @@
 import { EventEmitter } from "eventemitter3";
-import { OqronEventBus, Storage } from "../../engine/index.js";
-import type { IBrokerEngine } from "../../engine/types/engine.js";
+import { OqronEventBus, Storage } from "../engine/index.js";
+import type { IBrokerEngine } from "../engine/types/engine.js";
 
 export interface QueueEventsOptions {
   connection?: IBrokerEngine;

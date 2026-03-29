@@ -23,6 +23,7 @@
         "express": "^4.21.2",
         "fastify": "^4.29.0",
         "hono": "^4.4.13",
+        "ioredis": "^5.10.1",
         "oqronkit": "*",
       },
       "devDependencies": {
