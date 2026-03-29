@@ -1,7 +1,8 @@
 import { EventEmitter } from "eventemitter3";
 import { OqronEventBus } from "../../core/index.js";
+import type { IOqronAdapter } from "../../core/types/db.types.js";
 import type { IQueueAdapter } from "../../core/types/queue.types.js";
-import { getTaskQueueAdapter } from "../../task-queue/registry.js";
+import { OqronKit } from "../../index.js";
 
 export interface QueueEventsOptions {
   connection?: IQueueAdapter;
@@ -27,7 +28,7 @@ export class QueueEvents extends EventEmitter<QueueEventsMap> {
 
   constructor(
     public readonly name: string,
-    private options?: QueueEventsOptions,
+    _options?: QueueEventsOptions,
   ) {
     super();
 
@@ -39,12 +40,8 @@ export class QueueEvents extends EventEmitter<QueueEventsMap> {
     OqronEventBus.on("job:fail", this.errorListener);
   }
 
-  getAdapter(): IQueueAdapter {
-    const adapter = this.options?.connection ?? getTaskQueueAdapter();
-    if (!adapter) {
-      throw new Error(`[OqronKit] QueueEvents has no active connection.`);
-    }
-    return adapter;
+  getDbAdapter(): IOqronAdapter {
+    return OqronKit.getDb();
   }
 
   // -------------------------
@@ -65,7 +62,7 @@ export class QueueEvents extends EventEmitter<QueueEventsMap> {
   private async _handleSuccess(queueName: string, jobId: string) {
     if (queueName === this.name) {
       try {
-        const job = await this.getAdapter().getJob(jobId);
+        const job = await this.getDbAdapter().getJob(jobId);
         this.emit("completed", {
           jobId,
           returnvalue: job?.returnValue,

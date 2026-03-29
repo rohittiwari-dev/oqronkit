@@ -1,9 +1,11 @@
 // Config
+
+// Adapter Registry (central infrastructure resolution)
+export { AdapterRegistry } from "./adapter-registry.js";
 export { loadConfig } from "./config/config-loader.js";
 export { reconfigureConfig } from "./config/default-config.js";
 export { defineConfig } from "./config/define-config.js";
 export type { ValidatedConfig } from "./config/schema.js";
-
 export { OqronConfigSchema } from "./config/schema.js";
 // Context
 export type { ICronContext } from "./context/cron-context.interface.js";
@@ -15,10 +17,8 @@ export type { ScheduleContextOptions } from "./context/schedule-context.js";
 export { ScheduleContext } from "./context/schedule-context.js";
 // Adapter Factories
 export { createDbAdapter, createLockAdapter } from "./create-adapter.js";
-
 // Errors
 export { OqronError } from "./errors/base.error.js";
-
 // Events
 export { OqronEventBus } from "./events/event-bus.js";
 // Circuit Breaker
@@ -34,7 +34,7 @@ export { createLogger } from "./logger/index.js";
 export { OqronRegistry } from "./registry.js";
 
 // Types
-export type { OqronConfig } from "./types/config.types.js";
+export type { OqronConfig, WorkerDefaults } from "./types/config.types.js";
 export type {
   CronDefinition,
   CronHooks,
@@ -45,8 +45,18 @@ export type {
   RetryConfig,
 } from "./types/cron.types.js";
 export type { IOqronAdapter } from "./types/db.types.js";
+export type {
+  FlowJobNode,
+  JobFilter,
+  JobStatus,
+  JobType,
+  OqronJob,
+  OqronJobOptions,
+  SystemStats,
+} from "./types/job.types.js";
 export type { ILockAdapter } from "./types/lock.types.js";
 export type { IOqronModule } from "./types/module.types.js";
+export type { IQueueAdapter, QueueMetrics } from "./types/queue.types.js";
 export type {
   IScheduleContext,
   ScheduleDefinition,

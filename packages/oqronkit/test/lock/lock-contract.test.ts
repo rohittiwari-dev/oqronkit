@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { MemoryLockAdapter } from "../../src/lock/adapters/memory-lock.adapter.js";
+import { MemoryLockAdapter } from "../../src/adapters/lock/memory-lock.adapter.js";
 import type { ILockAdapter } from "../../src/core/types/lock.types.js";
 
 function runLockContractTests(

@@ -1,19 +1,15 @@
-import type {
-  IQueueAdapter,
-  OqronJobData,
-  OqronJobOptions,
-} from "../../core/types/queue.types.js";
-import { getTaskQueueAdapter } from "../../task-queue/registry.js"; // or similar central queue registry
+import { randomUUID } from "node:crypto";
+import type { OqronJob, OqronJobOptions } from "../../core/types/job.types.js";
+import { OqronKit } from "../../index.js";
 
 export interface QueueOptions {
-  connection?: IQueueAdapter; // Optional override. Defaults to global OqronKit adapter
   defaultJobOptions?: OqronJobOptions;
 }
 
 /**
  * Enterprise Queue Publisher.
  * Modeled after BullMQ. This class is strictly a sender and consumes no CPU/polling loops.
- * Extremely safe to deploy on lightweight API edge-nodes.
+ * Follows the Dual-Storage Model: DB for persistence, Broker for signaling.
  */
 export class Queue<T = any, R = any> {
   constructor(
@@ -22,33 +18,42 @@ export class Queue<T = any, R = any> {
   ) {}
 
   /**
-   * Dynamically fetch the adapter if not provided explicitly.
-   */
-  private getAdapter(): IQueueAdapter {
-    const adapter = this.options?.connection ?? getTaskQueueAdapter();
-    if (!adapter) {
-      throw new Error(
-        `[OqronKit] Queue '${this.name}' has no connection. ` +
-          `Pass { connection: adapter } or ensure OqronKit.init() has successfully run.`,
-      );
-    }
-    return adapter;
-  }
-
-  /**
-   * Pushes a new job into the persistent data store.
+   * Pushes a new job into the persistent data store and signals the broker.
    */
   async add(
     _name: string,
     data: T,
     opts?: OqronJobOptions,
-  ): Promise<OqronJobData<T, R>> {
-    const adapter = this.getAdapter();
+  ): Promise<OqronJob<T, R>> {
     const finalOpts = { ...this.options?.defaultJobOptions, ...opts };
+    const jobId = finalOpts.jobId ?? randomUUID();
 
-    // Push the job context to adapter
-    const res = await adapter.enqueue<T>(this.name, data, finalOpts);
-    return res as unknown as OqronJobData<T, R>;
+    const job: OqronJob<T, R> = {
+      id: jobId,
+      type: "task",
+      queueName: this.name,
+      status: finalOpts.delay ? "delayed" : "waiting",
+      data,
+      opts: finalOpts,
+      attemptMade: 0,
+      progressPercent: 0,
+      tags: [],
+      createdAt: new Date(),
+      runAt: finalOpts.delay
+        ? new Date(Date.now() + finalOpts.delay)
+        : undefined,
+    };
+
+    const db = OqronKit.getDb();
+    const broker = OqronKit.getBroker();
+
+    // 1. Persist to DB (Source of Truth)
+    await db.upsertJob(job);
+
+    // 2. Signal Broker (Execution Trigger)
+    await broker.signalEnqueue(this.name, jobId, finalOpts.delay);
+
+    return job;
   }
 
   /**
@@ -56,17 +61,13 @@ export class Queue<T = any, R = any> {
    */
   async addBulk(
     jobs: { name: string; data: T; opts?: OqronJobOptions }[],
-  ): Promise<OqronJobData<T, R>[]> {
-    const adapter = this.getAdapter();
-    const mapped = jobs.map((j) => ({
-      data: j.data,
-      opts: { ...this.options?.defaultJobOptions, ...j.opts },
-    }));
-    const result = await adapter.enqueueBulk<T>(this.name, mapped);
-    return result as unknown as OqronJobData<T, R>[];
+  ): Promise<OqronJob<T, R>[]> {
+    const results: OqronJob<T, R>[] = [];
+    for (const j of jobs) {
+      results.push(await this.add(j.name, j.data, j.opts));
+    }
+    return results;
   }
 
-  async close(): Promise<void> {
-    // For BullMQ compatibility, though connection management is generic
-  }
+  async close(): Promise<void> {}
 }

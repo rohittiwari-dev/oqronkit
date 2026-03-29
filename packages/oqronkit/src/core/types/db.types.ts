@@ -1,59 +1,65 @@
-import type { CronDefinition, JobRecord } from "./cron.types.js";
+import type { CronDefinition } from "./cron.types.js";
+import type {
+  FlowJobNode,
+  JobFilter,
+  OqronJob,
+  SystemStats,
+} from "./job.types.js";
+import type { QueueMetrics } from "./queue.types.js";
 import type { ScheduleDefinition } from "./scheduler.types.js";
 
+/**
+ * IOqronAdapter — The "Brain" of the system.
+ * Responsible for all persistent state: schedules, jobs, stats, and historical logs.
+ */
 export interface IOqronAdapter {
+  // ── Schedules (Cron/Scheduler) ─────────────────────────────────────────────
+
   /** Insert or update a schedule definition */
   upsertSchedule(def: CronDefinition | ScheduleDefinition): Promise<void>;
 
-  /** Get schedules that are due to fire (nextRunAt <= now, or never run) */
-  getDueSchedules(
-    now: Date,
-    limit: number,
-    prefix?: string,
-  ): Promise<Pick<CronDefinition | ScheduleDefinition, "name">[]>;
+  /** Get IDs of schedules that are due to fire (nextRunAt <= now) */
+  getDueSchedules(now: Date, limit: number): Promise<string[]>;
+
+  /** Get full schedule definition by ID */
+  getSchedule(id: string): Promise<CronDefinition | ScheduleDefinition | null>;
 
   /** Get all registered schedules and their run metadata */
-  getSchedules(
-    prefix?: string,
-  ): Promise<
-    Array<{ name: string; lastRunAt: Date | null; nextRunAt: Date | null }>
+  getSchedules(): Promise<
+    Array<{ id: string; lastRunAt: Date | null; nextRunAt: Date | null }>
   >;
 
   /** Update nextRunAt for a schedule */
-  updateNextRun(scheduleId: string, nextRunAt: Date | null): Promise<void>;
+  updateScheduleNextRun(id: string, nextRunAt: Date | null): Promise<void>;
 
-  /** Record a job execution (insert or update) */
-  recordExecution(job: JobRecord): Promise<void>;
+  /** Pause/Resume a schedule */
+  setSchedulePaused(id: string, paused: boolean): Promise<void>;
 
-  /** Update progress of an active job */
-  updateJobProgress(
-    id: string,
-    progressPercent: number,
-    progressLabel?: string,
-  ): Promise<void>;
+  // ── Jobs (Universal) ───────────────────────────────────────────────────────
 
-  /** Get execution history for a schedule */
-  getExecutions(
-    scheduleId: string,
-    opts: { limit: number; offset: number },
-  ): Promise<JobRecord[]>;
+  /** Create or update a job record */
+  upsertJob(job: OqronJob): Promise<void>;
 
-  /** Get all jobs currently marked as running */
-  getActiveJobs(): Promise<JobRecord[]>;
+  /** Push a complex parent-child DAG map. Returns the root job. */
+  enqueueFlow(flow: FlowJobNode): Promise<OqronJob>;
 
-  /** Clean old execution records */
-  cleanOldExecutions(before: Date): Promise<number>;
+  /** Fetch a specific job by ID */
+  getJob(id: string): Promise<OqronJob | null>;
 
-  /** Roll history based on config settings */
-  pruneHistoryForSchedule(
-    scheduleId: string,
-    keepJobHistory: number | boolean,
-    keepFailedJobHistory: number | boolean,
-  ): Promise<void>;
+  /** Query jobs with filtering and pagination */
+  listJobs(filter: JobFilter): Promise<OqronJob[]>;
 
-  /** Pause a schedule from being fetched or executed */
-  pauseSchedule(scheduleId: string): Promise<void>;
+  /** Delete a job record completely (used for cleanup or removeOnComplete) */
+  deleteJob(id: string): Promise<void>;
 
-  /** Resume a previously paused schedule */
-  resumeSchedule(scheduleId: string): Promise<void>;
+  // ── Stats & Administration ─────────────────────────────────────────────────
+
+  /** Get aggregate metrics for a specific queue */
+  getQueueMetrics(queueName: string): Promise<QueueMetrics>;
+
+  /** Get high-level system health and aggregate counts */
+  getSystemStats(): Promise<SystemStats>;
+
+  /** Bulk cleanup of old execution records */
+  pruneJobs(before: Date, status?: OqronJob["status"]): Promise<number>;
 }

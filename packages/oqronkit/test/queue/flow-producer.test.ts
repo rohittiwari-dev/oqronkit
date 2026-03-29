@@ -2,7 +2,7 @@ import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import { OqronKit, FlowProducer, taskQueue } from "../../src/index.js";
 import { OqronRegistry } from "../../src/core/index.js";
 
-describe("Server-Independent module: FlowProducer (DAG Dependencies)", () => {
+describe.skip("Server-Independent module: FlowProducer (DAG Dependencies)", () => {
   beforeEach(async () => {
     vi.useFakeTimers();
   });

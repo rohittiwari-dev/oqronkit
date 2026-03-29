@@ -1,15 +1,37 @@
 import type { OqronLoggerConfig } from "../logger/index.js";
-import type { IOqronAdapter } from "./db.types.js";
-import type { ILockAdapter } from "./lock.types.js";
 
-export type DbAdapterType =
-  | "sqlite"
-  | "memory"
-  | "postgres"
-  | "mysql"
-  | "mongodb"
-  | "redis";
-export type LockAdapterType = "db" | "memory" | "redis";
+/** Shared worker execution defaults — applies to taskQueue, worker, and all future modules */
+export interface WorkerDefaults {
+  concurrency?: number;
+  heartbeatMs?: number;
+  lockTtlMs?: number;
+  retries?: {
+    max?: number;
+    strategy?: "fixed" | "exponential";
+    baseDelay?: number;
+    maxDelay?: number;
+  };
+  deadLetter?: { enabled?: boolean };
+  limiter?: { max: number; duration: number; groupKey?: string };
+}
+
+export type DatabaseLike =
+  | {
+      adapter: "sqlite" | "postgres" | "mysql" | "memory";
+      url?: string;
+      [key: string]: any;
+    }
+  | any; // Escape hatch for direct driver passing
+
+export type RedisLike =
+  | {
+      url: string;
+      password?: string;
+      db?: number;
+      tls?: boolean;
+      [key: string]: any;
+    }
+  | any; // Escape hatch for direct ioredis passing
 
 export interface OqronConfig {
   /**
@@ -25,39 +47,16 @@ export interface OqronConfig {
   environment?: string;
 
   /**
-   * The primary database adapter (State Store).
-   * Union of explicit DI or declarative config.
+   * Primary relational database connection.
+   * Derives storage and optionally locking/broker if Redis is not present.
    */
-  db?:
-    | IOqronAdapter
-    | {
-        adapter: DbAdapterType;
-        url?: string;
-        poolMin?: number;
-        poolMax?: number;
-        tablePrefix?: string;
-        migrations?: "auto" | "manual" | false;
-        ssl?: boolean;
-      };
+  db?: DatabaseLike;
 
   /**
-   * The distributed lock adapter for safe concurrency.
-   * Union of explicit DI or declarative config.
+   * Primary Redis connection.
+   * If provided, automatically handles fast-path operations (locking and message broker).
    */
-  lock?:
-    | ILockAdapter
-    | {
-        adapter: LockAdapterType;
-        url?: string;
-        ttl?: number;
-        retryDelay?: number;
-        retryCount?: number;
-      };
-
-  /**
-   * The high-throughput message broker (optional, for PubSub/Queueing at scale)
-   */
-  broker?: any;
+  redis?: RedisLike;
 
   /**
    * List of core modules to enable.

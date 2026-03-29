@@ -1,7 +1,5 @@
-import type { CronDefinition, JobRecord } from "./types/cron.types.js";
 import type { IOqronAdapter } from "./types/db.types.js";
 import type { ILockAdapter } from "./types/lock.types.js";
-import type { ScheduleDefinition } from "./types/scheduler.types.js";
 
 /**
  * Create a custom database adapter by providing implementations for the IOqronAdapter interface.
@@ -42,66 +40,24 @@ import type { ScheduleDefinition } from "./types/scheduler.types.js";
  * });
  * ```
  */
-export function createDbAdapter(impl: {
-  /** A human-readable name for this adapter (for logging/debugging) */
-  name: string;
-
-  upsertSchedule(def: CronDefinition | ScheduleDefinition): Promise<void>;
-
-  getDueSchedules(
-    now: Date,
-    limit: number,
-    prefix?: string,
-  ): Promise<Pick<CronDefinition | ScheduleDefinition, "name">[]>;
-
-  getSchedules(
-    prefix?: string,
-  ): Promise<
-    Array<{ name: string; lastRunAt: Date | null; nextRunAt: Date | null }>
-  >;
-
-  updateNextRun(scheduleId: string, nextRunAt: Date | null): Promise<void>;
-
-  recordExecution(job: JobRecord): Promise<void>;
-
-  updateJobProgress(
-    id: string,
-    progressPercent: number,
-    progressLabel?: string,
-  ): Promise<void>;
-
-  getExecutions(
-    scheduleId: string,
-    opts: { limit: number; offset: number },
-  ): Promise<JobRecord[]>;
-
-  getActiveJobs(): Promise<JobRecord[]>;
-
-  cleanOldExecutions(before: Date): Promise<number>;
-
-  pruneHistoryForSchedule(
-    scheduleId: string,
-    keepJobHistory: number | boolean,
-    keepFailedJobHistory: number | boolean,
-  ): Promise<void>;
-
-  pauseSchedule(scheduleId: string): Promise<void>;
-
-  resumeSchedule(scheduleId: string): Promise<void>;
-}): IOqronAdapter {
+export function createDbAdapter(
+  impl: IOqronAdapter & { name?: string },
+): IOqronAdapter {
   const requiredMethods: (keyof IOqronAdapter)[] = [
     "upsertSchedule",
     "getDueSchedules",
+    "getSchedule",
     "getSchedules",
-    "updateNextRun",
-    "recordExecution",
-    "updateJobProgress",
-    "getExecutions",
-    "getActiveJobs",
-    "cleanOldExecutions",
-    "pruneHistoryForSchedule",
-    "pauseSchedule",
-    "resumeSchedule",
+    "updateScheduleNextRun",
+    "setSchedulePaused",
+    "upsertJob",
+    "enqueueFlow",
+    "getJob",
+    "listJobs",
+    "deleteJob",
+    "getQueueMetrics",
+    "getSystemStats",
+    "pruneJobs",
   ];
 
   for (const method of requiredMethods) {

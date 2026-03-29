@@ -1,7 +1,5 @@
-import type {
-  IQueueAdapter,
-  OqronJobData,
-} from "../../core/types/queue.types.js";
+import type { OqronJob } from "../../core/types/job.types.js";
+import type { IQueueAdapter } from "../../core/types/queue.types.js";
 import { getTaskQueueAdapter } from "../../task-queue/registry.js"; // or similar
 
 export interface WorkerOptions {
@@ -15,14 +13,8 @@ export interface WorkerOptions {
   };
   /** Callbacks executed directly on the CPU node doing the worker processing natively */
   hooks?: {
-    onSuccess?: (
-      job: OqronJobData<any, any>,
-      result: any,
-    ) => Promise<void> | void;
-    onFail?: (
-      job: OqronJobData<any, any>,
-      error: Error,
-    ) => Promise<void> | void;
+    onSuccess?: (job: OqronJob<any, any>, result: any) => Promise<void> | void;
+    onFail?: (job: OqronJob<any, any>, error: Error) => Promise<void> | void;
   };
 }
 
@@ -42,7 +34,7 @@ export class Worker<T = any, R = any> {
 
   constructor(
     public readonly name: string,
-    public readonly processor: (job: OqronJobData<T, R>) => Promise<R>,
+    public readonly processor: string | ((job: OqronJob<T, R>) => Promise<R>),
     public readonly options?: WorkerOptions,
   ) {
     // Automatically register this worker into OqronKit's engine lifecycle

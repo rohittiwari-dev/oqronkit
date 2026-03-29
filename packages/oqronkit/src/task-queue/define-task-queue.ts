@@ -1,36 +1,46 @@
-import type {
-  OqronJobData,
-  OqronJobOptions,
-} from "../core/types/queue.types.js";
-import { getTaskQueueAdapter, registerTaskQueue } from "./registry.js";
+import { randomUUID } from "node:crypto";
+import type { OqronJob } from "../core/types/job.types.js";
+import { OqronKit } from "../index.js";
+import { registerTaskQueue } from "./registry.js";
 import type { ITaskQueue, TaskQueueConfig } from "./types.js";
 
 /**
- * Define a highly reliable monolithic Task Queue.
- * In a monolithic architecture, the server calling `.add()` is the exact same
- * server that boots up the polling mechanism to handle the job.
- *
- * @param config Complete task queue configuration including the `handler` logic
- * @returns A publisher instance offering `.add()`
+ * Enterprise Task Queue Factory.
+ * Simple API for monolithic applications where publisher and worker live together.
  */
-export function taskQueue<T, R>(
+export function taskQueue<T = any, R = any>(
   config: TaskQueueConfig<T, R>,
 ): ITaskQueue<T, R> {
-  // Pass configuration into OqronKit's central registry for boot inspection
-  registerTaskQueue(config as TaskQueueConfig<any, any>);
+  registerTaskQueue(config);
 
   return {
-    async add(data: T, opts?: OqronJobOptions): Promise<OqronJobData<T, R>> {
-      const adapter = getTaskQueueAdapter();
-      if (!adapter) {
-        throw new Error(
-          `[OqronKit] Could not push job to ${config.name}. ` +
-            `Have you run OqronKit.init() to bind the underlying QueueAdapter?`,
-        );
-      }
+    name: config.name,
+    add: async (data, opts) => {
+      const db = OqronKit.getDb();
+      const broker = OqronKit.getBroker();
+      const jobId = opts?.jobId ?? randomUUID();
 
-      const job = await adapter.enqueue<T>(config.name, data, opts);
-      return job as unknown as OqronJobData<T, R>;
+      const job: OqronJob = {
+        id: jobId,
+        type: "task",
+        queueName: config.name,
+        status: opts?.delay ? "delayed" : "waiting",
+        data,
+        opts: opts ?? {},
+        attemptMade: 0,
+        progressPercent: 0,
+        tags: [],
+        createdAt: new Date(),
+        runAt: opts?.delay ? new Date(Date.now() + opts.delay) : undefined,
+      };
+
+      // 1. Storage
+      await db.upsertJob(job);
+
+      // 2. Transport
+      await broker.signalEnqueue(config.name, jobId, opts?.delay);
+
+      return job as any;
     },
   };
 }

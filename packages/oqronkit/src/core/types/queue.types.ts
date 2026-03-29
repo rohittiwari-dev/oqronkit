@@ -1,120 +1,60 @@
-export interface OqronJobData<T = any, R = any> {
-  id: string; // unique auto-generated ID or user-provided idempotency key
-  queueName: string; // The topic/queue name (e.g. 'payment-processor')
-  data: T; // User payload
-  opts?: OqronJobOptions;
-  parentId?: string;
-
-  // Execution State
-  attemptMade: number;
-  waitingChildrenCount?: number;
-  status:
-    | "waiting-children"
-    | "waiting"
-    | "active"
-    | "completed"
-    | "failed"
-    | "delayed"
-    | "paused";
-
-  // Timestamps
-  createdAt: Date;
-  startedAt?: Date;
-  finishedAt?: Date;
-
-  // Results
-  returnValue?: R;
-  failedReason?: string;
-  stacktrace?: string[];
-
-  // Telemetry
-  progressPercent: number;
-  progressLabel?: string;
-  workerId?: string;
-}
-
-export interface OqronJobOptions {
-  jobId?: string; // Custom ID for deduplication
-  priority?: number; // 1 (highest) to MAX_INT
-  delay?: number; // Milliseconds to wait until this job can be processed
-  attempts?: number; // Maximum attempts
-  backoff?: {
-    type: "fixed" | "exponential";
-    delay: number; // Base delay in ms
-  };
-  removeOnComplete?: boolean | number; // true, or number of records to keep
-  removeOnFail?: boolean | number;
-}
-
-export interface FlowJobNode<T = any> {
-  name: string;
-  queueName: string;
-  data: T;
-  opts?: OqronJobOptions;
-  children?: FlowJobNode<any>[];
+/**
+ * QueueMetrics — High-level counters for queue health.
+ */
+export interface QueueMetrics {
+  active: number;
+  waiting: number;
+  completed: number;
+  failed: number;
+  delayed: number;
+  paused: number;
 }
 
 /**
- * Universal interface for persistent queue storage operations.
- * Allows Memory, Redis, or Postgres to handle job orchestration.
+ * IBrokerAdapter — The "Signaling" engine.
+ * Responsible for high-speed job orchestration and cross-node coordination.
+ * Focuses on ID-based transport rather than full record storage.
  */
 export interface IQueueAdapter {
   /**
-   * Push a new job onto the queue.
-   * Must handle deduplication if `opts.jobId` already exists natively.
+   * Signal that a job is ready for processing.
+   * @param queueName Target queue
+   * @param jobId The unique ID of the job already persisted in DB
+   * @param delayMs Optional delay before the job becomes claimable
    */
-  enqueue<T>(
+  signalEnqueue(
     queueName: string,
-    data: T,
-    opts?: OqronJobOptions,
-  ): Promise<OqronJobData<T>>;
-
-  /** Push multiple jobs atomically */
-  enqueueBulk<T>(
-    queueName: string,
-    jobs: { data: T; opts?: OqronJobOptions }[],
-  ): Promise<OqronJobData<T>[]>;
-
-  /** Push a complex parent-child DAG map */
-  enqueueFlow(flow: FlowJobNode): Promise<OqronJobData>;
+    jobId: string,
+    delayMs?: number,
+  ): Promise<void>;
 
   /**
-   * Used by Workers to fetch work.
-   * Atomically claims `limit` number of jobs, transitioning them from 'waiting' to 'active'
-   * and assigning the `workerId` with a specific lock TTL.
+   * Atomically claim N job IDs for a specific worker.
+   * Transitions IDs from 'waiting' to 'active' state in the broker.
    */
-  claimJobs(
+  claimJobIds(
     queueName: string,
-    limit: number,
     workerId: string,
+    limit: number,
     lockTtlMs: number,
-  ): Promise<OqronJobData[]>;
+    limiter?: { max: number; duration: number; groupKey?: string },
+  ): Promise<string[]>;
 
   /**
-   * Extends the TTL lock for jobs currently being processed by this worker.
-   * Throws if the job was stolen/expired.
+   * Extend the TTL for an active job ID.
    */
   extendLock(jobId: string, workerId: string, lockTtlMs: number): Promise<void>;
 
   /**
-   * Mark a job as fully processed.
-   * Clears the active lock cleanly.
+   * Acknowledge completion and remove from broker tracking.
    */
-  completeJob(jobId: string, returnValue?: any): Promise<void>;
+  ack(jobId: string): Promise<void>;
 
   /**
-   * Mark a job as failed.
-   * The adapter is responsible for decrementing attempts and pushing it
-   * to a 'delayed' state if backoff applies, or 'failed' (DLQ) if out of retries.
+   * Implementation-specific pause/resume signaling.
    */
-  failJob(jobId: string, reason: string, stacktrace?: string): Promise<void>;
+  setQueuePaused(queueName: string, paused: boolean): Promise<void>;
 
-  /** Update user-defined progress metrics. */
-  updateProgress(jobId: string, percent: number, label?: string): Promise<void>;
-
-  /** Get raw job data. */
-  getJob(jobId: string): Promise<OqronJobData | null>;
-
-  /** Delete a job payload completely. */
-  removeJob(jobId: string): Promise<void>;
+  /** Check connectivity to the broker engine. */
+  ping(): Promise<boolean>;
 }

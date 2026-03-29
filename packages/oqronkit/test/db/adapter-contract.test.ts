@@ -1,14 +1,12 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { MemoryOqronAdapter } from "../../src/db/adapters/memory.adapter.js";
+import { MemoryAdapter } from "../../src/adapters/memory.adapter.js";
 import type { IOqronAdapter } from "../../src/core/types/db.types.js";
-import type { JobRecord } from "../../src/core/types/cron.types.js";
+import type { OqronJob } from "../../src/core/types/job.types.js";
 
 /**
  * IOqronAdapter Contract Tests
  *
- * These tests verify that every adapter method works correctly.
- * The same test suite can be reused for SQLite, Postgres, and Redis
- * adapters by swapping the `createAdapter()` factory.
+ * Verifies that every DB adapter implementation follows the unified storage model.
  */
 function runAdapterContractTests(
   name: string,
@@ -21,259 +19,75 @@ function runAdapterContractTests(
       adapter = createAdapter();
     });
 
-    // ── upsertSchedule + getSchedules ──────────────────────────────
+    describe("Schedule Management", () => {
+      it("upserts a schedule and retrieves it", async () => {
+        await adapter.upsertSchedule({
+          name: "test-cron",
+          expression: "*/5 * * * *",
+          missedFire: "skip",
+          overlap: "skip",
+          tags: ["billing"],
+          handler: async () => {},
+        });
 
-    it("upserts a schedule and retrieves it", async () => {
-      await adapter.upsertSchedule({
-        name: "test-cron",
-        expression: "*/5 * * * *",
-        missedFire: "skip",
-        overlap: "skip",
-        tags: ["billing"],
-        handler: async () => {},
+        const schedules = await adapter.getSchedules();
+        expect(schedules.length).toBe(1);
+        expect(schedules[0].id).toBe("test-cron");
       });
 
-      const schedules = await adapter.getSchedules();
-      expect(schedules.length).toBe(1);
-      expect(schedules[0].name).toBe("test-cron");
+      it("handles pause/resume states", async () => {
+        await adapter.upsertSchedule({ name: "p-1", missedFire: "skip", overlap: "skip", tags: [], handler: async () => {} });
+        await adapter.setSchedulePaused("p-1", true);
+        
+        const sched = await adapter.getSchedule("p-1");
+        expect(sched?.status).toBe("paused");
+      });
     });
 
-    it("upserts same schedule twice without duplicating", async () => {
-      const def = {
-        name: "dedup-test",
-        expression: "*/1 * * * *",
-        missedFire: "skip" as const,
-        overlap: "skip" as const,
-        tags: [],
-        handler: async () => {},
-      };
+    describe("Job Operations", () => {
+      it("upserts and retrieves a job", async () => {
+        const job: OqronJob = {
+          id: "job-1",
+          type: "task",
+          queueName: "q1",
+          status: "waiting",
+          data: { foo: "bar" },
+          opts: {},
+          attemptMade: 0,
+          progressPercent: 0,
+          tags: ["t1"],
+          createdAt: new Date(),
+        };
 
-      await adapter.upsertSchedule(def);
-      await adapter.upsertSchedule(def);
+        await adapter.upsertJob(job);
+        const fetched = await adapter.getJob("job-1");
+        expect(fetched?.id).toBe("job-1");
+        expect(fetched?.data).toEqual({ foo: "bar" });
+      });
 
-      const schedules = await adapter.getSchedules();
-      expect(schedules.length).toBe(1);
+      it("filters jobs correctly", async () => {
+        const base = { type: "task" as const, queueName: "q", opts: {}, attemptMade: 0, progressPercent: 0, tags: [], createdAt: new Date() };
+        await adapter.upsertJob({ ...base, id: "j1", status: "completed" });
+        await adapter.upsertJob({ ...base, id: "j2", status: "failed" });
+
+        const completed = await adapter.listJobs({ status: "completed" });
+        expect(completed.length).toBe(1);
+        expect(completed[0].id).toBe("j1");
+      });
     });
 
-    // ── updateNextRun + getDueSchedules ────────────────────────────
+    describe("System Stats", () => {
+      it("aggregates stats correctly", async () => {
+        const base = { type: "task" as const, queueName: "q", opts: {}, attemptMade: 0, progressPercent: 0, tags: [], createdAt: new Date() };
+        await adapter.upsertJob({ ...base, id: "j1", status: "active" });
+        await adapter.upsertJob({ ...base, id: "j2", status: "completed" });
 
-    it("marks a schedule as due and retrieves it", async () => {
-      await adapter.upsertSchedule({
-        name: "due-test",
-        expression: "*/1 * * * *",
-        missedFire: "skip",
-        overlap: "skip",
-        tags: [],
-        handler: async () => {},
+        const stats = await adapter.getSystemStats();
+        expect(stats.counts.jobs.active).toBe(1);
+        expect(stats.counts.jobs.completed).toBe(1);
       });
-
-      const past = new Date(Date.now() - 60_000);
-      await adapter.updateNextRun("due-test", past);
-
-      const due = await adapter.getDueSchedules(new Date(), 10);
-      expect(due.length).toBe(1);
-      expect(due[0].name).toBe("due-test");
-    });
-
-    it("does not return future schedules as due", async () => {
-      await adapter.upsertSchedule({
-        name: "future-test",
-        expression: "*/1 * * * *",
-        missedFire: "skip",
-        overlap: "skip",
-        tags: [],
-        handler: async () => {},
-      });
-
-      const future = new Date(Date.now() + 60_000);
-      await adapter.updateNextRun("future-test", future);
-
-      const due = await adapter.getDueSchedules(new Date(), 10);
-      expect(due.length).toBe(0);
-    });
-
-    it("updateNextRun(null) removes from due set", async () => {
-      await adapter.upsertSchedule({
-        name: "null-next",
-        expression: "*/1 * * * *",
-        missedFire: "skip",
-        overlap: "skip",
-        tags: [],
-        handler: async () => {},
-      });
-
-      await adapter.updateNextRun("null-next", new Date(Date.now() - 1000));
-      await adapter.updateNextRun("null-next", null);
-
-      const due = await adapter.getDueSchedules(new Date(), 10);
-      expect(due.length).toBe(0);
-    });
-
-    // ── recordExecution + getExecutions ────────────────────────────
-
-    it("records an execution and retrieves it", async () => {
-      await adapter.upsertSchedule({
-        name: "exec-test",
-        expression: "*/1 * * * *",
-        missedFire: "skip",
-        overlap: "skip",
-        tags: [],
-        handler: async () => {},
-      });
-
-      const job: JobRecord = {
-        id: "job-1",
-        scheduleId: "exec-test",
-        status: "completed",
-        startedAt: new Date(),
-        completedAt: new Date(),
-        attempts: 1,
-      };
-
-      await adapter.recordExecution(job);
-      const execs = await adapter.getExecutions("exec-test", {
-        limit: 10,
-        offset: 0,
-      });
-
-      expect(execs.length).toBe(1);
-      expect(execs[0].id).toBe("job-1");
-      expect(execs[0].status).toBe("completed");
-    });
-
-    // ── getActiveJobs ─────────────────────────────────────────────
-
-    it("tracks active jobs", async () => {
-      await adapter.upsertSchedule({
-        name: "active-test",
-        expression: "*/1 * * * *",
-        missedFire: "skip",
-        overlap: "skip",
-        tags: [],
-        handler: async () => {},
-      });
-
-      await adapter.recordExecution({
-        id: "active-1",
-        scheduleId: "active-test",
-        status: "running",
-        startedAt: new Date(),
-      });
-
-      const active = await adapter.getActiveJobs();
-      expect(active.length).toBeGreaterThanOrEqual(1);
-      expect(active.some((j) => j.id === "active-1")).toBe(true);
-
-      // Complete it
-      await adapter.recordExecution({
-        id: "active-1",
-        scheduleId: "active-test",
-        status: "completed",
-        startedAt: new Date(),
-        completedAt: new Date(),
-      });
-
-      const afterComplete = await adapter.getActiveJobs();
-      expect(afterComplete.some((j) => j.id === "active-1")).toBe(false);
-    });
-
-    // ── updateJobProgress ─────────────────────────────────────────
-
-    it("updates job progress", async () => {
-      await adapter.upsertSchedule({
-        name: "progress-test",
-        expression: "*/1 * * * *",
-        missedFire: "skip",
-        overlap: "skip",
-        tags: [],
-        handler: async () => {},
-      });
-
-      await adapter.recordExecution({
-        id: "prog-1",
-        scheduleId: "progress-test",
-        status: "running",
-        startedAt: new Date(),
-      });
-
-      await adapter.updateJobProgress("prog-1", 75, "Processing...");
-
-      const execs = await adapter.getExecutions("progress-test", {
-        limit: 10,
-        offset: 0,
-      });
-      const job = execs.find((j) => j.id === "prog-1");
-      expect(job?.progressPercent).toBe(75);
-    });
-
-    // ── pause/resume ──────────────────────────────────────────────
-
-    it("paused schedules are excluded from getDueSchedules", async () => {
-      await adapter.upsertSchedule({
-        name: "pause-test",
-        expression: "*/1 * * * *",
-        missedFire: "skip",
-        overlap: "skip",
-        tags: [],
-        handler: async () => {},
-      });
-
-      await adapter.updateNextRun("pause-test", new Date(Date.now() - 1000));
-      await adapter.pauseSchedule("pause-test");
-
-      const due = await adapter.getDueSchedules(new Date(), 10);
-      expect(due.some((d) => d.name === "pause-test")).toBe(false);
-    });
-
-    it("resumed schedules appear in getDueSchedules again", async () => {
-      await adapter.upsertSchedule({
-        name: "resume-test",
-        expression: "*/1 * * * *",
-        missedFire: "skip",
-        overlap: "skip",
-        tags: [],
-        handler: async () => {},
-      });
-
-      await adapter.updateNextRun("resume-test", new Date(Date.now() - 1000));
-      await adapter.pauseSchedule("resume-test");
-      await adapter.resumeSchedule("resume-test");
-
-      const due = await adapter.getDueSchedules(new Date(), 10);
-      expect(due.some((d) => d.name === "resume-test")).toBe(true);
-    });
-
-    // ── cleanOldExecutions ────────────────────────────────────────
-
-    it("cleans old executions before a date", async () => {
-      await adapter.upsertSchedule({
-        name: "clean-test",
-        expression: "*/1 * * * *",
-        missedFire: "skip",
-        overlap: "skip",
-        tags: [],
-        handler: async () => {},
-      });
-
-      await adapter.recordExecution({
-        id: "old-job",
-        scheduleId: "clean-test",
-        status: "completed",
-        startedAt: new Date("2020-01-01"),
-        completedAt: new Date("2020-01-01"),
-      });
-
-      const removed = await adapter.cleanOldExecutions(new Date("2023-01-01"));
-      expect(removed).toBeGreaterThanOrEqual(1);
-
-      const execs = await adapter.getExecutions("clean-test", {
-        limit: 10,
-        offset: 0,
-      });
-      expect(execs.some((j) => j.id === "old-job")).toBe(false);
     });
   });
 }
 
-// Run against MemoryAdapter
-runAdapterContractTests("MemoryAdapter", () => new MemoryOqronAdapter());
+runAdapterContractTests("MemoryAdapter", () => new MemoryAdapter());

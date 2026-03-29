@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
+import { Worker as ThreadWorker } from "node:worker_threads";
+import { AdapterRegistry } from "../../core/adapter-registry.js";
 import type { IOqronModule, Logger } from "../../core/index.js";
 import { OqronEventBus } from "../../core/index.js";
 import type { OqronConfig } from "../../core/types/config.types.js";
-import type {
-  IQueueAdapter,
-  OqronJobData,
-} from "../../core/types/queue.types.js";
+import type { IOqronAdapter } from "../../core/types/db.types.js";
+import type { OqronJob } from "../../core/types/job.types.js";
+import type { IQueueAdapter } from "../../core/types/queue.types.js";
 import { getRegisteredWorkers, type Worker } from "./worker.js";
 
 export class WorkerEngine implements IOqronModule {
@@ -16,6 +17,9 @@ export class WorkerEngine implements IOqronModule {
   private workerIdStr = randomUUID();
   private activeJobs = new Map<string, Promise<void>>();
 
+  private sharedBroker!: IQueueAdapter;
+  private sharedDb!: IOqronAdapter;
+
   constructor(
     private config: OqronConfig,
     private logger: Logger,
@@ -25,9 +29,17 @@ export class WorkerEngine implements IOqronModule {
     const modules = this.config.modules || [];
     if (!modules.includes("worker")) return;
 
+    const registry = AdapterRegistry.from(this.config);
+    this.sharedBroker = registry.resolveBroker();
+    this.sharedDb = registry.resolveDb();
+
     const workers = getRegisteredWorkers();
     this.logger.info(
-      `Initialized distributed WorkerEngine controlling ${workers.length} nodes`,
+      `Initialized distributed WorkerEngine (Dual-Storage Model) controlling ${workers.length} nodes`,
+      {
+        broker: (this.sharedBroker as any).constructor?.name ?? "unknown",
+        db: (this.sharedDb as any).constructor?.name ?? "unknown",
+      },
     );
   }
 
@@ -64,7 +76,6 @@ export class WorkerEngine implements IOqronModule {
   }
 
   async triggerManual(id: string): Promise<boolean> {
-    this.logger.warn(`Manual worker trigger invoked for queue ${id}.`);
     const w = getRegisteredWorkers().find((w) => w.name === id);
     if (w) {
       await this.poll(w);
@@ -82,7 +93,6 @@ export class WorkerEngine implements IOqronModule {
     }, heartbeatMs);
     this.timers.push(t);
 
-    // Immediate startup poll
     setTimeout(() => this.poll(w), 0);
   }
 
@@ -93,64 +103,101 @@ export class WorkerEngine implements IOqronModule {
       w.options?.concurrency ?? this.config.worker?.concurrency ?? 5;
     const lockTtlMs = this.config.worker?.lockTtlMs ?? 30000;
 
-    const freeSlots = concurrency - Array.from(this.activeJobs.values()).length;
+    const freeSlots = concurrency - this.activeJobs.size;
     if (freeSlots <= 0) return;
 
-    let adapter: IQueueAdapter;
-    try {
-      adapter = w.getAdapter();
-    } catch {
-      return;
-    } // Handled natively if missing
+    const broker = w.options?.connection ?? this.sharedBroker;
 
-    const jobs = await adapter.claimJobs(
+    // Claim IDs from Broker
+    const jobIds = await broker.claimJobIds(
       w.name,
-      freeSlots,
       this.workerIdStr,
+      freeSlots,
       lockTtlMs,
     );
-    for (const job of jobs) {
-      const p = this.executeJob(job, w, adapter).finally(() =>
-        this.activeJobs.delete(job.id),
+
+    for (const id of jobIds) {
+      // Fetch full payload from DB
+      const job = await this.sharedDb.getJob(id);
+      if (!job) {
+        this.logger.error(`Claimed job ${id} not found in DB!`, { id });
+        await broker.ack(id);
+        continue;
+      }
+
+      const p = this.executeJob(job, w, broker).finally(() =>
+        this.activeJobs.delete(id),
       );
-      this.activeJobs.set(job.id, p);
+      this.activeJobs.set(id, p);
     }
   }
 
   private async executeJob(
-    job: OqronJobData,
+    job: OqronJob,
     w: Worker,
-    adapter: IQueueAdapter,
+    broker: IQueueAdapter,
   ): Promise<void> {
     try {
-      OqronEventBus.emit("job:start", job.queueName, job.id, w.name);
+      OqronEventBus.emit("job:start", job.queueName, job.id, job.queueName);
 
-      const result = await w.processor(job);
-      await adapter.completeJob(job.id, result);
+      // Update DB to active
+      job.status = "active";
+      job.workerId = this.workerIdStr;
+      job.startedAt = new Date();
+      job.attemptMade += 1;
+      await this.sharedDb.upsertJob(job);
+
+      let result: any;
+      if (typeof w.processor === "string") {
+        result = await new Promise((resolve, reject) => {
+          const thread = new ThreadWorker(w.processor as string, {
+            workerData: job,
+          });
+          thread.on("message", resolve);
+          thread.on("error", reject);
+          thread.on("exit", (code) => {
+            if (code !== 0) reject(new Error(`Thread exited: ${code}`));
+          });
+        });
+      } else {
+        result = await w.processor(job as any);
+      }
+
+      // Success Path
+      job.status = "completed";
+      job.finishedAt = new Date();
+      job.returnValue = result;
+      job.progressPercent = 100;
+      job.progressLabel = "Completed";
+
+      await this.sharedDb.upsertJob(job);
+      await broker.ack(job.id);
+
       OqronEventBus.emit("job:success", job.queueName, job.id);
 
       if (w.options?.hooks?.onSuccess) {
-        Promise.resolve()
-          .then(() => w.options!.hooks!.onSuccess!(job, result))
-          .catch((e) =>
-            this.logger.error(`[Worker ${w.name}] onSuccess hook error`, e),
-          );
+        void Promise.resolve().then(() =>
+          w.options!.hooks!.onSuccess!(job as any, result),
+        );
       }
     } catch (e: any) {
+      this.logger.error(`Job ${job.id} failed`, e);
+
       const errorObject = new Error(e.message ?? "Unknown error");
-      await adapter.failJob(
-        job.id,
-        e.message || "Worker execution failed",
-        e.stack,
-      );
+      job.status = "failed"; // Logic for retries should be here or in DB
+      job.error = e.message;
+      job.stacktrace = [e.stack];
+      job.finishedAt = new Date();
+
+      await this.sharedDb.upsertJob(job);
+      await broker.ack(job.id);
+
       OqronEventBus.emit("job:fail", job.queueName, job.id, errorObject);
 
       if (w.options?.hooks?.onFail) {
-        Promise.resolve()
-          .then(() => w.options!.hooks!.onFail!(job, errorObject))
-          .catch((err) =>
-            this.logger.error(`[Worker ${w.name}] onFail hook error`, err),
-          );
+        void Promise.resolve().then(() =>
+          w.options!.hooks!.onFail!(job as any, errorObject),
+        );
       }
     }
   }

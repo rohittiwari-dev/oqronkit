@@ -12,12 +12,6 @@ const defaultConfig: ValidatedConfig = {
     migrations: "auto",
     ssl: false,
   },
-  lock: {
-    adapter: "memory",
-    ttl: 30000,
-    retryDelay: 200,
-    retryCount: 5,
-  },
   modules: [],
   cron: {
     enable: true,
@@ -92,9 +86,6 @@ export function reconfigureConfig(config: OqronConfig): ValidatedConfig {
   const isIOqronAdapter = (val: any) =>
     val && typeof val === "object" && typeof val.upsertSchedule === "function";
 
-  const isILockAdapter = (val: any) =>
-    val && typeof val === "object" && typeof val.acquire === "function";
-
   return {
     project: config.project ?? defaultConfig.project,
     environment: config.environment ?? defaultConfig.environment,
@@ -105,13 +96,7 @@ export function reconfigureConfig(config: OqronConfig): ValidatedConfig {
         : { ...(defaultConfig.db as any), ...config.db }
       : defaultConfig.db,
 
-    lock: config.lock
-      ? isILockAdapter(config.lock)
-        ? (config.lock as any)
-        : { ...(defaultConfig.lock as any), ...config.lock }
-      : defaultConfig.lock,
-
-    broker: config.broker,
+    redis: config.redis,
 
     modules: config.modules ?? defaultConfig.modules,
 
@@ -146,7 +131,10 @@ export function reconfigureConfig(config: OqronConfig): ValidatedConfig {
     worker: {
       ...defaultConfig.worker,
       ...config.worker,
-      retries: { ...defaultConfig.worker.retries, ...config.worker?.retries },
+      retries: {
+        ...defaultConfig.worker.retries,
+        ...config.worker?.retries,
+      },
       deadLetter: {
         ...defaultConfig.worker.deadLetter,
         ...config.worker?.deadLetter,
@@ -159,10 +147,13 @@ export function reconfigureConfig(config: OqronConfig): ValidatedConfig {
     logger:
       config.logger === false
         ? false
-        : {
-            ...(defaultConfig.logger as any),
-            ...config.logger,
-          },
+        : ({
+            ...(defaultConfig.logger as Extract<
+              ValidatedConfig["logger"],
+              object
+            >),
+            ...(config.logger as Extract<ValidatedConfig["logger"], object>),
+          } as ValidatedConfig["logger"]),
 
     telemetry: {
       prometheus: {

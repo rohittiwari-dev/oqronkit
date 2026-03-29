@@ -1,73 +1,13 @@
 import { z } from "zod";
-import type { IOqronAdapter } from "../types/db.types.js";
-import type { ILockAdapter } from "../types/lock.types.js";
-
-// Duck-typing validators for DI instances
-const isIOqronAdapter = (val: unknown): val is IOqronAdapter => {
-  if (!val || typeof val !== "object") return false;
-  return (
-    typeof (val as any).upsertSchedule === "function" &&
-    typeof (val as any).getDueSchedules === "function"
-  );
-};
-
-const isILockAdapter = (val: unknown): val is ILockAdapter => {
-  if (!val || typeof val !== "object") return false;
-  return (
-    typeof (val as any).acquire === "function" &&
-    typeof (val as any).renew === "function"
-  );
-};
+// Duck-typing validators removed in favor of plain generic config (DatabaseLike / RedisLike)
 
 export const OqronConfigSchema = z.object({
   project: z.string().optional(),
   environment: z.string().default("development"),
 
-  // Infrastructure — Union of explicit DI or declarative config
-  db: z
-    .union([
-      z.custom<IOqronAdapter>(
-        isIOqronAdapter,
-        "db must be an instance of IOqronAdapter",
-      ),
-      z.object({
-        adapter: z.enum([
-          "sqlite",
-          "memory",
-          "postgres",
-          "mysql",
-          "mongodb",
-          "redis",
-        ]),
-        url: z.string().optional(),
-        poolMin: z.number().default(2),
-        poolMax: z.number().default(10),
-        tablePrefix: z.string().default("oqron_"),
-        migrations: z
-          .union([z.enum(["auto", "manual"]), z.literal(false)])
-          .default("auto"),
-        ssl: z.boolean().default(false),
-      }),
-    ])
-    .optional(),
-
-  lock: z
-    .union([
-      z.custom<ILockAdapter>(
-        isILockAdapter,
-        "lock must be an instance of ILockAdapter",
-      ),
-      z.object({
-        adapter: z.enum(["db", "memory", "redis"]),
-        url: z.string().optional(),
-        ttl: z.number().default(30000),
-        retryDelay: z.number().default(200),
-        retryCount: z.number().default(5),
-      }),
-    ])
-    .optional(),
-
-  broker: z.any().optional(),
+  // Infrastructure — Unified connection inputs
+  db: z.any().optional(), // DatabaseLike (accepts connection strings, driver instances, or config objects)
+  redis: z.any().optional(), // RedisLike (accepts ioredis instances or config objects)
 
   // Modules
   modules: z

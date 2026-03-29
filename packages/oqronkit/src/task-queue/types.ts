@@ -1,7 +1,4 @@
-import type {
-  OqronJobData,
-  OqronJobOptions,
-} from "../core/types/queue.types.js";
+import type { OqronJob, OqronJobOptions } from "../core/types/job.types.js";
 
 export interface TaskJobContext<T = any> {
   /** The internal idempotency key or generated UUID of the job */
@@ -47,13 +44,13 @@ export interface TaskQueueConfig<T = any, R = any> {
   /** DLQ hooks */
   deadLetter?: {
     enabled?: boolean;
-    onDead?: (job: OqronJobData<T, R>) => Promise<void>;
+    onDead?: (job: OqronJob<T, R>) => Promise<void>;
   };
 
   /** Natively execute direct local callbacks when the monolithic processor succeeds or fails */
   hooks?: {
-    onSuccess?: (job: OqronJobData<T, R>, result: R) => Promise<void> | void;
-    onFail?: (job: OqronJobData<T, R>, error: Error) => Promise<void> | void;
+    onSuccess?: (job: OqronJob<T, R>, result: R) => Promise<void> | void;
+    onFail?: (job: OqronJob<T, R>, error: Error) => Promise<void> | void;
   };
 
   /**
@@ -64,8 +61,9 @@ export interface TaskQueueConfig<T = any, R = any> {
 }
 
 export interface ITaskQueue<T = any, R = any> {
+  name: string;
   /**
    * Pushes a new payload onto the task queue.
    */
-  add(data: T, opts?: OqronJobOptions): Promise<OqronJobData<T, R>>;
+  add(data: T, opts?: OqronJobOptions): Promise<OqronJob<T, R>>;
 }

@@ -2,19 +2,23 @@ import { randomUUID } from "node:crypto";
 import type { IOqronModule, Logger } from "../core/index.js";
 import { OqronEventBus } from "../core/index.js";
 import type { OqronConfig } from "../core/types/config.types.js";
-import type { IQueueAdapter, OqronJobData } from "../core/types/queue.types.js";
-import { MemoryQueueAdapter } from "../queue/adapters/memory-queue.js";
-import { getRegisteredTaskQueues, injectTaskQueueAdapter } from "./registry.js";
+import type { IOqronAdapter } from "../core/types/db.types.js";
+import type { OqronJob } from "../core/types/job.types.js";
+import type { IQueueAdapter } from "../core/types/queue.types.js";
+import { OqronKit } from "../index.js";
+import { getRegisteredTaskQueues } from "./registry.js";
 import type { TaskJobContext, TaskQueueConfig } from "./types.js";
 
 export class TaskQueueEngine implements IOqronModule {
   public readonly name = "taskQueue";
   public readonly enabled = true;
   private running = false;
-  private adapter!: IQueueAdapter;
   private timers: NodeJS.Timeout[] = [];
   private workerIdStr = randomUUID();
   private activeJobs = new Map<string, Promise<void>>();
+
+  private broker!: IQueueAdapter;
+  private db!: IOqronAdapter;
 
   constructor(
     private config: OqronConfig,
@@ -25,14 +29,13 @@ export class TaskQueueEngine implements IOqronModule {
     const modules = this.config.modules || [];
     if (!modules.includes("taskQueue")) return;
 
-    // TODO: Dynamically wire Redis/DB adapter if config.broker is provided
-    // For V1 Phase 1, we aggressively rely on the Memory adapter to prove the engine works natively.
-    this.adapter = new MemoryQueueAdapter();
-    injectTaskQueueAdapter(this.adapter);
+    this.broker = OqronKit.getBroker();
+    this.db = OqronKit.getDb();
 
     const qs = getRegisteredTaskQueues();
     this.logger.info(
-      `Initialized monolithic TaskQueue engine covering ${qs.length} endpoints`,
+      `Initialized monolithic TaskQueue engine (Dual-Storage) covering ${qs.length} endpoints`,
+      { broker: (this.broker as any).constructor?.name ?? "unknown" },
     );
   }
 
@@ -50,9 +53,6 @@ export class TaskQueueEngine implements IOqronModule {
   }
 
   async triggerManual(id: string): Promise<boolean> {
-    this.logger.warn(
-      `Manual trigger called for taskQueue ${id}. This forces the poller immediately.`,
-    );
     const q = getRegisteredTaskQueues().find((q) => q.name === id);
     if (q) {
       await this.poll(q);
@@ -63,16 +63,13 @@ export class TaskQueueEngine implements IOqronModule {
 
   async stop(): Promise<void> {
     this.running = false;
-    for (const t of this.timers) {
-      clearInterval(t);
-    }
+    for (const t of this.timers) clearInterval(t);
     this.timers = [];
 
-    // Wait for active task promises to settle for graceful shutdown
     const allActive = Array.from(this.activeJobs.values());
     if (allActive.length > 0) {
       this.logger.info(
-        `TaskQueueEngine draining ${allActive.length} active monolithic jobs...`,
+        `TaskQueueEngine draining ${allActive.length} active jobs...`,
       );
       await Promise.allSettled(allActive);
     }
@@ -81,17 +78,12 @@ export class TaskQueueEngine implements IOqronModule {
   private startPolling(q: TaskQueueConfig) {
     const heartbeatMs =
       q.heartbeatMs ?? this.config.taskQueue?.heartbeatMs ?? 5000;
-
-    // Safety interval
     const t = setInterval(() => {
       this.poll(q).catch((e) =>
         this.logger.error(`TaskQueue poller crashed for ${q.name}`, e),
       );
     }, heartbeatMs);
-
     this.timers.push(t);
-
-    // Trigger initial poll immediately
     setTimeout(() => this.poll(q), 0);
   }
 
@@ -102,41 +94,45 @@ export class TaskQueueEngine implements IOqronModule {
       q.concurrency ?? this.config.taskQueue?.concurrency ?? 5;
     const lockTtlMs = q.lockTtlMs ?? this.config.taskQueue?.lockTtlMs ?? 30000;
 
-    // Prevent pulling more jobs if we are globally constrained
-    const freeSlots = concurrency - Array.from(this.activeJobs.values()).length;
-    if (freeSlots <= 0) return; // Completely saturated for this specific queue instance
+    const freeSlots = concurrency - this.activeJobs.size;
+    if (freeSlots <= 0) return;
 
-    const jobs = await this.adapter.claimJobs(
+    // 1. Claim IDs from Broker
+    const jobIds = await this.broker.claimJobIds(
       q.name,
-      freeSlots,
       this.workerIdStr,
+      freeSlots,
       lockTtlMs,
     );
-    if (jobs.length > 0) {
-      this.logger.debug(
-        `[TaskQueue: ${q.name}] Claimed ${jobs.length} jobs directly into monolithic memory.`,
-      );
-    }
 
-    for (const job of jobs) {
+    for (const id of jobIds) {
+      // 2. Fetch full payload from DB
+      const job = await this.db.getJob(id);
+      if (!job) {
+        this.logger.error(`Claimed job ${id} not found in DB!`, { id });
+        await this.broker.ack(id);
+        continue;
+      }
+
       const p = this.executeJob(job, q).finally(() => {
-        this.activeJobs.delete(job.id);
+        this.activeJobs.delete(id);
       });
-      this.activeJobs.set(job.id, p);
+      this.activeJobs.set(id, p);
     }
   }
 
-  private async executeJob(
-    job: OqronJobData,
-    q: TaskQueueConfig,
-  ): Promise<void> {
+  private async executeJob(job: OqronJob, q: TaskQueueConfig): Promise<void> {
     let internalDiscarded = false;
 
     const ctx: TaskJobContext<any> = {
       id: job.id,
       data: job.data,
       progress: async (percent, label) => {
-        await this.adapter.updateProgress(job.id, percent, label);
+        await this.db.upsertJob({
+          ...job,
+          progressPercent: percent,
+          progressLabel: label,
+        });
       },
       log: (level, msg) => {
         const method = this.logger[level] || this.logger.info;
@@ -148,54 +144,52 @@ export class TaskQueueEngine implements IOqronModule {
     };
 
     try {
-      // Fire event telemetry tracking via EventBus
       OqronEventBus.emit("job:start", job.queueName, job.id, q.name);
+
+      // Update state to active in DB
+      job.status = "active";
+      job.workerId = this.workerIdStr;
+      job.startedAt = new Date();
+      job.attemptMade += 1;
+      await this.db.upsertJob(job);
 
       const result = await q.handler(ctx);
 
-      if (internalDiscarded) {
-        throw new Error(
-          "[OqronKit] Forced internal discard invoked inside handler",
-        );
-      }
+      if (internalDiscarded) throw new Error("Discarded");
 
-      await this.adapter.completeJob(job.id, result);
+      // Update state to completed in DB
+      job.status = "completed";
+      job.finishedAt = new Date();
+      job.returnValue = result;
+      job.progressPercent = 100;
+      job.progressLabel = "Completed";
+
+      await this.db.upsertJob(job);
+      await this.broker.ack(job.id);
+
       OqronEventBus.emit("job:success", job.queueName, job.id);
 
       if (q.hooks?.onSuccess) {
-        // Execute asynchronously avoiding pipeline halts
-        Promise.resolve()
-          .then(() => q.hooks!.onSuccess!(job, result))
-          .catch((e) =>
-            this.logger.error(
-              `[TaskQueue ${q.name}] onSuccess hook exception`,
-              e,
-            ),
-          );
+        void Promise.resolve().then(() =>
+          q.hooks!.onSuccess!(job as any, result),
+        );
       }
     } catch (e: any) {
       const errorObject = new Error(e.message ?? "Unknown error");
-      if (internalDiscarded) {
-        // Drop permanently with no retry logic applied.
-        await this.adapter.failJob(job.id, "Discarded", e.stack);
-      } else {
-        await this.adapter.failJob(
-          job.id,
-          e.message || "Unknown error",
-          e.stack,
-        );
-      }
+      job.status = internalDiscarded ? "failed" : "failed"; // Retry logic needed here
+      job.error = e.message;
+      job.stacktrace = [e.stack];
+      job.finishedAt = new Date();
+
+      await this.db.upsertJob(job);
+      await this.broker.ack(job.id);
+
       OqronEventBus.emit("job:fail", job.queueName, job.id, errorObject);
 
       if (q.hooks?.onFail) {
-        Promise.resolve()
-          .then(() => q.hooks!.onFail!(job, errorObject))
-          .catch((err) =>
-            this.logger.error(
-              `[TaskQueue ${q.name}] onFail hook exception`,
-              err,
-            ),
-          );
+        void Promise.resolve().then(() =>
+          q.hooks!.onFail!(job as any, errorObject),
+        );
       }
     }
   }

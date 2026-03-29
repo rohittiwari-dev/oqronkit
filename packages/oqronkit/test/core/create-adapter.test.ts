@@ -6,16 +6,18 @@ describe("createDbAdapter", () => {
     name: "test-adapter",
     upsertSchedule: async () => {},
     getDueSchedules: async () => [],
+    getSchedule: async () => null,
     getSchedules: async () => [],
-    updateNextRun: async () => {},
-    recordExecution: async () => {},
-    updateJobProgress: async () => {},
-    getExecutions: async () => [],
-    getActiveJobs: async () => [],
-    cleanOldExecutions: async () => 0,
-    pruneHistoryForSchedule: async () => {},
-    pauseSchedule: async () => {},
-    resumeSchedule: async () => {},
+    updateScheduleNextRun: async () => {},
+    setSchedulePaused: async () => {},
+    upsertJob: async () => {},
+    getJob: async () => null,
+    listJobs: async () => [],
+    deleteJob: async () => {},
+    pruneJobs: async () => 0,
+    enqueueFlow: async () => ({} as any),
+    getQueueMetrics: async () => ({} as any),
+    getSystemStats: async () => ({} as any),
   };
 
   it("returns a valid IOqronAdapter", () => {
@@ -23,15 +25,15 @@ describe("createDbAdapter", () => {
     expect(adapter).toBeDefined();
     expect(typeof adapter.upsertSchedule).toBe("function");
     expect(typeof adapter.getDueSchedules).toBe("function");
-    expect(typeof adapter.pauseSchedule).toBe("function");
+    expect(typeof adapter.setSchedulePaused).toBe("function");
   });
 
   it("throws if a required method is missing", () => {
     const broken = { ...validImpl } as any;
-    delete broken.pauseSchedule;
+    delete broken.setSchedulePaused;
 
     expect(() => createDbAdapter(broken)).toThrowError(
-      /Missing required method 'pauseSchedule'/,
+      /Missing required method 'setSchedulePaused'/,
     );
   });
 });

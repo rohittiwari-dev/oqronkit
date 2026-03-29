@@ -1,38 +1,25 @@
-import type {
-  FlowJobNode,
-  IQueueAdapter,
-  OqronJobData,
-} from "../../core/types/queue.types.js";
-import { getTaskQueueAdapter } from "../../task-queue/registry.js";
+import type { FlowJobNode, OqronJob } from "../../core/types/job.types.js";
+import { OqronKit } from "../../index.js";
 
 export interface FlowProducerOptions {
-  connection?: IQueueAdapter;
+  // connection override TBD
+  connection?: unknown;
 }
 
 /**
- * Enterprise Distributed Flow Producer.
- * Matches BullMQ architectures for inserting complex Directed Acyclic Graph (DAG) dependencies.
+ * Enterprise Flow Producer.
+ * Handles complex Parent-Child DAG dependencies.
+ *
+ * FlowProducer is a DB-heavy component that builds the job tree in the storage layer.
  */
 export class FlowProducer {
-  constructor(private options?: FlowProducerOptions) {}
-
-  getAdapter(): IQueueAdapter {
-    const adapter = this.options?.connection ?? getTaskQueueAdapter();
-    if (!adapter) {
-      throw new Error(
-        `[OqronKit] FlowProducer has no connection. ` +
-          `Pass { connection: adapter } or ensure OqronKit.init() has successfully run.`,
-      );
-    }
-    return adapter;
-  }
+  constructor(_options?: FlowProducerOptions) {}
 
   /**
-   * Add a recursive dependency map where the parent `name` strictly waits until
-   * all `children` finish execution across any queue natively.
+   * Pushes a recursive flow tree into the system.
    */
-  async add(flow: FlowJobNode): Promise<OqronJobData> {
-    const adapter = this.getAdapter();
-    return await adapter.enqueueFlow(flow);
+  async add(flow: FlowJobNode): Promise<OqronJob> {
+    const db = OqronKit.getDb();
+    return await db.enqueueFlow(flow);
   }
 }

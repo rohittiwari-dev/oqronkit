@@ -1,4 +1,5 @@
 import type { IQueueAdapter } from "../core/types/queue.types.js";
+import { OqronKit } from "../index.js";
 import type { TaskQueueConfig } from "./types.js";
 
 const registeredTaskQueues: TaskQueueConfig[] = [];
@@ -25,5 +26,10 @@ export function injectTaskQueueAdapter(adapter: IQueueAdapter): void {
 }
 
 export function getTaskQueueAdapter(): IQueueAdapter | null {
-  return queueAdapter;
+  if (queueAdapter) return queueAdapter;
+  try {
+    return OqronKit.getBroker();
+  } catch {
+    return null;
+  }
 }
