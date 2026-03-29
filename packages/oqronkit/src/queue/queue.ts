@@ -46,8 +46,8 @@ export class Queue<T = any, R = any> {
     // 1. Persist to Storage (Source of Truth)
     await Storage.save("jobs", jobId, job);
 
-    // 2. Signal Broker (Execution Trigger)
-    await Broker.publish(this.name, jobId, finalOpts.delay);
+    // 2. Signal Broker (Execution Trigger) — forward priority for sorted-set ordering
+    await Broker.publish(this.name, jobId, finalOpts.delay, finalOpts.priority);
 
     return job;
   }

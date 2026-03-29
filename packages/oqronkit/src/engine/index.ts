@@ -48,6 +48,7 @@ export type {
   RetryConfig,
 } from "./types/cron.types.js";
 export type {
+  BrokerStrategy,
   IBrokerEngine,
   ILockAdapter,
   IStorageEngine,

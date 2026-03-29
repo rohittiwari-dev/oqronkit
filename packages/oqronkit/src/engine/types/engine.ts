@@ -5,6 +5,9 @@ export interface ListOptions {
   offset?: number;
 }
 
+/** Job ordering strategy for broker queues */
+export type BrokerStrategy = "fifo" | "lifo" | "priority";
+
 export interface IStorageEngine {
   /** Saves a generic entity into a namespace */
   save<T>(namespace: string, id: string, data: T): Promise<void>;
@@ -31,14 +34,23 @@ export interface IStorageEngine {
 
 export interface IBrokerEngine {
   /** Pushes an ID into a named broker. */
-  publish(brokerName: string, id: string, delayMs?: number): Promise<void>;
+  publish(
+    brokerName: string,
+    id: string,
+    delayMs?: number,
+    priority?: number,
+  ): Promise<void>;
 
-  /** Claims a batch of IDs for a consumer worker. */
+  /**
+   * Claims a batch of IDs for a consumer worker.
+   * @param strategy - Ordering strategy: 'fifo' (default), 'lifo', or 'priority'
+   */
   claim(
     brokerName: string,
     consumerId: string,
     limit: number,
     lockTtlMs: number,
+    strategy?: BrokerStrategy,
   ): Promise<string[]>;
 
   /** Renews the lock heartbeat */

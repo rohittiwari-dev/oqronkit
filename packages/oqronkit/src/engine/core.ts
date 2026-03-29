@@ -23,13 +23,33 @@ export let Lock: ILockAdapter;
  */
 let _redisClient: any = null;
 let _redisClientOwned = false; // true only when WE created it from a URL string
+/** PostgreSQL adapters tracked for pool close on shutdown */
+let _pgAdapters: Array<{ close(): Promise<void> }> | null = null;
 
 /**
  * Bootstraps the engines dynamically based on config.
- * Connects to Redis for multi-node scaling or falls back to in-memory.
+ * Priority: postgres > redis > memory (in-process monolith).
  */
 export async function initEngine(config: OqronConfig): Promise<void> {
-  if (config.redis) {
+  if (config.postgres) {
+    // ── PostgreSQL Adapters ────────────────────────────────────────────────
+    const { PostgresStore } = await import("./postgres/postgres-store.js");
+    const { PostgresBroker } = await import("./postgres/postgres-broker.js");
+    const { PostgresLock } = await import("./postgres/postgres-lock.js");
+
+    const prefix = config.postgres.tablePrefix ?? "oqron";
+    const pool = config.postgres.poolSize ?? 10;
+    const conn = config.postgres.connectionString;
+
+    Storage = new PostgresStore(conn, prefix, pool);
+    Broker = new PostgresBroker(conn, prefix, pool);
+    Lock = new PostgresLock(conn, prefix, pool);
+
+    _pgAdapters = [Storage, Broker, Lock] as any[];
+    _redisClient = null;
+    _redisClientOwned = false;
+  } else if (config.redis) {
+    // ── Redis Adapters ─────────────────────────────────────────────────────
     const { Redis } = await import("ioredis");
 
     if (typeof config.redis === "string") {
@@ -43,9 +63,12 @@ export async function initEngine(config: OqronConfig): Promise<void> {
     Storage = new RedisStore(_redisClient, config.project);
     Broker = new RedisBroker(_redisClient, config.project);
     Lock = new RedisLock(_redisClient, config.project);
+    _pgAdapters = null;
   } else {
+    // ── Memory Adapters (monolith / development) ───────────────────────────
     _redisClient = null;
     _redisClientOwned = false;
+    _pgAdapters = null;
     Storage = new MemoryStore();
     Broker = new MemoryBroker();
     Lock = new MemoryLock();
@@ -58,11 +81,23 @@ export async function initEngine(config: OqronConfig): Promise<void> {
  * User-supplied instances are left open for the caller to manage.
  */
 export async function stopEngine(): Promise<void> {
+  // Close PostgreSQL connection pools
+  if (_pgAdapters) {
+    for (const adapter of _pgAdapters) {
+      try {
+        await adapter.close();
+      } catch {
+        /* best-effort */
+      }
+    }
+    _pgAdapters = null;
+  }
+
+  // Close Redis client if we own it
   if (_redisClient && _redisClientOwned) {
     try {
       await _redisClient.quit();
     } catch {
-      // Best-effort — the process may already be exiting
       try {
         _redisClient.disconnect();
       } catch {

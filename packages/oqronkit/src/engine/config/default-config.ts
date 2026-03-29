@@ -34,6 +34,7 @@ const defaultConfig: ValidatedConfig = {
     concurrency: 5,
     heartbeatMs: 5000,
     lockTtlMs: 30000,
+    strategy: "fifo",
     retries: {
       max: 3,
       strategy: "exponential",
@@ -57,6 +58,7 @@ const defaultConfig: ValidatedConfig = {
     concurrency: 5,
     heartbeatMs: 5000,
     lockTtlMs: 30000,
+    strategy: "fifo",
     retries: {
       max: 3,
       strategy: "exponential",
@@ -181,5 +183,13 @@ export function reconfigureConfig(config: OqronConfig): ValidatedConfig {
       ...defaultConfig.shutdown,
       ...config.shutdown,
     },
+
+    postgres: config.postgres
+      ? {
+          connectionString: config.postgres.connectionString,
+          tablePrefix: config.postgres.tablePrefix ?? "oqron",
+          poolSize: config.postgres.poolSize ?? 10,
+        }
+      : undefined,
   };
 }

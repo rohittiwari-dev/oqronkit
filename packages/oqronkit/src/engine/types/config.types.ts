@@ -1,4 +1,5 @@
 import type { OqronLoggerConfig } from "../logger/index.js";
+import type { BrokerStrategy } from "./engine.js";
 import type { RemoveOnConfig } from "./job.types.js";
 
 /** Shared worker execution defaults — applies to taskQueue, worker, and all future modules */
@@ -112,6 +113,8 @@ export interface OqronConfig {
     heartbeatMs?: number;
     /** Lock TTL in ms for crash recovery. @default 30000 */
     lockTtlMs?: number;
+    /** Job ordering strategy. @default "fifo" */
+    strategy?: BrokerStrategy;
     /** Default retry configuration for all task queues */
     retries?: {
       max?: number;
@@ -145,8 +148,10 @@ export interface OqronConfig {
     concurrency?: number;
     /** Polling interval in ms. @default 5000 */
     heartbeatMs?: number;
-    /** Lock duration in ms (Industrygrade: lockDuration). @default 30000 */
+    /** Lock duration in ms. @default 30000 */
     lockTtlMs?: number;
+    /** Job ordering strategy. @default "fifo" */
+    strategy?: BrokerStrategy;
     /** Default retry configuration */
     retries?: {
       max?: number;
@@ -206,5 +211,19 @@ export interface OqronConfig {
     enabled?: boolean;
     timeout?: number;
     signals?: string[];
+  };
+
+  /**
+   * PostgreSQL connection configuration.
+   * When provided, OqronKit uses PostgreSQL as the persistence backend
+   * instead of Redis, using FOR UPDATE SKIP LOCKED for atomic job claiming.
+   */
+  postgres?: {
+    /** Connection string (e.g. 'postgresql://user:pass@host:5432/db') */
+    connectionString: string;
+    /** Table name prefix. @default "oqron" */
+    tablePrefix?: string;
+    /** Connection pool size. @default 10 */
+    poolSize?: number;
   };
 }

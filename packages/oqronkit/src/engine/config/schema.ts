@@ -95,6 +95,7 @@ export const OqronConfigSchema = z.object({
       concurrency: z.number().default(5),
       heartbeatMs: z.number().default(5000),
       lockTtlMs: z.number().default(30000),
+      strategy: z.enum(["fifo", "lifo", "priority"]).default("fifo"),
       retries: RetriesSchema,
       deadLetter: DeadLetterSchema,
       removeOnComplete: RemoveOnConfigSchema.default(false),
@@ -119,6 +120,7 @@ export const OqronConfigSchema = z.object({
       concurrency: z.number().default(5),
       heartbeatMs: z.number().default(5000),
       lockTtlMs: z.number().default(30000),
+      strategy: z.enum(["fifo", "lifo", "priority"]).default("fifo"),
       retries: RetriesSchema,
       deadLetter: DeadLetterSchema,
       removeOnComplete: RemoveOnConfigSchema.default(false),
@@ -180,6 +182,15 @@ export const OqronConfigSchema = z.object({
       signals: z.array(z.string()).default(["SIGINT", "SIGTERM"]),
     })
     .default({}),
+
+  // PostgreSQL (optional — alternative to Redis for persistence)
+  postgres: z
+    .object({
+      connectionString: z.string(),
+      tablePrefix: z.string().default("oqron"),
+      poolSize: z.number().default(10),
+    })
+    .optional(),
 });
 
 export type ValidatedConfig = z.infer<typeof OqronConfigSchema>;

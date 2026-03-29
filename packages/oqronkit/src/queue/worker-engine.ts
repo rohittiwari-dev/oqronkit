@@ -3,8 +3,9 @@ import { Worker as ThreadWorker } from "node:worker_threads";
 import type { IOqronModule, Logger } from "../engine/index.js";
 import { Broker, Lock, OqronEventBus, Storage } from "../engine/index.js";
 import { HeartbeatWorker } from "../engine/lock/heartbeat-worker.js";
+import { StallDetector } from "../engine/lock/stall-detector.js";
 import type { OqronConfig } from "../engine/types/config.types.js";
-import type { IBrokerEngine } from "../engine/types/engine.js";
+import type { BrokerStrategy, IBrokerEngine } from "../engine/types/engine.js";
 import type { OqronJob } from "../engine/types/job.types.js";
 import { calculateBackoff } from "../engine/utils/backoffs.js";
 import { pruneAfterCompletion } from "../engine/utils/job-retention.js";
@@ -19,6 +20,8 @@ export class WorkerEngine implements IOqronModule {
   private activeJobs = new Map<string, Promise<void>>();
   /** Active heartbeat workers keyed by job ID */
   private heartbeats = new Map<string, HeartbeatWorker>();
+  /** Stall detector — reclaims jobs whose heartbeat locks have expired */
+  private stallDetector: StallDetector | null = null;
 
   constructor(
     private config: OqronConfig,
@@ -48,6 +51,35 @@ export class WorkerEngine implements IOqronModule {
         this.startPolling(w);
       }
     }
+
+    // Start stall detector
+    const stalledInterval = this.config.worker?.stalledInterval ?? 30000;
+    this.stallDetector = new StallDetector(Lock, this.logger, stalledInterval);
+    this.stallDetector.start(
+      () =>
+        Array.from(this.heartbeats.entries()).map(([jobId]) => ({
+          key: `worker:job:${jobId}`,
+          ownerId: this.workerIdStr,
+        })),
+      (key: string) => {
+        const jobId = key.replace("worker:job:", "");
+        this.logger.warn(
+          `Stall detected for Worker job ${jobId} — nacking back to broker`,
+        );
+        this.heartbeats.get(jobId)?.stop();
+        this.heartbeats.delete(jobId);
+        // Find the worker for this job and nack it back
+        const workerName = workers.find((_w) =>
+          this.activeJobs.has(jobId),
+        )?.name;
+        if (workerName) {
+          const broker =
+            workers.find((w) => w.name === workerName)?.options?.connection ??
+            Broker;
+          void broker.nack(workerName, jobId);
+        }
+      },
+    );
   }
 
   async stop(): Promise<void> {
@@ -57,6 +89,10 @@ export class WorkerEngine implements IOqronModule {
 
     const workers = getRegisteredWorkers();
     for (const w of workers) w.stop();
+
+    // Stop stall detector
+    this.stallDetector?.stop();
+    this.stallDetector = null;
 
     // Stop all active heartbeats
     for (const hb of this.heartbeats.values()) {
@@ -110,12 +146,15 @@ export class WorkerEngine implements IOqronModule {
 
     const broker = w.options?.connection ?? Broker;
 
-    // Claim IDs from Broker
+    // Claim IDs from Broker with ordering strategy
+    const strategy: BrokerStrategy =
+      w.options?.strategy ?? this.config.worker?.strategy ?? "fifo";
     const jobIds = await broker.claim(
       w.name,
       this.workerIdStr,
       freeSlots,
       lockTtlMs,
+      strategy,
     );
 
     for (const id of jobIds) {

@@ -1,30 +1,54 @@
 import type { Redis } from "ioredis";
-import type { IBrokerEngine } from "../types/engine.js";
+import type { BrokerStrategy, IBrokerEngine } from "../types/engine.js";
 
 /**
- * Lua script for atomic LPOP + SET lock.
- * Pops a single item from the queue list and atomically sets a lock key.
- * Returns the popped ID or nil if the queue is empty.
- *
- * KEYS[1] = queue list key
- * ARGV[1] = lock key prefix
- * ARGV[2] = consumerId
- * ARGV[3] = lockTtlMs
- * Returns: popped ID or nil
+ * Lua: Atomic LPOP + SET lock (FIFO claim — pops from head)
  */
-const ATOMIC_CLAIM_LUA = `
+const ATOMIC_CLAIM_FIFO_LUA = `
 local id = redis.call("lpop", KEYS[1])
-if id == false then
-  return nil
-end
+if id == false then return nil end
 local lockKey = ARGV[1] .. id
 redis.call("set", lockKey, ARGV[2], "PX", ARGV[3], "NX")
 return id
 `;
 
 /**
+ * Lua: Atomic RPOP + SET lock (LIFO claim — pops from tail)
+ */
+const ATOMIC_CLAIM_LIFO_LUA = `
+local id = redis.call("rpop", KEYS[1])
+if id == false then return nil end
+local lockKey = ARGV[1] .. id
+redis.call("set", lockKey, ARGV[2], "PX", ARGV[3], "NX")
+return id
+`;
+
+/**
+ * Lua: Atomic ZPOPMIN + SET lock (Priority claim — lowest score first)
+ */
+const ATOMIC_CLAIM_PRIORITY_LUA = `
+local result = redis.call("zpopmin", KEYS[1], 1)
+if #result == 0 then return nil end
+local id = result[1]
+local lockKey = ARGV[1] .. id
+redis.call("set", lockKey, ARGV[2], "PX", ARGV[3], "NX")
+return id
+`;
+
+/**
+ * Lua: Atomic lock extend (check-and-set)
+ */
+const EXTEND_LOCK_LUA = `
+if redis.call("get", KEYS[1]) == ARGV[1] then
+  return redis.call("pexpire", KEYS[1], ARGV[2])
+else
+  return 0
+end
+`;
+
+/**
  * Redis implementation of the universal Broker Engine.
- * Provides high-throughput, cross-node lock orchestration and signaling.
+ * Supports FIFO, LIFO, and Priority ordering strategies.
  */
 export class RedisBroker implements IBrokerEngine {
   constructor(
@@ -34,6 +58,10 @@ export class RedisBroker implements IBrokerEngine {
 
   private getQueueKey(brokerName: string): string {
     return `${this.keyPrefix}:broker:${brokerName}:queue`;
+  }
+
+  private getPriorityKey(brokerName: string): string {
+    return `${this.keyPrefix}:broker:${brokerName}:priority`;
   }
 
   private getDelayedKey(brokerName: string): string {
@@ -56,10 +84,15 @@ export class RedisBroker implements IBrokerEngine {
     brokerName: string,
     id: string,
     delayMs?: number,
+    priority?: number,
   ): Promise<void> {
     if (delayMs && delayMs > 0) {
       const zkey = this.getDelayedKey(brokerName);
       await this.redis.zadd(zkey, Date.now() + delayMs, id);
+    } else if (priority !== undefined) {
+      // Priority: store in sorted set with priority as score
+      const pkey = this.getPriorityKey(brokerName);
+      await this.redis.zadd(pkey, priority, id);
     } else {
       const qkey = this.getQueueKey(brokerName);
       await this.redis.rpush(qkey, id);
@@ -71,34 +104,58 @@ export class RedisBroker implements IBrokerEngine {
     consumerId: string,
     limit: number,
     lockTtlMs: number,
+    strategy: BrokerStrategy = "fifo",
   ): Promise<string[]> {
     const isPaused = await this.redis.get(this.getPausedKey(brokerName));
     if (isPaused) return [];
 
     const now = Date.now();
-    const qkey = this.getQueueKey(brokerName);
     const zkey = this.getDelayedKey(brokerName);
 
-    // 1. Promote Due Delayed Items to end of queue list
+    // 1. Promote Due Delayed Items
     const dueIds = await this.redis.zrangebyscore(zkey, "-inf", now);
     if (dueIds.length > 0) {
       const pipeline = this.redis.multi();
-      for (const id of dueIds) pipeline.rpush(qkey, id);
+      if (strategy === "priority") {
+        const pkey = this.getPriorityKey(brokerName);
+        for (const id of dueIds) pipeline.zadd(pkey, 0, id); // default priority
+      } else {
+        const qkey = this.getQueueKey(brokerName);
+        for (const id of dueIds) pipeline.rpush(qkey, id);
+      }
       pipeline.zremrangebyscore(zkey, "-inf", now);
       await pipeline.exec();
     }
 
-    // 2. Atomically claim: LPOP + SET lock in a single Lua call per item
-    //    This prevents the race where a pop succeeds but the lock fails,
-    //    which would orphan the job.
+    // 2. Select the correct Lua script based on strategy
+    let luaScript: string;
+    let claimKey: string;
+
+    switch (strategy) {
+      case "lifo":
+        luaScript = ATOMIC_CLAIM_LIFO_LUA;
+        claimKey = this.getQueueKey(brokerName);
+        break;
+      case "priority":
+        luaScript = ATOMIC_CLAIM_PRIORITY_LUA;
+        claimKey = this.getPriorityKey(brokerName);
+        break;
+      case "fifo":
+      default:
+        luaScript = ATOMIC_CLAIM_FIFO_LUA;
+        claimKey = this.getQueueKey(brokerName);
+        break;
+    }
+
+    // 3. Atomically claim items
     const claimedIds: string[] = [];
     const lockPrefix = this.getLockPrefix();
 
     for (let i = 0; i < limit; i++) {
       const id = await this.redis.eval(
-        ATOMIC_CLAIM_LUA,
+        luaScript,
         1,
-        qkey,
+        claimKey,
         lockPrefix,
         consumerId,
         lockTtlMs,
@@ -117,17 +174,8 @@ export class RedisBroker implements IBrokerEngine {
   ): Promise<void> {
     const lockKey = this.getLockKey(id);
 
-    // Lua script to ensure atomic check-and-set for extend
-    const luaScript = `
-      if redis.call("get", KEYS[1]) == ARGV[1] then
-        return redis.call("pexpire", KEYS[1], ARGV[2])
-      else
-        return 0
-      end
-    `;
-
     const result = await this.redis.eval(
-      luaScript,
+      EXTEND_LOCK_LUA,
       1,
       lockKey,
       consumerId,
@@ -144,7 +192,6 @@ export class RedisBroker implements IBrokerEngine {
   }
 
   async nack(brokerName: string, id: string, delayMs?: number): Promise<void> {
-    // Release lock and re-queue at the broker level (crash-safe retry)
     const pipeline = this.redis.multi();
     pipeline.del(this.getLockKey(id));
 
@@ -153,7 +200,7 @@ export class RedisBroker implements IBrokerEngine {
       pipeline.zadd(zkey, Date.now() + delayMs, id);
     } else {
       const qkey = this.getQueueKey(brokerName);
-      pipeline.lpush(qkey, id); // Push to front for immediate retry
+      pipeline.lpush(qkey, id);
     }
 
     await pipeline.exec();

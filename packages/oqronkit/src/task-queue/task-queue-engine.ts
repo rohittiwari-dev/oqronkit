@@ -2,7 +2,9 @@ import { randomUUID } from "node:crypto";
 import type { IOqronModule, Logger } from "../engine/index.js";
 import { Broker, Lock, OqronEventBus, Storage } from "../engine/index.js";
 import { HeartbeatWorker } from "../engine/lock/heartbeat-worker.js";
+import { StallDetector } from "../engine/lock/stall-detector.js";
 import type { OqronConfig } from "../engine/types/config.types.js";
+import type { BrokerStrategy } from "../engine/types/engine.js";
 import type { OqronJob } from "../engine/types/job.types.js";
 import { calculateBackoff } from "../engine/utils/backoffs.js";
 import { pruneAfterCompletion } from "../engine/utils/job-retention.js";
@@ -18,6 +20,8 @@ export class TaskQueueEngine implements IOqronModule {
   private activeJobs = new Map<string, Promise<void>>();
   /** Active heartbeat workers keyed by job ID — for crash-safe lock renewal */
   private heartbeats = new Map<string, HeartbeatWorker>();
+  /** Stall detector — reclaims jobs whose heartbeat locks have expired */
+  private stallDetector: StallDetector | null = null;
 
   constructor(
     private config: OqronConfig,
@@ -45,6 +49,32 @@ export class TaskQueueEngine implements IOqronModule {
     for (const q of qs) {
       this.startPolling(q);
     }
+
+    // Start stall detector — checks for jobs whose heartbeat locks have expired
+    const stalledInterval = this.config.taskQueue?.stalledInterval ?? 30000;
+
+    this.stallDetector = new StallDetector(Lock, this.logger, stalledInterval);
+    this.stallDetector.start(
+      () =>
+        Array.from(this.heartbeats.entries()).map(([jobId, _hb]) => ({
+          key: `taskqueue:job:${jobId}`,
+          ownerId: this.workerIdStr,
+        })),
+      (key: string) => {
+        // Extract jobId from lock key
+        const jobId = key.replace("taskqueue:job:", "");
+        this.logger.warn(
+          `Stall detected for TaskQueue job ${jobId} — nacking back to broker`,
+        );
+        this.heartbeats.get(jobId)?.stop();
+        this.heartbeats.delete(jobId);
+        // Find the queue name for nack
+        const queueName = qs.find((_q) => this.activeJobs.has(jobId))?.name;
+        if (queueName) {
+          void Broker.nack(queueName, jobId);
+        }
+      },
+    );
   }
 
   async triggerManual(id: string): Promise<boolean> {
@@ -60,6 +90,10 @@ export class TaskQueueEngine implements IOqronModule {
     this.running = false;
     for (const t of this.timers) clearInterval(t);
     this.timers = [];
+
+    // Stop stall detector
+    this.stallDetector?.stop();
+    this.stallDetector = null;
 
     // Stop all active heartbeats
     for (const hb of this.heartbeats.values()) {
@@ -102,12 +136,15 @@ export class TaskQueueEngine implements IOqronModule {
     const freeSlots = concurrency - this.activeJobs.size;
     if (freeSlots <= 0) return;
 
-    // 1. Claim IDs from Broker
+    // 1. Claim IDs from Broker with ordering strategy
+    const strategy: BrokerStrategy =
+      q.strategy ?? this.config.taskQueue?.strategy ?? "fifo";
     const jobIds = await Broker.claim(
       q.name,
       this.workerIdStr,
       freeSlots,
       lockTtlMs,
+      strategy,
     );
 
     for (const id of jobIds) {

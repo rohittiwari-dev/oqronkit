@@ -1,3 +1,4 @@
+import type { BrokerStrategy } from "../engine/types/engine.js";
 import type { OqronJob, OqronJobOptions } from "../engine/types/job.types.js";
 
 export interface TaskJobContext<T = any> {
@@ -32,6 +33,9 @@ export interface TaskQueueConfig<T = any, R = any> {
 
   /** Parallel execution limit. Overrides global config. */
   concurrency?: number;
+
+  /** Job ordering strategy. Overrides global config. @default "fifo" */
+  strategy?: BrokerStrategy;
 
   /** Native worker retry logic. Deep-merged with global config. */
   retries?: {

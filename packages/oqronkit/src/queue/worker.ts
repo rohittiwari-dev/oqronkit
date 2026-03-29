@@ -1,11 +1,13 @@
 import { Broker } from "../engine/index.js";
-import type { IBrokerEngine } from "../engine/types/engine.js";
+import type { BrokerStrategy, IBrokerEngine } from "../engine/types/engine.js";
 import type { OqronJob } from "../engine/types/job.types.js";
 
 export interface WorkerOptions {
   connection?: IBrokerEngine; // Optional override
   concurrency?: number;
   autorun?: boolean; // Defaults to matching OqronKit lifecycle natively
+  /** Job ordering strategy. @default "fifo" */
+  strategy?: BrokerStrategy;
   limiter?: {
     max: number;
     duration: number;
