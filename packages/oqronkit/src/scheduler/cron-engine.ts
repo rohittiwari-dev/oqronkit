@@ -1,17 +1,15 @@
 import { randomUUID } from "node:crypto";
 import {
+  Broker,
   type CronDefinition,
   createLogger,
-  type ILockAdapter,
-  type IOqronAdapter,
   type IOqronModule,
-  type IQueueAdapter,
   LagMonitor,
   type Logger,
   OqronEventBus,
   type OqronJob,
-} from "../core/index.js";
-import { LeaderElection } from "../lock/index.js";
+  Storage,
+} from "../engine/index.js";
 import { getNextRunDate } from "./expression-parser.js";
 import { MissedFireHandler } from "./missed-fire.handler.js";
 
@@ -21,7 +19,6 @@ export class SchedulerModule implements IOqronModule {
 
   private readonly nodeId: string;
   private readonly logger: Logger;
-  private leader?: LeaderElection;
   private lagMonitor: LagMonitor;
   private missedFireHandler: MissedFireHandler;
   private tickTimer?: ReturnType<typeof setInterval>;
@@ -30,9 +27,6 @@ export class SchedulerModule implements IOqronModule {
 
   constructor(
     private readonly schedules: CronDefinition[],
-    private readonly db: IOqronAdapter,
-    private readonly lock: ILockAdapter,
-    private readonly broker: IQueueAdapter,
     logger?: Logger,
     _environment?: string,
     _project?: string,
@@ -52,7 +46,7 @@ export class SchedulerModule implements IOqronModule {
       this.config?.lagMonitor?.maxLagMs ?? 500,
       this.config?.lagMonitor?.sampleIntervalMs ?? 50,
     );
-    this.missedFireHandler = new MissedFireHandler(this.logger, this.db);
+    this.missedFireHandler = new MissedFireHandler(this.logger);
   }
 
   // ── Lifecycle ───────────────────────────────────────────────────────────────
@@ -64,38 +58,30 @@ export class SchedulerModule implements IOqronModule {
     });
 
     for (const def of this.schedules) {
-      await this.db.upsertSchedule(def);
+      await Storage.save("schedules", def.name, def);
     }
 
     // Seed initial nextRunAt
-    const existing = await this.db.getSchedules();
+    const existing = await Storage.list<any>("schedules");
     const now = new Date();
 
     for (const record of existing) {
-      if (record.nextRunAt !== null) continue;
+      if (record.nextRunAt !== null && record.nextRunAt !== undefined) continue;
 
-      const def = this.schedules.find((s) => s.name === record.id);
+      const def = this.schedules.find((s) => s.name === record.name);
       if (!def) continue;
 
       const nextRun = this.computeNextRun(def, now);
       if (nextRun) {
-        await this.db.updateScheduleNextRun(def.name, nextRun);
+        await Storage.save("schedules", def.name, {
+          ...record,
+          nextRunAt: nextRun,
+        });
       }
     }
   }
 
   async start(): Promise<void> {
-    if (this.config?.leaderElection !== false) {
-      this.leader = new LeaderElection(
-        this.lock,
-        this.logger,
-        "oqron:scheduler:leader",
-        this.nodeId,
-        30_000,
-      );
-      await this.leader.start();
-    }
-
     const interval = this.config?.tickInterval ?? 1_000;
     this.tickTimer = setInterval(() => {
       void this.tick();
@@ -107,7 +93,6 @@ export class SchedulerModule implements IOqronModule {
 
   async stop(): Promise<void> {
     if (this.tickTimer) clearInterval(this.tickTimer);
-    if (this.leader) await this.leader.stop();
     this.lagMonitor.stop();
     this.logger.info("Scheduler stopped");
   }
@@ -115,8 +100,6 @@ export class SchedulerModule implements IOqronModule {
   // ── Core triggering logic ──────────────────────────────────────────────────
 
   private async tick(): Promise<void> {
-    if (this.leader && !this.leader.isLeader) return;
-
     if (!this._hasRunLeaderInit) {
       this._hasRunLeaderInit = true;
       await this.handleLeaderInit();
@@ -126,14 +109,23 @@ export class SchedulerModule implements IOqronModule {
       if (this.lagMonitor.isCircuitTripped) return;
 
       const now = new Date();
-      const dueIds = await this.db.getDueSchedules(now, 50);
+      const allSchedules = await Storage.list<any>("schedules");
 
-      for (const id of dueIds) {
-        const def = this.schedules.find((s) => s.name === id);
+      // Find due schedules
+      const dueSchedules = allSchedules.filter(
+        (s: any) => s.nextRunAt && new Date(s.nextRunAt) <= now && !s.paused,
+      );
+
+      for (const record of dueSchedules) {
+        const def = this.schedules.find((s) => s.name === record.name);
         if (!def) continue;
 
         const nextRun = this.computeNextRun(def, now);
-        await this.db.updateScheduleNextRun(id, nextRun);
+        await Storage.save("schedules", def.name, {
+          ...record,
+          nextRunAt: nextRun,
+          lastRunAt: now,
+        });
 
         await this.enqueueJob(def);
       }
@@ -148,9 +140,9 @@ export class SchedulerModule implements IOqronModule {
     const job: OqronJob = {
       id: jobId,
       type: "cron",
-      queueName: "cron-default", // Default queue for cron executions
+      queueName: "cron-default",
       status: "waiting",
-      data: {}, // Cron handlers usually use context, not payload data
+      data: {},
       opts: {
         attempts: (def.retries?.max ?? 0) + 1,
         backoff: def.retries
@@ -164,11 +156,11 @@ export class SchedulerModule implements IOqronModule {
       createdAt: new Date(),
     };
 
-    // 1. Persist to DB (Storage)
-    await this.db.upsertJob(job);
+    // 1. Persist to Storage
+    await Storage.save("jobs", jobId, job);
 
-    // 2. Signal Broker (Transport)
-    await this.broker.signalEnqueue(job.queueName, jobId);
+    // 2. Signal Broker
+    await Broker.publish(job.queueName, jobId);
 
     this.logger.debug("Cron triggered", { schedule: def.name, jobId });
     OqronEventBus.emit("job:start", "cron", jobId, def.name);
@@ -183,16 +175,16 @@ export class SchedulerModule implements IOqronModule {
   }
 
   private async handleLeaderInit(): Promise<void> {
-    const knownSchedules = await this.db.getSchedules();
+    const knownSchedules = await Storage.list<any>("schedules");
     const now = new Date();
 
     for (const record of knownSchedules) {
-      const def = this.schedules.find((s) => s.name === record.id);
+      const def = this.schedules.find((s) => s.name === record.name);
       if (!def) continue;
 
       const missed = await this.missedFireHandler.checkMissed(
         def,
-        record.lastRunAt,
+        record.lastRunAt ? new Date(record.lastRunAt) : null,
         now,
       );
       if (missed) {

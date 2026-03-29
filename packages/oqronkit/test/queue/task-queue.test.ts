@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import { OqronKit, taskQueue } from "../../src/index.js";
-import { OqronEventBus, OqronRegistry } from "../../src/core/index.js";
+import { OqronEventBus, OqronRegistry } from "../../src/engine/index.js";
 
 describe("Server-Dependent module: Task Queue", () => {
   beforeEach(async () => {

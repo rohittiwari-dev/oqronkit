@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { OqronEventBus } from "../../src/core/events/event-bus.js";
+import { OqronEventBus } from "../../src/engine/events/event-bus.js";
 import { TelemetryManager } from "../../src/telemetry/manager.js";
 
 describe("TelemetryManager", () => {

@@ -1,6 +1,9 @@
 import { randomUUID } from "node:crypto";
-import type { OqronJob, OqronJobOptions } from "../../core/types/job.types.js";
-import { OqronKit } from "../../index.js";
+import { Broker, Storage } from "../../engine/index.js";
+import type {
+  OqronJob,
+  OqronJobOptions,
+} from "../../engine/types/job.types.js";
 
 export interface QueueOptions {
   defaultJobOptions?: OqronJobOptions;
@@ -9,7 +12,6 @@ export interface QueueOptions {
 /**
  * Enterprise Queue Publisher.
  * Modeled after BullMQ. This class is strictly a sender and consumes no CPU/polling loops.
- * Follows the Dual-Storage Model: DB for persistence, Broker for signaling.
  */
 export class Queue<T = any, R = any> {
   constructor(
@@ -44,14 +46,11 @@ export class Queue<T = any, R = any> {
         : undefined,
     };
 
-    const db = OqronKit.getDb();
-    const broker = OqronKit.getBroker();
-
-    // 1. Persist to DB (Source of Truth)
-    await db.upsertJob(job);
+    // 1. Persist to Storage (Source of Truth)
+    await Storage.save("jobs", jobId, job);
 
     // 2. Signal Broker (Execution Trigger)
-    await broker.signalEnqueue(this.name, jobId, finalOpts.delay);
+    await Broker.publish(this.name, jobId, finalOpts.delay);
 
     return job;
   }

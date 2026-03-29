@@ -1,17 +1,9 @@
-import type { OqronConfig } from "../types";
-import type { ValidatedConfig } from "./schema";
+import type { OqronConfig } from "../types/config.types.js";
+import type { ValidatedConfig } from "./schema.js";
 
 const defaultConfig: ValidatedConfig = {
   project: "oqronkit",
   environment: "development",
-  db: {
-    adapter: "memory",
-    poolMin: 2,
-    poolMax: 10,
-    tablePrefix: "oqron_",
-    migrations: "auto",
-    ssl: false,
-  },
   modules: [],
   cron: {
     enable: true,
@@ -83,18 +75,9 @@ const defaultConfig: ValidatedConfig = {
 };
 
 export function reconfigureConfig(config: OqronConfig): ValidatedConfig {
-  const isIOqronAdapter = (val: any) =>
-    val && typeof val === "object" && typeof val.upsertSchedule === "function";
-
   return {
     project: config.project ?? defaultConfig.project,
     environment: config.environment ?? defaultConfig.environment,
-
-    db: config.db
-      ? isIOqronAdapter(config.db)
-        ? (config.db as any)
-        : { ...(defaultConfig.db as any), ...config.db }
-      : defaultConfig.db,
 
     redis: config.redis,
 

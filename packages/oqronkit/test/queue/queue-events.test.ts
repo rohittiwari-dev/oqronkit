@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
 import { OqronKit, QueueEvents, taskQueue } from "../../src/index.js";
-import { OqronRegistry } from "../../src/core/index.js";
+import { OqronRegistry } from "../../src/engine/index.js";
 
 describe("Server-Independent module: QueueEvents (Observability)", () => {
   beforeEach(async () => {
@@ -34,7 +34,7 @@ describe("Server-Independent module: QueueEvents (Observability)", () => {
       handler: async () => "shhh"
     });
 
-    await OqronKit.init({ config: { project: "test", environment: "test", modules: ["taskQueue"], db: { adapter: 'memory' } } });
+    await OqronKit.init({ config: { project: "test", environment: "test", modules: ["taskQueue"] } });
 
     // Enqueue jobs on both
     await silentQ.add({});

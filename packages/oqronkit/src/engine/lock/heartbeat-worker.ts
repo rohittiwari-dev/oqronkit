@@ -1,4 +1,5 @@
-import type { ILockAdapter, Logger } from "../core/index.js";
+import type { Logger } from "../logger/index.js";
+import type { ILockAdapter } from "../types/engine.js";
 
 export class HeartbeatWorker {
   private heartbeatTimer?: ReturnType<typeof setInterval>;

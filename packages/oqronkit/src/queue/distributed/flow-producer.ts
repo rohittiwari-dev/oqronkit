@@ -1,5 +1,4 @@
-import type { FlowJobNode, OqronJob } from "../../core/types/job.types.js";
-import { OqronKit } from "../../index.js";
+import type { FlowJobNode, OqronJob } from "../../engine/types/job.types.js";
 
 export interface FlowProducerOptions {
   // connection override TBD
@@ -18,8 +17,12 @@ export class FlowProducer {
   /**
    * Pushes a recursive flow tree into the system.
    */
-  async add(flow: FlowJobNode): Promise<OqronJob> {
-    const db = OqronKit.getDb();
-    return await db.enqueueFlow(flow);
+  async add(_flow: FlowJobNode): Promise<OqronJob> {
+    // We will need a specialized method on Storage or a utility to enqueue flows
+    // For now, we stub this out as it requires specific implementation logic
+    // built on top of the generic Storage engine.
+    throw new Error(
+      "FlowProducer.add not fully adapted to new Storage engine yet.",
+    );
   }
 }

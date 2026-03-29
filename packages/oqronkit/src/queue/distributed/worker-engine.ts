@@ -1,12 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { Worker as ThreadWorker } from "node:worker_threads";
-import { AdapterRegistry } from "../../core/adapter-registry.js";
-import type { IOqronModule, Logger } from "../../core/index.js";
-import { OqronEventBus } from "../../core/index.js";
-import type { OqronConfig } from "../../core/types/config.types.js";
-import type { IOqronAdapter } from "../../core/types/db.types.js";
-import type { OqronJob } from "../../core/types/job.types.js";
-import type { IQueueAdapter } from "../../core/types/queue.types.js";
+import type { IOqronModule, Logger } from "../../engine/index.js";
+import { Broker, OqronEventBus, Storage } from "../../engine/index.js";
+import type { OqronConfig } from "../../engine/types/config.types.js";
+import type { IBrokerEngine } from "../../engine/types/engine.js";
+import type { OqronJob } from "../../engine/types/job.types.js";
 import { getRegisteredWorkers, type Worker } from "./worker.js";
 
 export class WorkerEngine implements IOqronModule {
@@ -17,9 +15,6 @@ export class WorkerEngine implements IOqronModule {
   private workerIdStr = randomUUID();
   private activeJobs = new Map<string, Promise<void>>();
 
-  private sharedBroker!: IQueueAdapter;
-  private sharedDb!: IOqronAdapter;
-
   constructor(
     private config: OqronConfig,
     private logger: Logger,
@@ -29,17 +24,9 @@ export class WorkerEngine implements IOqronModule {
     const modules = this.config.modules || [];
     if (!modules.includes("worker")) return;
 
-    const registry = AdapterRegistry.from(this.config);
-    this.sharedBroker = registry.resolveBroker();
-    this.sharedDb = registry.resolveDb();
-
     const workers = getRegisteredWorkers();
     this.logger.info(
-      `Initialized distributed WorkerEngine (Dual-Storage Model) controlling ${workers.length} nodes`,
-      {
-        broker: (this.sharedBroker as any).constructor?.name ?? "unknown",
-        db: (this.sharedDb as any).constructor?.name ?? "unknown",
-      },
+      `Initialized distributed WorkerEngine controlling ${workers.length} nodes`,
     );
   }
 
@@ -106,10 +93,10 @@ export class WorkerEngine implements IOqronModule {
     const freeSlots = concurrency - this.activeJobs.size;
     if (freeSlots <= 0) return;
 
-    const broker = w.options?.connection ?? this.sharedBroker;
+    const broker = w.options?.connection ?? Broker;
 
     // Claim IDs from Broker
-    const jobIds = await broker.claimJobIds(
+    const jobIds = await broker.claim(
       w.name,
       this.workerIdStr,
       freeSlots,
@@ -117,11 +104,11 @@ export class WorkerEngine implements IOqronModule {
     );
 
     for (const id of jobIds) {
-      // Fetch full payload from DB
-      const job = await this.sharedDb.getJob(id);
+      // Fetch full payload from Storage
+      const job = await Storage.get<OqronJob>("jobs", id);
       if (!job) {
-        this.logger.error(`Claimed job ${id} not found in DB!`, { id });
-        await broker.ack(id);
+        this.logger.error(`Claimed job ${id} not found in Storage!`, { id });
+        await broker.ack(w.name, id);
         continue;
       }
 
@@ -135,7 +122,7 @@ export class WorkerEngine implements IOqronModule {
   private async executeJob(
     job: OqronJob,
     w: Worker,
-    broker: IQueueAdapter,
+    broker: IBrokerEngine,
   ): Promise<void> {
     try {
       OqronEventBus.emit("job:start", job.queueName, job.id, job.queueName);
@@ -145,7 +132,7 @@ export class WorkerEngine implements IOqronModule {
       job.workerId = this.workerIdStr;
       job.startedAt = new Date();
       job.attemptMade += 1;
-      await this.sharedDb.upsertJob(job);
+      await Storage.save("jobs", job.id, job);
 
       let result: any;
       if (typeof w.processor === "string") {
@@ -170,8 +157,8 @@ export class WorkerEngine implements IOqronModule {
       job.progressPercent = 100;
       job.progressLabel = "Completed";
 
-      await this.sharedDb.upsertJob(job);
-      await broker.ack(job.id);
+      await Storage.save("jobs", job.id, job);
+      await broker.ack(job.queueName, job.id);
 
       OqronEventBus.emit("job:success", job.queueName, job.id);
 
@@ -189,8 +176,8 @@ export class WorkerEngine implements IOqronModule {
       job.stacktrace = [e.stack];
       job.finishedAt = new Date();
 
-      await this.sharedDb.upsertJob(job);
-      await broker.ack(job.id);
+      await Storage.save("jobs", job.id, job);
+      await broker.ack(job.queueName, job.id);
 
       OqronEventBus.emit("job:fail", job.queueName, job.id, errorObject);
 

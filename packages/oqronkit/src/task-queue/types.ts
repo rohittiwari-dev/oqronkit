@@ -1,4 +1,4 @@
-import type { OqronJob, OqronJobOptions } from "../core/types/job.types.js";
+import type { OqronJob, OqronJobOptions } from "../engine/types/job.types.js";
 
 export interface TaskJobContext<T = any> {
   /** The internal idempotency key or generated UUID of the job */

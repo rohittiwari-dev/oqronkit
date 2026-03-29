@@ -1,4 +1,4 @@
-import type { ScheduleDefinition } from "../core/index.js";
+import type { ScheduleDefinition } from "../engine/index.js";
 
 const GLOBAL_KEY = "__oqronkit_pending_schedules__" as const;
 

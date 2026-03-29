@@ -6,7 +6,6 @@ export const OqronConfigSchema = z.object({
   environment: z.string().default("development"),
 
   // Infrastructure — Unified connection inputs
-  db: z.any().optional(), // DatabaseLike (accepts connection strings, driver instances, or config objects)
   redis: z.any().optional(), // RedisLike (accepts ioredis instances or config objects)
 
   // Modules

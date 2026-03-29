@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import type { OqronJob } from "../core/types/job.types.js";
-import { OqronKit } from "../index.js";
+import { Broker, Storage } from "../engine/index.js";
+import type { OqronJob } from "../engine/types/job.types.js";
 import { registerTaskQueue } from "./registry.js";
 import type { ITaskQueue, TaskQueueConfig } from "./types.js";
 
@@ -16,8 +16,6 @@ export function taskQueue<T = any, R = any>(
   return {
     name: config.name,
     add: async (data, opts) => {
-      const db = OqronKit.getDb();
-      const broker = OqronKit.getBroker();
       const jobId = opts?.jobId ?? randomUUID();
 
       const job: OqronJob = {
@@ -35,10 +33,10 @@ export function taskQueue<T = any, R = any>(
       };
 
       // 1. Storage
-      await db.upsertJob(job);
+      await Storage.save("jobs", jobId, job);
 
       // 2. Transport
-      await broker.signalEnqueue(config.name, jobId, opts?.delay);
+      await Broker.publish(config.name, jobId, opts?.delay);
 
       return job as any;
     },

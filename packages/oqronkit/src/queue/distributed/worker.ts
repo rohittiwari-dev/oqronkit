@@ -1,9 +1,9 @@
-import type { OqronJob } from "../../core/types/job.types.js";
-import type { IQueueAdapter } from "../../core/types/queue.types.js";
-import { getTaskQueueAdapter } from "../../task-queue/registry.js"; // or similar
+import { Broker } from "../../engine/index.js";
+import type { IBrokerEngine } from "../../engine/types/engine.js";
+import type { OqronJob } from "../../engine/types/job.types.js";
 
 export interface WorkerOptions {
-  connection?: IQueueAdapter; // Optional override
+  connection?: IBrokerEngine; // Optional override
   concurrency?: number;
   autorun?: boolean; // Defaults to matching OqronKit lifecycle natively
   limiter?: {
@@ -47,8 +47,8 @@ export class Worker<T = any, R = any> {
     }
   }
 
-  getAdapter(): IQueueAdapter {
-    const adapter = this.options?.connection ?? getTaskQueueAdapter();
+  getAdapter(): IBrokerEngine {
+    const adapter = this.options?.connection ?? Broker;
     if (!adapter)
       throw new Error(
         `[OqronKit] Worker '${this.name}' has no active adapter.`,

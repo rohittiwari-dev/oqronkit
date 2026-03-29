@@ -1,11 +1,9 @@
 import { EventEmitter } from "eventemitter3";
-import { OqronEventBus } from "../../core/index.js";
-import type { IOqronAdapter } from "../../core/types/db.types.js";
-import type { IQueueAdapter } from "../../core/types/queue.types.js";
-import { OqronKit } from "../../index.js";
+import { OqronEventBus, Storage } from "../../engine/index.js";
+import type { IBrokerEngine } from "../../engine/types/engine.js";
 
 export interface QueueEventsOptions {
-  connection?: IQueueAdapter;
+  connection?: IBrokerEngine;
 }
 
 export type QueueEventsMap = {
@@ -40,10 +38,6 @@ export class QueueEvents extends EventEmitter<QueueEventsMap> {
     OqronEventBus.on("job:fail", this.errorListener);
   }
 
-  getDbAdapter(): IOqronAdapter {
-    return OqronKit.getDb();
-  }
-
   // -------------------------
   // Handlers mapping generic globals to strict QueueEvents bounds
   // -------------------------
@@ -62,7 +56,7 @@ export class QueueEvents extends EventEmitter<QueueEventsMap> {
   private async _handleSuccess(queueName: string, jobId: string) {
     if (queueName === this.name) {
       try {
-        const job = await this.getDbAdapter().getJob(jobId);
+        const job = await Storage.get<any>("jobs", jobId);
         this.emit("completed", {
           jobId,
           returnvalue: job?.returnValue,

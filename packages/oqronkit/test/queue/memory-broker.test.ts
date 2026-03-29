@@ -1,44 +1,44 @@
 import { describe, expect, it, beforeEach } from "vitest";
-import { MemoryAdapter } from "../../src/adapters/memory.adapter.js";
+import { MemoryBroker } from "../../src/engine/memory/memory-broker.js";
 
-describe("MemoryBrokerAdapter", () => {
-  let adapter: MemoryAdapter;
+describe("MemoryBroker Engine", () => {
+  let broker: MemoryBroker;
 
   beforeEach(() => {
-    adapter = new MemoryAdapter();
+    broker = new MemoryBroker();
   });
 
   describe("signaling and claiming", () => {
     it("should signal enqueue and allow a worker to claim IDs", async () => {
-      await adapter.signalEnqueue("test-q", "job-123");
+      await broker.publish("test-q", "job-123");
 
-      const claimed = await adapter.claimJobIds("test-q", "worker-1", 1, 30000);
+      const claimed = await broker.claim("test-q", "worker-1", 1, 30000);
       expect(claimed.length).toBe(1);
       expect(claimed[0]).toBe("job-123");
     });
 
     it("should respect limits", async () => {
-      await adapter.signalEnqueue("test-q", "j1");
-      await adapter.signalEnqueue("test-q", "j2");
+      await broker.publish("test-q", "j1");
+      await broker.publish("test-q", "j2");
 
-      const claimed = await adapter.claimJobIds("test-q", "worker-1", 1, 30000);
+      const claimed = await broker.claim("test-q", "worker-1", 1, 30000);
       expect(claimed.length).toBe(1);
     });
   });
 
   describe("locks and acks", () => {
     it("should allow extending locks", async () => {
-      await adapter.signalEnqueue("test-q", "j1");
-      await adapter.claimJobIds("test-q", "worker-1", 1, 30000);
+      await broker.publish("test-q", "j1");
+      await broker.claim("test-q", "worker-1", 1, 30000);
 
-      await expect(adapter.extendLock("j1", "worker-1", 60000)).resolves.not.toThrow();
+      await expect(broker.extendLock("j1", "worker-1", 60000)).resolves.not.toThrow();
     });
 
     it("should throw if lock stolen", async () => {
-      await adapter.signalEnqueue("test-q", "j1");
-      await adapter.claimJobIds("test-q", "worker-1", 1, 30000);
+      await broker.publish("test-q", "j1");
+      await broker.claim("test-q", "worker-1", 1, 30000);
 
-      await expect(adapter.extendLock("j1", "worker-2", 60000)).rejects.toThrow();
+      await expect(broker.extendLock("j1", "worker-2", 60000)).rejects.toThrow();
     });
   });
 });

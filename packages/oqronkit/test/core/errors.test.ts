@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { OqronError } from "../../src/core/errors/base.error.js";
+import { OqronError } from "../../src/engine/errors/base.error.js";
 
 describe("OqronError", () => {
   it("is an instance of Error", () => {

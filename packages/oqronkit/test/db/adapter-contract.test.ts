@@ -1,93 +1,75 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { MemoryAdapter } from "../../src/adapters/memory.adapter.js";
-import type { IOqronAdapter } from "../../src/core/types/db.types.js";
-import type { OqronJob } from "../../src/core/types/job.types.js";
+import { MemoryStore } from "../../src/engine/memory/memory-store.js";
+import type { IStorageEngine } from "../../src/engine/types/engine.js";
+import type { OqronJob } from "../../src/engine/types/job.types.js";
 
 /**
- * IOqronAdapter Contract Tests
+ * IStorageEngine Contract Tests
  *
- * Verifies that every DB adapter implementation follows the unified storage model.
+ * Verifies that every Engine implementation follows the unified storage model.
  */
-function runAdapterContractTests(
+function runStorageContractTests(
   name: string,
-  createAdapter: () => IOqronAdapter,
+  createStore: () => IStorageEngine,
 ) {
-  describe(`${name} — IOqronAdapter Contract`, () => {
-    let adapter: IOqronAdapter;
+  describe(`${name} — IStorageEngine Contract`, () => {
+    let store: IStorageEngine;
 
     beforeEach(() => {
-      adapter = createAdapter();
+      store = createStore();
     });
 
-    describe("Schedule Management", () => {
-      it("upserts a schedule and retrieves it", async () => {
-        await adapter.upsertSchedule({
+    describe("Namespaced Entities", () => {
+      it("saves and retrieves an entity", async () => {
+        await store.save("schedules", "test-cron", {
           name: "test-cron",
           expression: "*/5 * * * *",
-          missedFire: "skip",
-          overlap: "skip",
-          tags: ["billing"],
-          handler: async () => {},
+          missedFire: "skip"
         });
 
-        const schedules = await adapter.getSchedules();
-        expect(schedules.length).toBe(1);
-        expect(schedules[0].id).toBe("test-cron");
+        const retrieved = await store.get<any>("schedules", "test-cron");
+        expect(retrieved?.name).toBe("test-cron");
+        expect(retrieved?.missedFire).toBe("skip");
       });
 
-      it("handles pause/resume states", async () => {
-        await adapter.upsertSchedule({ name: "p-1", missedFire: "skip", overlap: "skip", tags: [], handler: async () => {} });
-        await adapter.setSchedulePaused("p-1", true);
+      it("lists and filters entities", async () => {
+        await store.save("schedules", "p-1", { name: "p-1", status: "paused" });
+        await store.save("schedules", "p-2", { name: "p-2", status: "active" });
+
+        const all = await store.list<any>("schedules");
+        expect(all.length).toBe(2);
+
+        const paused = await store.list<any>("schedules", { status: "paused" });
+        expect(paused.length).toBe(1);
+        expect(paused[0].name).toBe("p-1");
+      });
+
+      it("deletes entities", async () => {
+        await store.save("schedules", "to-delete", { name: "bye" });
+        await store.delete("schedules", "to-delete");
         
-        const sched = await adapter.getSchedule("p-1");
-        expect(sched?.status).toBe("paused");
+        const fetched = await store.get("schedules", "to-delete");
+        expect(fetched).toBeNull();
       });
     });
 
-    describe("Job Operations", () => {
-      it("upserts and retrieves a job", async () => {
-        const job: OqronJob = {
-          id: "job-1",
-          type: "task",
-          queueName: "q1",
-          status: "waiting",
-          data: { foo: "bar" },
-          opts: {},
-          attemptMade: 0,
-          progressPercent: 0,
-          tags: ["t1"],
-          createdAt: new Date(),
-        };
+    describe("Memory Pruning", () => {
+      it("prunes old entities based on property", async () => {
+        // Use a generic pruning capability
+        // This relies on whatever standard contract the engine implements.
+        // E.g. pruning completed jobs older than X ms based on `finishedAt`
+        await store.save("jobs", "j1", { id: "j1", createdAt: new Date(Date.now() - 100000) });
+        await store.save("jobs", "j2", { id: "j2", createdAt: new Date(Date.now() - 100) });
 
-        await adapter.upsertJob(job);
-        const fetched = await adapter.getJob("job-1");
-        expect(fetched?.id).toBe("job-1");
-        expect(fetched?.data).toEqual({ foo: "bar" });
-      });
+        const pruned = await store.prune("jobs", Date.now() - 50000);
+        expect(pruned).toBe(1);
 
-      it("filters jobs correctly", async () => {
-        const base = { type: "task" as const, queueName: "q", opts: {}, attemptMade: 0, progressPercent: 0, tags: [], createdAt: new Date() };
-        await adapter.upsertJob({ ...base, id: "j1", status: "completed" });
-        await adapter.upsertJob({ ...base, id: "j2", status: "failed" });
-
-        const completed = await adapter.listJobs({ status: "completed" });
-        expect(completed.length).toBe(1);
-        expect(completed[0].id).toBe("j1");
-      });
-    });
-
-    describe("System Stats", () => {
-      it("aggregates stats correctly", async () => {
-        const base = { type: "task" as const, queueName: "q", opts: {}, attemptMade: 0, progressPercent: 0, tags: [], createdAt: new Date() };
-        await adapter.upsertJob({ ...base, id: "j1", status: "active" });
-        await adapter.upsertJob({ ...base, id: "j2", status: "completed" });
-
-        const stats = await adapter.getSystemStats();
-        expect(stats.counts.jobs.active).toBe(1);
-        expect(stats.counts.jobs.completed).toBe(1);
+        const remaining = await store.list<any>("jobs");
+        expect(remaining.length).toBe(1);
+        expect(remaining[0].id).toBe("j2");
       });
     });
   });
 }
 
-runAdapterContractTests("MemoryAdapter", () => new MemoryAdapter());
+runStorageContractTests("MemoryStore", () => new MemoryStore());

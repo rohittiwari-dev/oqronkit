@@ -7,7 +7,7 @@ import type {
   ScheduleHooks,
   ScheduleRecurring,
   ScheduleRunAfter,
-} from "../core/index.js";
+} from "../engine/index.js";
 import { _registerSchedule } from "./registry-schedule.js";
 
 type EnqueueOptions<TPayload> = {

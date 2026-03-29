@@ -1,4 +1,5 @@
-import type { ILockAdapter, Logger } from "../core/index.js";
+import type { Logger } from "../logger/index.js";
+import type { ILockAdapter } from "../types/engine.js";
 
 /**
  * Detects stalled jobs where the heartbeat has expired (the worker crashed).

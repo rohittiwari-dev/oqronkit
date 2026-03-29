@@ -7,7 +7,7 @@ import type {
   MissedFirePolicy,
   OverlapPolicy,
   RetryConfig,
-} from "../core/index.js";
+} from "../engine/index.js";
 
 const cronParser = (_cronParser as any).default ?? _cronParser;
 

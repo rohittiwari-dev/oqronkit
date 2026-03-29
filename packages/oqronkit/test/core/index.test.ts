@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
-import * as core from "../../src/core/index.js";
+import * as core from "../../src/engine/index.js";
 
-describe("../../../src/core/core/index.js — Index Exports", () => {
+describe("../../../src/engine/index.js — Index Exports", () => {
   it("exports OqronError", () => expect(core.OqronError).toBeDefined());
   it("exports CronContext", () => expect(core.CronContext).toBeDefined());
   it("exports JobContext", () => expect(core.JobContext).toBeDefined());

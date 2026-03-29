@@ -15,14 +15,6 @@ export interface WorkerDefaults {
   limiter?: { max: number; duration: number; groupKey?: string };
 }
 
-export type DatabaseLike =
-  | {
-      adapter: "sqlite" | "postgres" | "mysql" | "memory";
-      url?: string;
-      [key: string]: any;
-    }
-  | any; // Escape hatch for direct driver passing
-
 export type RedisLike =
   | {
       url: string;
@@ -45,12 +37,6 @@ export interface OqronConfig {
    * @default "development"
    */
   environment?: string;
-
-  /**
-   * Primary relational database connection.
-   * Derives storage and optionally locking/broker if Redis is not present.
-   */
-  db?: DatabaseLike;
 
   /**
    * Primary Redis connection.

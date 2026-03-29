@@ -15,14 +15,7 @@ async function main(): Promise<void> {
   console.log("Booting OqronKit…");
 
   // Zero boilerplate: reads oqronkit.config.js, uses jobsDir to load crons
-  await OqronKit.init({
-    config: {
-      modules: ["cron", "scheduler"],
-      logger: {
-        prettify: true,
-      },
-    },
-  });
+  await OqronKit.init();
 
   // Test dynamic schedule triggers!
   const { scheduleOnboardingDrip } = await import("./jobs/scheduler.js");

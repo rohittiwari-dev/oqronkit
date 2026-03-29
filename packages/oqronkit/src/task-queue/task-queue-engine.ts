@@ -1,11 +1,8 @@
 import { randomUUID } from "node:crypto";
-import type { IOqronModule, Logger } from "../core/index.js";
-import { OqronEventBus } from "../core/index.js";
-import type { OqronConfig } from "../core/types/config.types.js";
-import type { IOqronAdapter } from "../core/types/db.types.js";
-import type { OqronJob } from "../core/types/job.types.js";
-import type { IQueueAdapter } from "../core/types/queue.types.js";
-import { OqronKit } from "../index.js";
+import type { IOqronModule, Logger } from "../engine/index.js";
+import { Broker, OqronEventBus, Storage } from "../engine/index.js";
+import type { OqronConfig } from "../engine/types/config.types.js";
+import type { OqronJob } from "../engine/types/job.types.js";
 import { getRegisteredTaskQueues } from "./registry.js";
 import type { TaskJobContext, TaskQueueConfig } from "./types.js";
 
@@ -17,9 +14,6 @@ export class TaskQueueEngine implements IOqronModule {
   private workerIdStr = randomUUID();
   private activeJobs = new Map<string, Promise<void>>();
 
-  private broker!: IQueueAdapter;
-  private db!: IOqronAdapter;
-
   constructor(
     private config: OqronConfig,
     private logger: Logger,
@@ -29,13 +23,9 @@ export class TaskQueueEngine implements IOqronModule {
     const modules = this.config.modules || [];
     if (!modules.includes("taskQueue")) return;
 
-    this.broker = OqronKit.getBroker();
-    this.db = OqronKit.getDb();
-
     const qs = getRegisteredTaskQueues();
     this.logger.info(
-      `Initialized monolithic TaskQueue engine (Dual-Storage) covering ${qs.length} endpoints`,
-      { broker: (this.broker as any).constructor?.name ?? "unknown" },
+      `Initialized monolithic TaskQueue engine covering ${qs.length} endpoints`,
     );
   }
 
@@ -98,7 +88,7 @@ export class TaskQueueEngine implements IOqronModule {
     if (freeSlots <= 0) return;
 
     // 1. Claim IDs from Broker
-    const jobIds = await this.broker.claimJobIds(
+    const jobIds = await Broker.claim(
       q.name,
       this.workerIdStr,
       freeSlots,
@@ -106,11 +96,11 @@ export class TaskQueueEngine implements IOqronModule {
     );
 
     for (const id of jobIds) {
-      // 2. Fetch full payload from DB
-      const job = await this.db.getJob(id);
+      // 2. Fetch full payload from Storage
+      const job = await Storage.get<OqronJob>("jobs", id);
       if (!job) {
-        this.logger.error(`Claimed job ${id} not found in DB!`, { id });
-        await this.broker.ack(id);
+        this.logger.error(`Claimed job ${id} not found in Storage!`, { id });
+        await Broker.ack(q.name, id);
         continue;
       }
 
@@ -128,7 +118,7 @@ export class TaskQueueEngine implements IOqronModule {
       id: job.id,
       data: job.data,
       progress: async (percent, label) => {
-        await this.db.upsertJob({
+        await Storage.save("jobs", job.id, {
           ...job,
           progressPercent: percent,
           progressLabel: label,
@@ -146,26 +136,26 @@ export class TaskQueueEngine implements IOqronModule {
     try {
       OqronEventBus.emit("job:start", job.queueName, job.id, q.name);
 
-      // Update state to active in DB
+      // Update state to active
       job.status = "active";
       job.workerId = this.workerIdStr;
       job.startedAt = new Date();
       job.attemptMade += 1;
-      await this.db.upsertJob(job);
+      await Storage.save("jobs", job.id, job);
 
       const result = await q.handler(ctx);
 
       if (internalDiscarded) throw new Error("Discarded");
 
-      // Update state to completed in DB
+      // Update state to completed
       job.status = "completed";
       job.finishedAt = new Date();
       job.returnValue = result;
       job.progressPercent = 100;
       job.progressLabel = "Completed";
 
-      await this.db.upsertJob(job);
-      await this.broker.ack(job.id);
+      await Storage.save("jobs", job.id, job);
+      await Broker.ack(q.name, job.id);
 
       OqronEventBus.emit("job:success", job.queueName, job.id);
 
@@ -176,13 +166,13 @@ export class TaskQueueEngine implements IOqronModule {
       }
     } catch (e: any) {
       const errorObject = new Error(e.message ?? "Unknown error");
-      job.status = internalDiscarded ? "failed" : "failed"; // Retry logic needed here
+      job.status = "failed";
       job.error = e.message;
       job.stacktrace = [e.stack];
       job.finishedAt = new Date();
 
-      await this.db.upsertJob(job);
-      await this.broker.ack(job.id);
+      await Storage.save("jobs", job.id, job);
+      await Broker.ack(q.name, job.id);
 
       OqronEventBus.emit("job:fail", job.queueName, job.id, errorObject);
 

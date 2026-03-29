@@ -1,44 +1,29 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { initEngine, Storage, stopEngine } from "./engine/core.js";
 import {
-  AdapterRegistry,
   createLogger,
-  type ILockAdapter,
-  type IOqronAdapter,
-  type IQueueAdapter,
   type Logger,
   loadConfig,
   type OqronConfig,
   OqronRegistry,
   reconfigureConfig,
   type ValidatedConfig,
-} from "./core/index.js";
-import { NamespacedOqronAdapter } from "./db/index.js";
-import { NamespacedLockAdapter } from "./lock/index.js";
-import { expressRouter } from "./server/express.js";
-import { fastifyPlugin } from "./server/fastify.js";
+} from "./engine/index.js";
+import { expressRouter as _expressRouter } from "./server/express.js";
+import { fastifyPlugin as _fastifyPlugin } from "./server/fastify.js";
 import { TelemetryManager } from "./telemetry/index.js";
 
 let _config: ValidatedConfig | null = null;
-let _db: IOqronAdapter | null = null;
-let _lock: ILockAdapter | null = null;
-let _broker: IQueueAdapter | null = null;
 let _logger: Logger | null = null;
 let _telemetry: TelemetryManager | null = null;
 
-export { SqliteBrokerAdapter } from "./adapters/broker/sqlite-broker.js";
-export { SqliteAdapter } from "./adapters/db/sqlite.adapter.js";
-export { MemoryAdapter } from "./adapters/memory.adapter.js";
-export { RedisAdapter } from "./adapters/redis.adapter.js";
 export type {
   CronDefinition,
   CronHooks,
   EveryConfig,
   ICronContext,
-  ILockAdapter,
-  IOqronAdapter,
-  IQueueAdapter,
   IScheduleContext,
   JobRecord,
   Logger,
@@ -50,22 +35,10 @@ export type {
   ScheduleHooks,
   ScheduleRecurring,
   ScheduleRunAfter,
-} from "./core/index.js";
+} from "./engine/index.js";
 // ── Re-exports: single source of truth for ALL user-facing APIs ─────────────
-export {
-  createDbAdapter,
-  createLockAdapter,
-  createLogger,
-  defineConfig,
-  OqronEventBus,
-} from "./core/index.js";
-export { PostgresAdapter } from "./db/index.js";
-export {
-  DbLockAdapter,
-  MemoryLockAdapter,
-  PostgresLockAdapter,
-  RedisLockAdapter,
-} from "./lock/index.js";
+export { createLogger, defineConfig, OqronEventBus } from "./engine/index.js";
+
 export { OqronManager } from "./manager/oqron-manager.js";
 export { FlowProducer } from "./queue/distributed/flow-producer.js";
 export { Queue } from "./queue/distributed/queue.js";
@@ -103,11 +76,8 @@ export const OqronKit = {
 
     _logger.info(`Starting OqronKit in "${_config.environment}" environment`);
 
-    // --- Infrastructure Resolution ---
-    const adapterRegistry = AdapterRegistry.from(_config);
-    _db = adapterRegistry.resolveDb();
-    _lock = adapterRegistry.resolveLock();
-    _broker = adapterRegistry.resolveBroker();
+    // --- Boot Engine ---
+    await initEngine(_config);
 
     // --- Shutdown hooks ---
     if (_config.shutdown.enabled) {
@@ -146,21 +116,8 @@ export const OqronKit = {
       const schedules = _drainPending();
       for (const s of schedules)
         s.tags = [...new Set([...(s.tags ?? []), ..._config.tags])];
-      const nsDb = new NamespacedOqronAdapter(
-        _db!,
-        _config.project,
-        _config.environment,
-      );
-      const nsLock = new NamespacedLockAdapter(
-        _lock!,
-        _config.project,
-        _config.environment,
-      );
       const scheduler = new SchedulerModule(
         schedules,
-        nsDb as any,
-        nsLock,
-        _broker!,
         _logger!,
         _config.environment,
         _config.project,
@@ -216,6 +173,7 @@ export const OqronKit = {
     );
     try {
       await Promise.race([stopPromise, timeoutPromise]);
+      await stopEngine();
       log.info("OqronKit stopped.");
     } catch (err) {
       log.error("Error during stop", { error: String(err) });
@@ -227,34 +185,21 @@ export const OqronKit = {
     return _config;
   },
 
-  getDb(): IOqronAdapter {
-    if (!_db) throw new Error("Not initialized");
-    return _db;
-  },
-
-  getBroker(): IQueueAdapter {
-    if (!_broker) throw new Error("Not initialized");
-    return _broker;
-  },
-
-  getLock(): ILockAdapter {
-    if (!_lock) throw new Error("Not initialized");
-    return _lock;
-  },
-
   async pause(scheduleId: string): Promise<void> {
-    await this.getDb().setSchedulePaused(scheduleId, true);
+    const s = (await Storage.get("schedules", scheduleId)) as any;
+    if (s) await Storage.save("schedules", scheduleId, { ...s, paused: true });
   },
 
   async resume(scheduleId: string): Promise<void> {
-    await this.getDb().setSchedulePaused(scheduleId, false);
+    const s = (await Storage.get("schedules", scheduleId)) as any;
+    if (s) await Storage.save("schedules", scheduleId, { ...s, paused: false });
   },
 
   expressRouter() {
-    return expressRouter();
+    return _expressRouter();
   },
   fastifyPlugin(fastify: any, opts: any, done: () => void) {
-    return fastifyPlugin(fastify, opts, done);
+    return _fastifyPlugin(fastify, opts, done);
   },
   getMetrics(): string {
     if (!_telemetry) {

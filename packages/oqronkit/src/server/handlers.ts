@@ -1,6 +1,6 @@
-import { OqronEventBus, type OqronJob } from "../core/index.js";
-import type { OqronRegistry } from "../core/registry.js";
-import type { OqronConfig } from "../core/types/config.types.js";
+import { OqronEventBus, type OqronJob } from "../engine/index.js";
+import type { OqronRegistry } from "../engine/registry.js";
+import type { OqronConfig } from "../engine/types/config.types.js";
 import { OqronManager } from "../manager/oqron-manager.js";
 export type MonitorRequest = {
   method: string;

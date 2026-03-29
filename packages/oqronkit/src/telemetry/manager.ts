@@ -1,4 +1,4 @@
-import { OqronEventBus } from "../core/events/event-bus.js";
+import { OqronEventBus } from "../engine/events/event-bus.js";
 
 /**
  * TelemetryManager — Prometheus-compatible metrics collector for OqronKit.

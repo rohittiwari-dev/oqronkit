@@ -1,7 +1,6 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { OqronKit, Queue, Worker } from "../../src/index.js";
-import { OqronRegistry } from "../../src/core/index.js";
-import { MemoryAdapter } from "../../src/adapters/memory.adapter.js";
+import { OqronRegistry } from "../../src/engine/index.js";
 
 describe("Server-Independent module: Distributed Worker", () => {
   beforeEach(async () => {
@@ -28,24 +27,19 @@ describe("Server-Independent module: Distributed Worker", () => {
       return true;
     });
 
-    // 3. Inject manual test adapter (Unified Model)
-    const adapter = new MemoryAdapter();
-    
     // Boot OqronKit with DI instances
     await OqronKit.init({
       config: {
         environment: "test",
         project: "test-proj",
-        modules: ["worker"],
-        db: adapter,
-        broker: adapter,
+        modules: ["worker"]
       },
     });
 
     await publisherQueue.add("test-job", { msg: "Hello from Publisher" });
 
     // Advance Timers to trigger the engine tick natively
-    await vi.advanceTimersByTimeAsync(200);
+    await vi.advanceTimersByTimeAsync(300);
 
     expect(executed).toBe(true);
     expect(payloadStr).toBe("Hello from Publisher");
