@@ -35,7 +35,7 @@
 
 All notable changes to OqronKit will be documented in this file.
 
-## [0.0.1-alpha.3] - 2026-03-29
+## [0.0.1-alpha.1] - 2026-03-29
 
 ### Added
 
