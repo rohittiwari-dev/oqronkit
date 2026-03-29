@@ -21,16 +21,13 @@ export class OqronManager {
     const registry = OqronRegistry.getInstance();
     const modules = registry.getAll();
 
-    // In new engine we don't have getSystemStats on DB directly yet, stubbed
-    const dbStats = {
-      keys: await Storage.list("jobs").then((x) => x.length),
-    };
+    const totalJobs = await Storage.count("jobs");
 
     return {
       project: this.config.project ?? "unnamed",
       env: this.config.environment ?? "development",
       uptime: process.uptime(),
-      db: dbStats,
+      db: { keys: totalJobs },
       modules: modules.map((m) => ({
         name: m.name,
         enabled: m.enabled,
@@ -46,22 +43,33 @@ export class OqronManager {
     opts: { state?: JobStatus; limit?: number; offset?: number } = {},
   ): Promise<{ metrics: any; jobs: OqronJob[] }> {
     const state = opts.state ?? "waiting";
-    const allJobs = await Storage.list<OqronJob>("jobs");
+    const limit = opts.limit ?? 50;
+    const offset = opts.offset ?? 0;
 
-    const queueJobs = allJobs.filter((j) => j.queueName === name);
+    // Fetch metrics counts via parallel count queries — NOT full-scan
+    const [active, waiting, completed, failed, delayed] = await Promise.all([
+      Storage.count("jobs", { queueName: name, status: "active" }),
+      Storage.count("jobs", { queueName: name, status: "waiting" }),
+      Storage.count("jobs", { queueName: name, status: "completed" }),
+      Storage.count("jobs", { queueName: name, status: "failed" }),
+      Storage.count("jobs", { queueName: name, status: "delayed" }),
+    ]);
 
     const metricsResult = {
-      active: queueJobs.filter((j) => j.status === "active").length,
-      waiting: queueJobs.filter((j) => j.status === "waiting").length,
-      completed: queueJobs.filter((j) => j.status === "completed").length,
-      failed: queueJobs.filter((j) => j.status === "failed").length,
-      delayed: queueJobs.filter((j) => j.status === "delayed").length,
+      active,
+      waiting,
+      completed,
+      failed,
+      delayed,
       paused: 0,
     };
 
-    const jobs = queueJobs
-      .filter((j) => j.status === state)
-      .slice(opts.offset ?? 0, (opts.offset ?? 0) + (opts.limit ?? 50));
+    // Fetch only the requested page of jobs with the target state
+    const jobs = await Storage.list<OqronJob>(
+      "jobs",
+      { queueName: name, status: state },
+      { limit, offset },
+    );
 
     return { metrics: metricsResult, jobs };
   }
@@ -75,10 +83,11 @@ export class OqronManager {
   }
 
   async retryAllFailed(name: string): Promise<number> {
-    const allJobs = await Storage.list<OqronJob>("jobs");
-    const failedJobs = allJobs
-      .filter((j) => j.queueName === name && j.status === "failed")
-      .slice(0, 1000);
+    const failedJobs = await Storage.list<OqronJob>(
+      "jobs",
+      { queueName: name, status: "failed" },
+      { limit: 1000 },
+    );
 
     let retried = 0;
     for (const job of failedJobs) {

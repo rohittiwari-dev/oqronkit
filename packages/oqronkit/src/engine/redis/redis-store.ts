@@ -1,12 +1,16 @@
 import type { Redis } from "ioredis";
-import type { IStorageEngine } from "../types/engine.js";
+import type { IStorageEngine, ListOptions } from "../types/engine.js";
 
 /**
  * Redis implementation of the universal Storage Engine.
  *
- * Persists and indexes all entities (Jobs, Webhooks, Schedules) using Hashes.
+ * Uses single JSON blobs per key (SET/GET) instead of HSET field-flattening,
+ * eliminating heuristic deserialization bugs. A ZSET index enables sorted
+ * listing and pagination.
  *
- * Namespace keys: `oqron:store:{namespace}:{id}` -> Hash
+ * Key schema:
+ *   Data:  `{prefix}:store:{namespace}:{id}` → JSON string
+ *   Index: `{prefix}:index:{namespace}`      → ZSET (score = timestamp)
  */
 export class RedisStore implements IStorageEngine {
   constructor(
@@ -26,73 +30,69 @@ export class RedisStore implements IStorageEngine {
     const key = this.getKey(namespace, id);
     const indexKey = this.getIndexKey(namespace);
 
-    // Multi-transaction: save Hash data and add to ZSET index for sorting
-    const pipeline = this.redis.multi();
+    // Serialize entire object as a single JSON blob — no field-flattening
+    const json = JSON.stringify(data, (_k, v) => {
+      if (v instanceof Date) return { __type: "Date", __val: v.toISOString() };
+      return v;
+    });
 
-    // Convert object to flat key/value array for HSET
-    // e.g. { status: "active", data: { foo: 1 } }
-    const flatData: Record<string, string> = {};
-    for (const [k, v] of Object.entries(data as any)) {
-      if (typeof v === "object" && v !== null) {
-        // Date objects handling
-        if (v instanceof Date) {
-          flatData[k] = v.toISOString();
-        } else {
-          flatData[k] = JSON.stringify(v);
-        }
-      } else {
-        flatData[k] = String(v);
-      }
-    }
-
-    pipeline.hset(key, flatData);
-
-    // Maintain a ZSET index sorted by timestamp (default Date.now())
     const ts =
       (data as any).createdAt instanceof Date
         ? (data as any).createdAt.getTime()
         : Date.now();
 
+    const pipeline = this.redis.multi();
+    pipeline.set(key, json);
     pipeline.zadd(indexKey, ts, id);
-
     await pipeline.exec();
   }
 
   async get<T>(namespace: string, id: string): Promise<T | null> {
     const key = this.getKey(namespace, id);
-    const result = await this.redis.hgetall(key);
-
-    if (!result || Object.keys(result).length === 0) return null;
-
-    // We must deserialize json strings and ISO dates back dynamically.
-    // In strict production setups, the caller zod validates this.
-    return this.deserialize(result) as T;
+    const raw = await this.redis.get(key);
+    if (!raw) return null;
+    return this.deserialize(raw) as T;
   }
 
-  async list<T>(namespace: string, filter?: Record<string, any>): Promise<T[]> {
+  async list<T>(
+    namespace: string,
+    filter?: Record<string, any>,
+    opts?: ListOptions,
+  ): Promise<T[]> {
     const indexKey = this.getIndexKey(namespace);
-    // Fetch top 100 most recent for now
-    const ids = await this.redis.zrevrange(indexKey, 0, 99);
+
+    // Use offset/limit for pagination — no more hard-cap at 100
+    const offset = opts?.offset ?? 0;
+    const limit = opts?.limit ?? 500; // sensible default, not a hard cap
+    const ids = await this.redis.zrevrange(
+      indexKey,
+      offset,
+      offset + limit - 1,
+    );
 
     if (ids.length === 0) return [];
 
+    // Batch-fetch all records
     const pipeline = this.redis.multi();
     for (const id of ids) {
-      pipeline.hgetall(this.getKey(namespace, id));
+      pipeline.get(this.getKey(namespace, id));
     }
-
     const results = await pipeline.exec();
 
     let entities: T[] = [];
     if (results) {
       for (const [err, res] of results) {
-        if (!err && res && Object.keys(res).length > 0) {
-          entities.push(this.deserialize(res as Record<string, any>) as T);
+        if (!err && res && typeof res === "string") {
+          try {
+            entities.push(this.deserialize(res) as T);
+          } catch {
+            // Skip corrupted records
+          }
         }
       }
     }
 
-    // Apply exact match filtering in local memory (Redis doesn't support generic Secondary Indexes natively)
+    // Apply exact match filtering in memory
     if (filter) {
       entities = entities.filter((item: any) => {
         for (const [key, val] of Object.entries(filter)) {
@@ -105,6 +105,19 @@ export class RedisStore implements IStorageEngine {
     return entities;
   }
 
+  async count(
+    namespace: string,
+    _filter?: Record<string, any>,
+  ): Promise<number> {
+    const indexKey = this.getIndexKey(namespace);
+    // If no filter, the ZSET cardinality gives us an exact count without scanning
+    if (!_filter) return this.redis.zcard(indexKey);
+
+    // With filter, we must scan — use list() with the filter applied
+    const all = await this.list(namespace, _filter, { limit: 100_000 });
+    return all.length;
+  }
+
   async delete(namespace: string, id: string): Promise<void> {
     const key = this.getKey(namespace, id);
     const indexKey = this.getIndexKey(namespace);
@@ -113,7 +126,6 @@ export class RedisStore implements IStorageEngine {
 
   async prune(namespace: string, beforeMs: number): Promise<number> {
     const indexKey = this.getIndexKey(namespace);
-    // Find all IDs older than beforeMs
     const oldIds = await this.redis.zrangebyscore(indexKey, "-inf", beforeMs);
 
     if (oldIds.length === 0) return 0;
@@ -128,34 +140,16 @@ export class RedisStore implements IStorageEngine {
     return oldIds.length;
   }
 
-  private deserialize(record: Record<string, string>): any {
-    const out: any = {};
-    for (const [k, v] of Object.entries(record)) {
-      try {
-        // Simple heuristic for JSON vs String vs Date
-        if (v.startsWith("{") || v.startsWith("[")) {
-          out[k] = JSON.parse(v);
-        } else if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(v)) {
-          out[k] = new Date(v);
-        } else if (v === "undefined") {
-          out[k] = undefined; // Rare but possible
-        } else {
-          // Could be boolean or number, leave as string if ambiguous
-          if (v === "true") out[k] = true;
-          else if (v === "false") out[k] = false;
-          else if (!Number.isNaN(Number(v)) && v.trim() !== "")
-            out[k] = Number(v);
-          else out[k] = v;
-        }
-      } catch {
-        out[k] = v; // Fallback to raw string
+  /**
+   * Type-aware JSON deserialization.
+   * Restores Date objects from the `{ __type: "Date", __val: ... }` wrapper.
+   */
+  private deserialize(raw: string): any {
+    return JSON.parse(raw, (_k, v) => {
+      if (v && typeof v === "object" && v.__type === "Date" && v.__val) {
+        return new Date(v.__val);
       }
-    }
-    // Specific fixes for OqronJob types if they slip through string checks
-    if (out.attemptMade !== undefined)
-      out.attemptMade = Number(out.attemptMade);
-    if (out.progressPercent !== undefined)
-      out.progressPercent = Number(out.progressPercent);
-    return out;
+      return v;
+    });
   }
 }

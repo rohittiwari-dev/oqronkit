@@ -23,63 +23,71 @@ export class TelemetryManager {
 
   private started = false;
 
+  // Bound listener references for proper cleanup (only remove our own)
+  private _onStart = this._handleStart.bind(this);
+  private _onSuccess = this._handleSuccess.bind(this);
+  private _onFail = this._handleFail.bind(this);
+
   /** Start listening for events from the internal OqronKit EventBus */
   start(): void {
     if (this.started) return;
     this.started = true;
 
-    OqronEventBus.on(
-      "job:start",
-      (queueName: string, jobId: string, schedule?: string) => {
-        const topic = schedule || queueName || "_unknown";
-        this.increment(this.jobsStartedTotal, topic);
-        this.increment(this.jobsActiveGauge, topic);
-        this.jobStartTimes.set(jobId, { ts: Date.now(), schedule: topic });
-      },
-    );
+    OqronEventBus.on("job:start", this._onStart);
+    OqronEventBus.on("job:success", this._onSuccess);
+    OqronEventBus.on("job:fail", this._onFail);
+  }
 
-    OqronEventBus.on("job:success", (_queueName: string, jobId: string) => {
-      const entry = this.jobStartTimes.get(jobId);
-      const schedule = entry?.schedule ?? "_unknown";
+  private _handleStart(
+    queueName: string,
+    jobId: string,
+    schedule?: string,
+  ): void {
+    const topic = schedule || queueName || "_unknown";
+    this.increment(this.jobsStartedTotal, topic);
+    this.increment(this.jobsActiveGauge, topic);
+    this.jobStartTimes.set(jobId, { ts: Date.now(), schedule: topic });
+  }
 
-      this.increment(this.jobsCompletedTotal, schedule);
-      this.decrement(this.jobsActiveGauge, schedule);
+  private _handleSuccess(_queueName: string, jobId: string): void {
+    const entry = this.jobStartTimes.get(jobId);
+    const schedule = entry?.schedule ?? "_unknown";
 
-      // Record duration if we have a start time
-      if (entry) {
-        const duration = Date.now() - entry.ts;
-        this.jobDurationsMs.push({ schedule, duration });
-        this.jobStartTimes.delete(jobId);
+    this.increment(this.jobsCompletedTotal, schedule);
+    this.decrement(this.jobsActiveGauge, schedule);
 
-        // Cap duration samples to prevent memory leak
-        if (this.jobDurationsMs.length > 10_000) {
-          this.jobDurationsMs = this.jobDurationsMs.slice(-5_000);
-        }
+    if (entry) {
+      const duration = Date.now() - entry.ts;
+      this.jobDurationsMs.push({ schedule, duration });
+      this.jobStartTimes.delete(jobId);
+
+      if (this.jobDurationsMs.length > 10_000) {
+        this.jobDurationsMs = this.jobDurationsMs.slice(-5_000);
       }
-    });
+    }
+  }
 
-    OqronEventBus.on(
-      "job:fail",
-      (_queueName: string, jobId: string, _error: Error) => {
-        const entry = this.jobStartTimes.get(jobId);
-        const schedule = entry?.schedule ?? "_unknown";
+  private _handleFail(_queueName: string, jobId: string, _error: Error): void {
+    const entry = this.jobStartTimes.get(jobId);
+    const schedule = entry?.schedule ?? "_unknown";
 
-        this.increment(this.jobsFailedTotal, schedule);
-        this.decrement(this.jobsActiveGauge, schedule);
+    this.increment(this.jobsFailedTotal, schedule);
+    this.decrement(this.jobsActiveGauge, schedule);
 
-        if (entry) {
-          const duration = Date.now() - entry.ts;
-          this.jobDurationsMs.push({ schedule, duration });
-          this.jobStartTimes.delete(jobId);
-        }
-      },
-    );
+    if (entry) {
+      const duration = Date.now() - entry.ts;
+      this.jobDurationsMs.push({ schedule, duration });
+      this.jobStartTimes.delete(jobId);
+    }
   }
 
   /** Stop listening and reset all counters */
   stop(): void {
     this.started = false;
-    OqronEventBus.removeAllListeners();
+    // Remove only OUR listeners — not all listeners on the shared bus
+    OqronEventBus.off("job:start", this._onStart);
+    OqronEventBus.off("job:success", this._onSuccess);
+    OqronEventBus.off("job:fail", this._onFail);
     this.jobsStartedTotal.clear();
     this.jobsCompletedTotal.clear();
     this.jobsFailedTotal.clear();

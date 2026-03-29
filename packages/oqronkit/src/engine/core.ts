@@ -17,22 +17,35 @@ export let Broker: IBrokerEngine;
 export let Lock: ILockAdapter;
 
 /**
+ * Hold a reference to the Redis client so we can cleanly disconnect on shutdown.
+ * If the user passed an existing ioredis instance, we track it but do NOT
+ * force-close it — the user owns its lifecycle.
+ */
+let _redisClient: any = null;
+let _redisClientOwned = false; // true only when WE created it from a URL string
+
+/**
  * Bootstraps the engines dynamically based on config.
- * Either deeply connects to Redis (scaling to multi-node capability) or falls back
- * entirely to internal memory (monolithic monolithic scaling).
+ * Connects to Redis for multi-node scaling or falls back to in-memory.
  */
 export async function initEngine(config: OqronConfig): Promise<void> {
   if (config.redis) {
     const { Redis } = await import("ioredis");
-    // Ensure the connection config acts reliably as either string or ioRedis instance
-    const redisClient =
-      typeof config.redis === "string" ? new Redis(config.redis) : config.redis;
 
-    Storage = new RedisStore(redisClient as any, config.project);
-    Broker = new RedisBroker(redisClient as any, config.project);
-    Lock = new RedisLock(redisClient as any, config.project);
+    if (typeof config.redis === "string") {
+      _redisClient = new Redis(config.redis);
+      _redisClientOwned = true;
+    } else {
+      _redisClient = config.redis;
+      _redisClientOwned = false;
+    }
+
+    Storage = new RedisStore(_redisClient, config.project);
+    Broker = new RedisBroker(_redisClient, config.project);
+    Lock = new RedisLock(_redisClient, config.project);
   } else {
-    // Zero dependencies Memory fallback
+    _redisClient = null;
+    _redisClientOwned = false;
     Storage = new MemoryStore();
     Broker = new MemoryBroker();
     Lock = new MemoryLock();
@@ -40,12 +53,23 @@ export async function initEngine(config: OqronConfig): Promise<void> {
 }
 
 /**
- * Shut down connections strictly if connected
+ * Gracefully shut down adapter connections.
+ * Only closes the Redis client if OqronKit created it from a URL string.
+ * User-supplied instances are left open for the caller to manage.
  */
 export async function stopEngine(): Promise<void> {
-  if (Storage instanceof RedisStore) {
-    // Since we didn't store the exact redis instance in index.ts directly,
-    // we assume the connection handles closure independently if it's passed in,
-    // or we gracefully shut it here. For now we leave it to user if passed.
+  if (_redisClient && _redisClientOwned) {
+    try {
+      await _redisClient.quit();
+    } catch {
+      // Best-effort — the process may already be exiting
+      try {
+        _redisClient.disconnect();
+      } catch {
+        /* swallow */
+      }
+    }
   }
+  _redisClient = null;
+  _redisClientOwned = false;
 }

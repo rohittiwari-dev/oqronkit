@@ -1,3 +1,10 @@
+export interface ListOptions {
+  /** Maximum number of records to return. Defaults to all. */
+  limit?: number;
+  /** Number of records to skip (for pagination). Defaults to 0. */
+  offset?: number;
+}
+
 export interface IStorageEngine {
   /** Saves a generic entity into a namespace */
   save<T>(namespace: string, id: string, data: T): Promise<void>;
@@ -5,14 +12,21 @@ export interface IStorageEngine {
   /** Retrieves an entity */
   get<T>(namespace: string, id: string): Promise<T | null>;
 
-  /** Queries entities in a namespace */
-  list<T>(namespace: string, filter?: Record<string, any>): Promise<T[]>;
+  /** Queries entities in a namespace with optional filtering and pagination */
+  list<T>(
+    namespace: string,
+    filter?: Record<string, any>,
+    opts?: ListOptions,
+  ): Promise<T[]>;
 
   /** Removes an entity */
   delete(namespace: string, id: string): Promise<void>;
 
   /** Atomic bulk cleanup */
   prune(namespace: string, beforeMs: number): Promise<number>;
+
+  /** Count total records in a namespace matching an optional filter */
+  count(namespace: string, filter?: Record<string, any>): Promise<number>;
 }
 
 export interface IBrokerEngine {
@@ -32,6 +46,13 @@ export interface IBrokerEngine {
 
   /** Pops the entity out of the active broker locking list permanently */
   ack(brokerName: string, id: string): Promise<void>;
+
+  /**
+   * Negative acknowledgement — re-queue a job back into the broker for retry.
+   * Used for crash-safe retries: the job goes back to the waiting list with an
+   * optional delay, so even if the process dies, the job is NOT lost.
+   */
+  nack(brokerName: string, id: string, delayMs?: number): Promise<void>;
 
   /** Pauses/Resumes all emissions from a specific broker namespace */
   pause(brokerName: string): Promise<void>;

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { IOqronModule, Logger } from "../engine/index.js";
-import { Broker, OqronEventBus, Storage } from "../engine/index.js";
+import { Broker, Lock, OqronEventBus, Storage } from "../engine/index.js";
+import { HeartbeatWorker } from "../engine/lock/heartbeat-worker.js";
 import type { OqronConfig } from "../engine/types/config.types.js";
 import type { OqronJob } from "../engine/types/job.types.js";
 import { calculateBackoff } from "../engine/utils/backoffs.js";
@@ -15,6 +16,8 @@ export class TaskQueueEngine implements IOqronModule {
   private timers: NodeJS.Timeout[] = [];
   private workerIdStr = randomUUID();
   private activeJobs = new Map<string, Promise<void>>();
+  /** Active heartbeat workers keyed by job ID — for crash-safe lock renewal */
+  private heartbeats = new Map<string, HeartbeatWorker>();
 
   constructor(
     private config: OqronConfig,
@@ -57,6 +60,12 @@ export class TaskQueueEngine implements IOqronModule {
     this.running = false;
     for (const t of this.timers) clearInterval(t);
     this.timers = [];
+
+    // Stop all active heartbeats
+    for (const hb of this.heartbeats.values()) {
+      await hb.stop();
+    }
+    this.heartbeats.clear();
 
     const allActive = Array.from(this.activeJobs.values());
     if (allActive.length > 0) {
@@ -132,10 +141,14 @@ export class TaskQueueEngine implements IOqronModule {
 
   private async executeJob(job: OqronJob, q: TaskQueueConfig): Promise<void> {
     let internalDiscarded = false;
+    const lockTtlMs = q.lockTtlMs ?? this.config.taskQueue?.lockTtlMs ?? 30000;
+    const heartbeatMs =
+      q.heartbeatMs ?? this.config.taskQueue?.heartbeatMs ?? 5000;
+    const useGuaranteed = q.guaranteedWorker !== false;
 
     // Resolve retry config: per-queue → global → default
-    const maxAttempts =
-      (q.retries?.max ?? this.config.taskQueue?.retries?.max ?? 0) + 1;
+    const maxRetries =
+      q.retries?.max ?? this.config.taskQueue?.retries?.max ?? 0;
     const retryStrategy =
       q.retries?.strategy ??
       this.config.taskQueue?.retries?.strategy ??
@@ -146,9 +159,31 @@ export class TaskQueueEngine implements IOqronModule {
       q.retries?.maxDelay ?? this.config.taskQueue?.retries?.maxDelay ?? 60000;
 
     // Per-job attempts override takes highest priority
-    const effectiveMaxAttempts = job.opts?.attempts
-      ? job.opts.attempts
-      : maxAttempts;
+    const effectiveMaxRetries = job.opts?.attempts
+      ? job.opts.attempts - 1
+      : maxRetries;
+
+    // ── Start HeartbeatWorker for crash-safe lock renewal ─────────────────
+    let heartbeat: HeartbeatWorker | null = null;
+    if (useGuaranteed) {
+      const lockKey = `taskqueue:job:${job.id}`;
+      heartbeat = new HeartbeatWorker(
+        Lock,
+        this.logger,
+        lockKey,
+        this.workerIdStr,
+        lockTtlMs,
+        heartbeatMs,
+      );
+      const acquired = await heartbeat.start();
+      if (!acquired) {
+        this.logger.warn(`Failed to acquire heartbeat lock for job ${job.id}`);
+        // Another worker may have claimed this — nack back to broker
+        await Broker.nack(q.name, job.id);
+        return;
+      }
+      this.heartbeats.set(job.id, heartbeat);
+    }
 
     const ctx: TaskJobContext<any> = {
       id: job.id,
@@ -157,6 +192,7 @@ export class TaskQueueEngine implements IOqronModule {
         job.progressPercent = percent;
         job.progressLabel = label;
         await Storage.save("jobs", job.id, job);
+        OqronEventBus.emit("job:progress", job.queueName, job.id, percent);
       },
       log: (level, msg) => {
         const method = this.logger[level] || this.logger.info;
@@ -173,75 +209,77 @@ export class TaskQueueEngine implements IOqronModule {
     job.status = "active";
     job.workerId = this.workerIdStr;
     job.startedAt = new Date();
-    job.attemptMade += 1;
+    job.attemptMade = (job.attemptMade ?? 0) + 1;
     await Storage.save("jobs", job.id, job);
 
     OqronEventBus.emit("job:start", job.queueName, job.id, q.name);
 
-    let attempts = 1;
     let status: "completed" | "failed" = "completed";
     let error: string | undefined;
     let result: any;
 
-    while (attempts <= effectiveMaxAttempts) {
-      try {
-        result = await q.handler(ctx);
+    try {
+      result = await q.handler(ctx);
 
-        if (internalDiscarded) {
-          throw new Error("Job discarded by handler");
-        }
-
-        // ── Success ───────────────────────────────────────────────────────
-        status = "completed";
-        error = undefined;
-        break;
-      } catch (e: any) {
-        error = e.message ?? "Unknown error";
-        status = "failed";
-
-        if (attempts < effectiveMaxAttempts && !internalDiscarded) {
-          // Calculate backoff delay
-          const backoffOpts = job.opts?.backoff ?? {
-            type: retryStrategy,
-            delay: baseDelay,
-          };
-          const delay = calculateBackoff(backoffOpts, attempts, maxDelay);
-
-          this.logger.warn("TaskQueue job failed, retrying...", {
-            name: q.name,
-            jobId: job.id,
-            attempt: attempts,
-            nextIn: `${delay}ms`,
-            error,
-          });
-
-          // Update state to delayed during retry wait
-          job.status = "delayed";
-          job.attemptMade = attempts;
-          await Storage.save("jobs", job.id, job);
-
-          attempts++;
-          await new Promise((resolve) => setTimeout(resolve, delay));
-
-          // Update back to active for next attempt
-          job.status = "active";
-          job.attemptMade = attempts;
-          await Storage.save("jobs", job.id, job);
-        } else {
-          // All retries exhausted
-          this.logger.error("TaskQueue job failed permanently", {
-            name: q.name,
-            jobId: job.id,
-            attempts,
-            error,
-          });
-
-          // Capture stacktrace
-          job.stacktrace = e.stack ? [e.stack] : [];
-
-          break;
-        }
+      if (internalDiscarded) {
+        throw new Error("Job discarded by handler");
       }
+
+      status = "completed";
+      error = undefined;
+    } catch (e: any) {
+      error = e.message ?? "Unknown error";
+      status = "failed";
+
+      // Capture stacktrace
+      job.stacktrace = e.stack ? [e.stack] : [];
+
+      // Check if we should retry via nack (broker-level, crash-safe)
+      if (!internalDiscarded && job.attemptMade <= effectiveMaxRetries) {
+        const backoffOpts = job.opts?.backoff ?? {
+          type: retryStrategy,
+          delay: baseDelay,
+        };
+        const delay = calculateBackoff(backoffOpts, job.attemptMade, maxDelay);
+
+        this.logger.warn("TaskQueue job failed, re-queuing for retry...", {
+          name: q.name,
+          jobId: job.id,
+          attempt: job.attemptMade,
+          nextIn: `${delay}ms`,
+          error,
+        });
+
+        // Mark as delayed in storage so dashboards see the correct state
+        job.status = "delayed";
+        job.error = error;
+        await Storage.save("jobs", job.id, job);
+
+        // Stop heartbeat before nack
+        if (heartbeat) {
+          await heartbeat.stop();
+          this.heartbeats.delete(job.id);
+        }
+
+        // Nack back to broker with delay — crash-safe: if this process dies,
+        // the job is already back in the broker's delayed set
+        await Broker.nack(q.name, job.id, delay);
+        return; // Exit — the job will be re-claimed on the next poll cycle
+      }
+
+      // All retries exhausted
+      this.logger.error("TaskQueue job failed permanently", {
+        name: q.name,
+        jobId: job.id,
+        attempts: job.attemptMade,
+        error,
+      });
+    }
+
+    // ── Stop heartbeat ──────────────────────────────────────────────────
+    if (heartbeat) {
+      await heartbeat.stop();
+      this.heartbeats.delete(job.id);
     }
 
     // ── Finalize ─────────────────────────────────────────────────────────
@@ -249,7 +287,6 @@ export class TaskQueueEngine implements IOqronModule {
     job.status = status;
     job.finishedAt = finishedAt;
     job.error = error;
-    job.attemptMade = attempts;
 
     if (status === "completed") {
       job.returnValue = result;

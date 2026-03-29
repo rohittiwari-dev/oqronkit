@@ -2,10 +2,29 @@ import type { Redis } from "ioredis";
 import type { IBrokerEngine } from "../types/engine.js";
 
 /**
- * Redis implementation of the universal Broker Engine.
+ * Lua script for atomic LPOP + SET lock.
+ * Pops a single item from the queue list and atomically sets a lock key.
+ * Returns the popped ID or nil if the queue is empty.
  *
- * Provides extremely high-throughput, cross-node lock orchestration and signaling
- * exactly similar to Industrygrade's core runtime methodology.
+ * KEYS[1] = queue list key
+ * ARGV[1] = lock key prefix
+ * ARGV[2] = consumerId
+ * ARGV[3] = lockTtlMs
+ * Returns: popped ID or nil
+ */
+const ATOMIC_CLAIM_LUA = `
+local id = redis.call("lpop", KEYS[1])
+if id == false then
+  return nil
+end
+local lockKey = ARGV[1] .. id
+redis.call("set", lockKey, ARGV[2], "PX", ARGV[3], "NX")
+return id
+`;
+
+/**
+ * Redis implementation of the universal Broker Engine.
+ * Provides high-throughput, cross-node lock orchestration and signaling.
  */
 export class RedisBroker implements IBrokerEngine {
   constructor(
@@ -23,6 +42,10 @@ export class RedisBroker implements IBrokerEngine {
 
   private getLockKey(id: string): string {
     return `${this.keyPrefix}:lock:${id}`;
+  }
+
+  private getLockPrefix(): string {
+    return `${this.keyPrefix}:lock:`;
   }
 
   private getPausedKey(brokerName: string): string {
@@ -65,37 +88,24 @@ export class RedisBroker implements IBrokerEngine {
       await pipeline.exec();
     }
 
-    // 2. Claim up to `limit` from queue list Left side (FIFO)
-    // ioredis lpop can pop count in Redis >= 6.2.0
-    // OqronKit relies strictly on native primitives.
-    const pipelinePop = this.redis.multi();
-    // Simulate multi-lpop if count > 1
-    for (let i = 0; i < limit; i++) {
-      pipelinePop.lpop(qkey);
-    }
-    const popResults = await pipelinePop.exec();
-
-    // Filter out nulls from pop
+    // 2. Atomically claim: LPOP + SET lock in a single Lua call per item
+    //    This prevents the race where a pop succeeds but the lock fails,
+    //    which would orphan the job.
     const claimedIds: string[] = [];
-    if (popResults) {
-      for (const [err, res] of popResults) {
-        if (!err && res) claimedIds.push(res as string);
-      }
+    const lockPrefix = this.getLockPrefix();
+
+    for (let i = 0; i < limit; i++) {
+      const id = await this.redis.eval(
+        ATOMIC_CLAIM_LUA,
+        1,
+        qkey,
+        lockPrefix,
+        consumerId,
+        lockTtlMs,
+      );
+      if (id === null || id === undefined) break;
+      claimedIds.push(id as string);
     }
-
-    if (claimedIds.length === 0) return [];
-
-    // 3. Atomically Lock using SET NX PX internally structured as robust heartbeats
-    const pipelineLock = this.redis.multi();
-    for (const cid of claimedIds) {
-      // SET key val NX PX ttl
-      pipelineLock.set(this.getLockKey(cid), consumerId, "PX", lockTtlMs, "NX");
-    }
-
-    await pipelineLock.exec();
-
-    // Any locks that failed to set NX usually indicate a zombie job running elsewhere,
-    // but queue pops are destructive, so collisions only happen on aggressive network partitions.
 
     return claimedIds;
   }
@@ -131,6 +141,22 @@ export class RedisBroker implements IBrokerEngine {
 
   async ack(_brokerName: string, id: string): Promise<void> {
     await this.redis.del(this.getLockKey(id));
+  }
+
+  async nack(brokerName: string, id: string, delayMs?: number): Promise<void> {
+    // Release lock and re-queue at the broker level (crash-safe retry)
+    const pipeline = this.redis.multi();
+    pipeline.del(this.getLockKey(id));
+
+    if (delayMs && delayMs > 0) {
+      const zkey = this.getDelayedKey(brokerName);
+      pipeline.zadd(zkey, Date.now() + delayMs, id);
+    } else {
+      const qkey = this.getQueueKey(brokerName);
+      pipeline.lpush(qkey, id); // Push to front for immediate retry
+    }
+
+    await pipeline.exec();
   }
 
   async pause(brokerName: string): Promise<void> {

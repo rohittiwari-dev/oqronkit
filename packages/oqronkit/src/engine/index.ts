@@ -51,6 +51,7 @@ export type {
   IBrokerEngine,
   ILockAdapter,
   IStorageEngine,
+  ListOptions,
 } from "./types/engine.js";
 export type {
   FlowJobNode,

@@ -1,7 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { Worker as ThreadWorker } from "node:worker_threads";
 import type { IOqronModule, Logger } from "../engine/index.js";
-import { Broker, OqronEventBus, Storage } from "../engine/index.js";
+import { Broker, Lock, OqronEventBus, Storage } from "../engine/index.js";
+import { HeartbeatWorker } from "../engine/lock/heartbeat-worker.js";
 import type { OqronConfig } from "../engine/types/config.types.js";
 import type { IBrokerEngine } from "../engine/types/engine.js";
 import type { OqronJob } from "../engine/types/job.types.js";
@@ -16,6 +17,8 @@ export class WorkerEngine implements IOqronModule {
   private timers: NodeJS.Timeout[] = [];
   private workerIdStr = randomUUID();
   private activeJobs = new Map<string, Promise<void>>();
+  /** Active heartbeat workers keyed by job ID */
+  private heartbeats = new Map<string, HeartbeatWorker>();
 
   constructor(
     private config: OqronConfig,
@@ -54,6 +57,12 @@ export class WorkerEngine implements IOqronModule {
 
     const workers = getRegisteredWorkers();
     for (const w of workers) w.stop();
+
+    // Stop all active heartbeats
+    for (const hb of this.heartbeats.values()) {
+      await hb.stop();
+    }
+    this.heartbeats.clear();
 
     const active = Array.from(this.activeJobs.values());
     if (active.length > 0) {
@@ -143,9 +152,12 @@ export class WorkerEngine implements IOqronModule {
     w: Worker,
     broker: IBrokerEngine,
   ): Promise<void> {
+    const lockTtlMs = this.config.worker?.lockTtlMs ?? 30000;
+    const heartbeatMs = this.config.worker?.heartbeatMs ?? 5000;
+
     // Resolve retry config: per-worker → global → default
-    const maxAttempts =
-      (w.options?.retries?.max ?? this.config.worker?.retries?.max ?? 0) + 1;
+    const maxRetries =
+      w.options?.retries?.max ?? this.config.worker?.retries?.max ?? 0;
     const retryStrategy =
       w.options?.retries?.strategy ??
       this.config.worker?.retries?.strategy ??
@@ -160,9 +172,27 @@ export class WorkerEngine implements IOqronModule {
       60000;
 
     // Per-job attempts override
-    const effectiveMaxAttempts = job.opts?.attempts
-      ? job.opts.attempts
-      : maxAttempts;
+    const effectiveMaxRetries = job.opts?.attempts
+      ? job.opts.attempts - 1
+      : maxRetries;
+
+    // ── Start HeartbeatWorker for crash-safe lock renewal ─────────────────
+    const lockKey = `worker:job:${job.id}`;
+    const heartbeat = new HeartbeatWorker(
+      Lock,
+      this.logger,
+      lockKey,
+      this.workerIdStr,
+      lockTtlMs,
+      heartbeatMs,
+    );
+    const acquired = await heartbeat.start();
+    if (!acquired) {
+      this.logger.warn(`Failed to acquire heartbeat lock for job ${job.id}`);
+      await broker.nack(w.name, job.id);
+      return;
+    }
+    this.heartbeats.set(job.id, heartbeat);
 
     OqronEventBus.emit("job:start", job.queueName, job.id, job.queueName);
 
@@ -170,80 +200,80 @@ export class WorkerEngine implements IOqronModule {
     job.status = "active";
     job.workerId = this.workerIdStr;
     job.startedAt = new Date();
-    job.attemptMade += 1;
+    job.attemptMade = (job.attemptMade ?? 0) + 1;
     await Storage.save("jobs", job.id, job);
 
-    let attempts = 1;
     let status: "completed" | "failed" = "completed";
     let error: string | undefined;
     let result: any;
 
-    while (attempts <= effectiveMaxAttempts) {
-      try {
-        if (typeof w.processor === "string") {
-          result = await new Promise((resolve, reject) => {
-            const thread = new ThreadWorker(w.processor as string, {
-              workerData: job,
-            });
-            thread.on("message", resolve);
-            thread.on("error", reject);
-            thread.on("exit", (code) => {
-              if (code !== 0) reject(new Error(`Thread exited: ${code}`));
-            });
+    try {
+      if (typeof w.processor === "string") {
+        result = await new Promise((resolve, reject) => {
+          const thread = new ThreadWorker(w.processor as string, {
+            workerData: job,
           });
-        } else {
-          result = await w.processor(job as any);
-        }
-
-        status = "completed";
-        error = undefined;
-        break;
-      } catch (e: any) {
-        error = e.message ?? "Unknown error";
-        status = "failed";
-
-        if (attempts < effectiveMaxAttempts) {
-          const backoffOpts = job.opts?.backoff ?? {
-            type: retryStrategy,
-            delay: baseDelay,
-          };
-          const delay = calculateBackoff(backoffOpts, attempts, maxDelay);
-
-          this.logger.warn("Worker job failed, retrying...", {
-            worker: w.name,
-            jobId: job.id,
-            attempt: attempts,
-            nextIn: `${delay}ms`,
-            error,
+          thread.on("message", resolve);
+          thread.on("error", reject);
+          thread.on("exit", (code) => {
+            if (code !== 0) reject(new Error(`Thread exited: ${code}`));
           });
-
-          job.status = "delayed";
-          job.attemptMade = attempts;
-          await Storage.save("jobs", job.id, job);
-
-          attempts++;
-          await new Promise((resolve) => setTimeout(resolve, delay));
-
-          job.status = "active";
-          job.attemptMade = attempts;
-          await Storage.save("jobs", job.id, job);
-        } else {
-          this.logger.error(`Worker job ${job.id} failed permanently`, {
-            worker: w.name,
-            attempts,
-            error,
-          });
-          job.stacktrace = e.stack ? [e.stack] : [];
-          break;
-        }
+        });
+      } else {
+        result = await w.processor(job as any);
       }
+
+      status = "completed";
+      error = undefined;
+    } catch (e: any) {
+      error = e.message ?? "Unknown error";
+      status = "failed";
+      job.stacktrace = e.stack ? [e.stack] : [];
+
+      // Check for broker-level retry via nack
+      if (job.attemptMade <= effectiveMaxRetries) {
+        const backoffOpts = job.opts?.backoff ?? {
+          type: retryStrategy,
+          delay: baseDelay,
+        };
+        const delay = calculateBackoff(backoffOpts, job.attemptMade, maxDelay);
+
+        this.logger.warn("Worker job failed, re-queuing for retry...", {
+          worker: w.name,
+          jobId: job.id,
+          attempt: job.attemptMade,
+          nextIn: `${delay}ms`,
+          error,
+        });
+
+        job.status = "delayed";
+        job.error = error;
+        await Storage.save("jobs", job.id, job);
+
+        // Stop heartbeat before nack
+        await heartbeat.stop();
+        this.heartbeats.delete(job.id);
+
+        // Nack back to broker with delay — crash-safe
+        await broker.nack(w.name, job.id, delay);
+        return;
+      }
+
+      this.logger.error(`Worker job ${job.id} failed permanently`, {
+        worker: w.name,
+        attempts: job.attemptMade,
+        error,
+      });
     }
+
+    // ── Stop heartbeat ──────────────────────────────────────────────────
+    await heartbeat.stop();
+    this.heartbeats.delete(job.id);
 
     // ── Finalize ─────────────────────────────────────────────────────────
     job.status = status;
     job.finishedAt = new Date();
     job.error = error;
-    job.attemptMade = attempts;
 
     if (status === "completed") {
       job.returnValue = result;

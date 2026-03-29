@@ -87,6 +87,23 @@ export class MemoryBroker implements IBrokerEngine {
     this.activeLocks.delete(id);
   }
 
+  async nack(brokerName: string, id: string, delayMs?: number): Promise<void> {
+    // Release lock and re-queue at the broker level (crash-safe retry)
+    this.activeLocks.delete(id);
+
+    if (delayMs && delayMs > 0) {
+      const list = this.delayed.get(brokerName) || [];
+      list.push({ runAt: Date.now() + delayMs, id });
+      this.delayed.set(brokerName, list);
+    } else {
+      // Put back at front of waiting list for immediate retry
+      const waiting = this.waitLists.get(brokerName) || [];
+      waiting.unshift(id);
+      this.waitLists.set(brokerName, waiting);
+      this.events.emit(`broker:ready:${brokerName}`);
+    }
+  }
+
   async pause(brokerName: string): Promise<void> {
     this.paused.add(brokerName);
   }

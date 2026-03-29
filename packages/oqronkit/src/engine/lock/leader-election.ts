@@ -15,7 +15,10 @@ export class LeaderElection {
 
   async start(): Promise<void> {
     await this.campaign();
-    const interval = Math.floor(this.ttlMs / 3);
+    // Add ±20% jitter to prevent thundering herd with many nodes
+    const baseInterval = Math.floor(this.ttlMs / 3);
+    const jitter = Math.floor(baseInterval * 0.2 * (Math.random() * 2 - 1));
+    const interval = baseInterval + jitter;
     this.electionTimer = setInterval(() => void this.campaign(), interval);
   }
 
