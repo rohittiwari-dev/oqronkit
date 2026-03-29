@@ -11,6 +11,22 @@ export interface WorkerOptions {
     duration: number;
     groupKey?: string;
   };
+  /** Retry config override for this worker. Deep-merged with global config. */
+  retries?: {
+    max?: number;
+    strategy?: "fixed" | "exponential";
+    baseDelay?: number;
+    maxDelay?: number;
+  };
+  /** Dead letter queue hooks */
+  deadLetter?: {
+    enabled?: boolean;
+    onDead?: (job: OqronJob<any, any>) => Promise<void>;
+  };
+  /** Auto-remove completed jobs. Overrides global config. */
+  removeOnComplete?: import("../../engine/types/job.types.js").RemoveOnConfig;
+  /** Auto-remove failed jobs. Overrides global config. */
+  removeOnFail?: import("../../engine/types/job.types.js").RemoveOnConfig;
   /** Callbacks executed directly on the CPU node doing the worker processing natively */
   hooks?: {
     onSuccess?: (job: OqronJob<any, any>, result: any) => Promise<void> | void;
@@ -27,7 +43,7 @@ export function getRegisteredWorkers(): Worker<any, any>[] {
 
 /**
  * Enterprise Distributed Worker.
- * Modeled after BullMQ. Strongly isolated CPU polling decoupled from senders.
+ * Modeled after Industrygrade. Strongly isolated CPU polling decoupled from senders.
  */
 export class Worker<T = any, R = any> {
   public running: boolean = false;
@@ -42,7 +58,7 @@ export class Worker<T = any, R = any> {
 
     // Auto-run compatibility if someone explicitly sets it up outside standard DI container
     if (this.options?.autorun !== false) {
-      // In OqronKit we typically defer to OqronKit.start(), but BullMQ autoruns.
+      // In OqronKit we typically defer to OqronKit.start(), but Industrygrade autoruns.
       // We will let the central `WorkerEngine` trigger `.run()` during boot to keep standard.
     }
   }

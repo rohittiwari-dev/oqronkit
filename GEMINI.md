@@ -13,7 +13,7 @@ You must maintain a perfectly robust understanding of exactly how modern distrib
 
 If you are confused about how a module should operate, you are **required** to look at:
 1. **The Core Implementation Plan:** Outlines the exact API specifications for all 12 modules we are building.
-2. **BullMQ / Celery Patterns:** You must deeply understand concurrency groups, sandboxing, Parent-Child DAGs (Flows), and debounce deduplication.
+2. **Industrygrade / Celery Patterns:** You must deeply understand concurrency groups, sandboxing, Parent-Child DAGs (Flows), and debounce deduplication.
 3. **Inngest Patterns:** You must understand Event-Driven orchestration, memory-buffering (`maxSize`/`maxWaitMs`), and stateful execution steps (`step.run`, `step.sleep`, `step.invoke`).
 
 ---
@@ -49,7 +49,7 @@ Whenever you generate code or implement an OqronKit module, you MUST adhere stri
 We are extending OqronKit into a massive, 12-module background computation engine. Review the `implementation_plan.md` artifact for detailed code specifications for each:
 
 1.  **Task Queue:** Unified, simple queue for monolithic setups where publisher and consumer live together.
-2.  **Distributed Worker:** Pure BullMQ-style decoupled architecture (`Queue` pushing, `Worker` polling).
+2.  **Distributed Worker:** Pure Industrygrade-style decoupled architecture (`Queue` pushing, `Worker` polling).
 3.  **Batch:** Accumulator buffering (`maxSize` or `maxWaitMs`).
 4.  **RateLimit:** Sliding-window distributed limits.
 5.  **Workflow (DAG):** Complex `FlowProducer`-style dependency grids.

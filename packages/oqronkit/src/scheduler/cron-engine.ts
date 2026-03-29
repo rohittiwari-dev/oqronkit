@@ -15,6 +15,10 @@ import {
   LeaderElection,
   StallDetector,
 } from "../engine/lock/index.js";
+import {
+  keepHistoryToRemoveConfig,
+  pruneAfterCompletion,
+} from "../engine/utils/job-retention.js";
 import { getNextRunDate } from "./expression-parser.js";
 import { MissedFireHandler } from "./missed-fire.handler.js";
 
@@ -406,8 +410,19 @@ export class SchedulerModule implements IOqronModule {
 
     await Storage.save("cron_history", runId, {
       id: runId,
+      type: "cron",
+      queueName: "system_cron",
       scheduleId: def.name,
-      status: "running",
+      status: "active",
+      data: null,
+      opts: {},
+      attemptMade: 0,
+      progressPercent: 0,
+      workerId: this.nodeId,
+      tags: def.tags ?? [],
+      environment: this.environment,
+      project: this.project,
+      createdAt: startedAt,
       startedAt,
     });
 
@@ -515,21 +530,28 @@ export class SchedulerModule implements IOqronModule {
         }
       }
 
-      const completedAt = new Date();
+      const finishedAt = new Date();
       await Storage.save("cron_history", runId, {
         id: runId,
+        type: "cron",
+        queueName: "system_cron",
         scheduleId: def.name,
         status,
-        startedAt,
-        completedAt,
+        data: null,
+        opts: {},
+        attemptMade: attempts,
+        progressPercent: status === "completed" ? 100 : 0,
+        progressLabel: status === "completed" ? "Completed" : undefined,
+        workerId: this.nodeId,
+        tags: def.tags ?? [],
+        environment: this.environment,
+        project: this.project,
+        returnValue: finalResult !== undefined ? finalResult : undefined,
         error,
-        result:
-          finalResult !== undefined ? JSON.stringify(finalResult) : undefined,
-        attempts,
-        durationMs: completedAt.getTime() - startedAt.getTime(),
-        ...(status === "completed"
-          ? { progressPercent: 100, progressLabel: "Completed" }
-          : {}),
+        stacktrace: error && status === "failed" ? [error] : undefined,
+        createdAt: startedAt,
+        startedAt,
+        finishedAt,
       });
 
       if (worker) {
@@ -554,59 +576,22 @@ export class SchedulerModule implements IOqronModule {
         }
       }
 
-      // Handle history pruning
-      const keepJobHistory =
+      // History pruning via shared utility
+      const keepHistory =
         def.keepHistory ?? this.config?.keepJobHistory ?? true;
-      const keepFailedHistory =
+      const keepFailed =
         def.keepFailedHistory ?? this.config?.keepFailedJobHistory ?? true;
 
-      if (keepJobHistory !== true || keepFailedHistory !== true) {
-        // Implement soft prune on history via Storage
-        // Storage.prune is timestamp based. For full compatibility, we do it in-memory via manual list
-        try {
-          const history = await Storage.list<any>("cron_history", {
-            scheduleId: def.name,
-          });
-          // Sort by completed at desc
-          history.sort(
-            (a, b) =>
-              new Date(b.completedAt).getTime() -
-              new Date(a.completedAt).getTime(),
-          );
-          const successJobs = history.filter((h) => h.status === "completed");
-          const failJobs = history.filter((h) => h.status === "failed");
-
-          if (
-            typeof keepJobHistory === "number" &&
-            successJobs.length > keepJobHistory
-          ) {
-            const toDelete = successJobs.slice(keepJobHistory);
-            for (const j of toDelete)
-              await Storage.delete("cron_history", j.id);
-          }
-          if (
-            typeof keepFailedHistory === "number" &&
-            failJobs.length > keepFailedHistory
-          ) {
-            const toDelete = failJobs.slice(keepFailedHistory);
-            for (const j of toDelete)
-              await Storage.delete("cron_history", j.id);
-          }
-          if (keepJobHistory === false) {
-            for (const j of successJobs)
-              await Storage.delete("cron_history", j.id);
-          }
-          if (keepFailedHistory === false) {
-            for (const j of failJobs)
-              await Storage.delete("cron_history", j.id);
-          }
-        } catch (e) {
-          this.logger.debug("Failed to prune history", {
-            err: e,
-            name: def.name,
-          });
-        }
-      }
+      await pruneAfterCompletion({
+        namespace: "cron_history",
+        jobId: runId,
+        status,
+        jobRemoveConfig: keepHistoryToRemoveConfig(
+          status === "completed" ? keepHistory : keepFailed,
+        ),
+        filterKey: "scheduleId",
+        filterValue: def.name,
+      });
 
       this.logger.info("Job finished", {
         name: def.name,
@@ -615,7 +600,6 @@ export class SchedulerModule implements IOqronModule {
         attempts,
       });
 
-      // Emit EventBus events for telemetry and monitoring
       if (status === "completed") {
         OqronEventBus.emit("job:success", "cron", runId);
       } else {

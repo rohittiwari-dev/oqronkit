@@ -57,8 +57,10 @@ export type {
   JobFilter,
   JobStatus,
   JobType,
+  KeepJobs,
   OqronJob,
   OqronJobOptions,
+  RemoveOnConfig,
   SystemStats,
 } from "./types/job.types.js";
 export type { IOqronModule } from "./types/module.types.js";
@@ -69,3 +71,10 @@ export type {
   ScheduleRecurring,
   ScheduleRunAfter,
 } from "./types/scheduler.types.js";
+export type { BackoffOptions } from "./utils/backoffs.js";
+// ── Utilities ────────────────────────────────────────────────────────────────
+export { calculateBackoff, normalizeBackoff } from "./utils/backoffs.js";
+export {
+  keepHistoryToRemoveConfig,
+  pruneAfterCompletion,
+} from "./utils/job-retention.js";

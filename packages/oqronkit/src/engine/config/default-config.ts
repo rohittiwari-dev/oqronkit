@@ -5,6 +5,7 @@ const defaultConfig: ValidatedConfig = {
   project: "oqronkit",
   environment: "development",
   modules: [],
+
   cron: {
     enable: true,
     timezone: "UTC",
@@ -14,13 +15,21 @@ const defaultConfig: ValidatedConfig = {
     leaderElection: true,
     keepJobHistory: true,
     keepFailedJobHistory: true,
+    shutdownTimeout: 25000,
+    lagMonitor: { maxLagMs: 5000, sampleIntervalMs: 1000 },
   },
+
   scheduler: {
     enable: true,
     tickInterval: 1000,
+    timezone: "UTC",
+    leaderElection: true,
     keepJobHistory: true,
     keepFailedJobHistory: true,
+    shutdownTimeout: 25000,
+    lagMonitor: { maxLagMs: 5000, sampleIntervalMs: 1000 },
   },
+
   taskQueue: {
     concurrency: 5,
     heartbeatMs: 5000,
@@ -32,11 +41,18 @@ const defaultConfig: ValidatedConfig = {
       maxDelay: 60000,
     },
     deadLetter: { enabled: true },
+    removeOnComplete: false,
+    removeOnFail: false,
+    shutdownTimeout: 25000,
+    maxStalledCount: 1,
+    stalledInterval: 30000,
   },
+
   queue: {
     defaultTtl: 86400000,
     ack: "leader",
   },
+
   worker: {
     concurrency: 5,
     heartbeatMs: 5000,
@@ -48,9 +64,16 @@ const defaultConfig: ValidatedConfig = {
       maxDelay: 60000,
     },
     deadLetter: { enabled: true },
+    removeOnComplete: false,
+    removeOnFail: false,
+    shutdownTimeout: 25000,
+    maxStalledCount: 1,
+    stalledInterval: 30000,
   },
+
   jobsDir: "./src/jobs",
   tags: [],
+
   logger: {
     enabled: true,
     level: "info",
@@ -58,15 +81,12 @@ const defaultConfig: ValidatedConfig = {
     showMetadata: true,
     redact: [],
   },
+
   telemetry: {
-    prometheus: {
-      enabled: false,
-      path: "/metrics",
-    },
-    opentelemetry: {
-      enabled: false,
-    },
+    prometheus: { enabled: false, path: "/metrics" },
+    opentelemetry: { enabled: false },
   },
+
   shutdown: {
     enabled: true,
     timeout: 30000,
@@ -86,11 +106,19 @@ export function reconfigureConfig(config: OqronConfig): ValidatedConfig {
     cron: {
       ...defaultConfig.cron,
       ...config.cron,
+      lagMonitor: {
+        ...defaultConfig.cron.lagMonitor,
+        ...config.cron?.lagMonitor,
+      },
     },
 
     scheduler: {
       ...defaultConfig.scheduler,
       ...config.scheduler,
+      lagMonitor: {
+        ...defaultConfig.scheduler.lagMonitor,
+        ...config.scheduler?.lagMonitor,
+      },
     },
 
     taskQueue: {

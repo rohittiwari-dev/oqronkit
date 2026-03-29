@@ -40,7 +40,7 @@ async function main(): Promise<void> {
   // ── Dynamic Scheduling Demo ────────────────────────────────────────────
   // Schedule a full onboarding drip campaign for a simulated new user signup
   const { scheduleOnboardingDrip } = await import("./jobs/scheduler.js");
-  const userId = "u_" + Math.random().toString(36).slice(2, 8);
+  const userId = `u_${Math.random().toString(36).slice(2, 8)}`;
   await scheduleOnboardingDrip(userId, "Rohit Tiwari", "rohit@example.com");
   console.log(`\n📧 Onboarding drip campaign scheduled for user: ${userId}`);
 

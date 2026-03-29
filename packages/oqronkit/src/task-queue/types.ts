@@ -47,6 +47,18 @@ export interface TaskQueueConfig<T = any, R = any> {
     onDead?: (job: OqronJob<T, R>) => Promise<void>;
   };
 
+  /**
+   * Auto-remove completed jobs after processing.
+   * Overrides global config. See OqronJobOptions.removeOnComplete.
+   */
+  removeOnComplete?: import("../engine/types/job.types.js").RemoveOnConfig;
+
+  /**
+   * Auto-remove failed jobs after all retries exhausted.
+   * Overrides global config. See OqronJobOptions.removeOnFail.
+   */
+  removeOnFail?: import("../engine/types/job.types.js").RemoveOnConfig;
+
   /** Natively execute direct local callbacks when the monolithic processor succeeds or fails */
   hooks?: {
     onSuccess?: (job: OqronJob<T, R>, result: R) => Promise<void> | void;

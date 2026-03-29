@@ -16,6 +16,10 @@ import {
   LeaderElection,
   StallDetector,
 } from "../engine/lock/index.js";
+import {
+  keepHistoryToRemoveConfig,
+  pruneAfterCompletion,
+} from "../engine/utils/job-retention.js";
 import { _attachScheduleEngine } from "./define-schedule.js";
 
 type ActiveJobEntry = {
@@ -540,7 +544,7 @@ export class ScheduleEngine implements IOqronModule {
         }
       }
 
-      const completedAt = new Date();
+      const finishedAt = new Date();
       await Storage.save("schedule_history", runId, {
         id: runId,
         type: "schedule",
@@ -551,13 +555,17 @@ export class ScheduleEngine implements IOqronModule {
         attemptMade: attempts,
         progressPercent: status === "completed" ? 100 : 0,
         progressLabel: status === "completed" ? "Completed" : "Failed",
-        tags: [],
+        tags: def.tags ?? [],
         scheduleId: def.name,
+        workerId: this.nodeId,
+        environment: this.environment,
+        project: this.project,
         error,
+        stacktrace: error && status === "failed" ? [error] : undefined,
         returnValue: finalResult !== undefined ? finalResult : undefined,
         createdAt: startedAt,
         startedAt,
-        finishedAt: completedAt,
+        finishedAt,
       });
 
       if (worker) {
@@ -567,56 +575,22 @@ export class ScheduleEngine implements IOqronModule {
       }
       this.activeJobs.delete(runId);
 
-      // Handle history pruning based on configured cascade
-      const keepJobHistory =
+      // History pruning via shared utility
+      const keepHistory =
         def.keepHistory ?? this.config?.keepJobHistory ?? true;
-      const keepFailedHistory =
+      const keepFailed =
         def.keepFailedHistory ?? this.config?.keepFailedJobHistory ?? true;
 
-      if (keepJobHistory !== true || keepFailedHistory !== true) {
-        try {
-          const history = await Storage.list<any>("schedule_history", {
-            scheduleId: def.name,
-          });
-          history.sort(
-            (a: any, b: any) =>
-              new Date(b.finishedAt ?? b.startedAt).getTime() -
-              new Date(a.finishedAt ?? a.startedAt).getTime(),
-          );
-          const successJobs = history.filter(
-            (h: any) => h.status === "completed",
-          );
-          const failJobs = history.filter((h: any) => h.status === "failed");
-
-          if (
-            typeof keepJobHistory === "number" &&
-            successJobs.length > keepJobHistory
-          ) {
-            for (const j of successJobs.slice(keepJobHistory))
-              await Storage.delete("schedule_history", j.id);
-          }
-          if (
-            typeof keepFailedHistory === "number" &&
-            failJobs.length > keepFailedHistory
-          ) {
-            for (const j of failJobs.slice(keepFailedHistory))
-              await Storage.delete("schedule_history", j.id);
-          }
-          if (keepJobHistory === false) {
-            for (const j of successJobs)
-              await Storage.delete("schedule_history", j.id);
-          }
-          if (keepFailedHistory === false) {
-            for (const j of failJobs)
-              await Storage.delete("schedule_history", j.id);
-          }
-        } catch (e) {
-          this.logger.debug("Failed to prune history", {
-            err: e,
-            name: def.name,
-          });
-        }
-      }
+      await pruneAfterCompletion({
+        namespace: "schedule_history",
+        jobId: runId,
+        status,
+        jobRemoveConfig: keepHistoryToRemoveConfig(
+          status === "completed" ? keepHistory : keepFailed,
+        ),
+        filterKey: "scheduleId",
+        filterValue: def.name,
+      });
 
       this.logger.info("Schedule finished", {
         name: def.name,

@@ -1,12 +1,44 @@
 import { z } from "zod";
-// Duck-typing validators removed in favor of plain generic config (DatabaseLike / RedisLike)
+
+// ── Shared sub-schemas ──────────────────────────────────────────────────────
+
+const KeepJobsSchema = z.object({
+  age: z.number().optional(),
+  count: z.number().optional(),
+});
+
+const RemoveOnConfigSchema = z.union([z.boolean(), z.number(), KeepJobsSchema]);
+
+const RetriesSchema = z
+  .object({
+    max: z.number().default(3),
+    strategy: z.enum(["fixed", "exponential"]).default("exponential"),
+    baseDelay: z.number().default(2000),
+    maxDelay: z.number().default(60000),
+  })
+  .default({});
+
+const DeadLetterSchema = z
+  .object({
+    enabled: z.boolean().default(true),
+  })
+  .default({});
+
+const LagMonitorSchema = z
+  .object({
+    maxLagMs: z.number().default(5000),
+    sampleIntervalMs: z.number().default(1000),
+  })
+  .default({ maxLagMs: 5000, sampleIntervalMs: 1000 });
+
+// ── Main Config Schema ──────────────────────────────────────────────────────
 
 export const OqronConfigSchema = z.object({
   project: z.string().optional(),
   environment: z.string().default("development"),
 
-  // Infrastructure — Unified connection inputs
-  redis: z.any().optional(), // RedisLike (accepts ioredis instances or config objects)
+  // Infrastructure
+  redis: z.any().optional(),
 
   // Modules
   modules: z
@@ -25,11 +57,11 @@ export const OqronConfigSchema = z.object({
     )
     .default([]),
 
-  // Module-specific configs
+  // ── Cron ─────────────────────────────────────────────────────────────────
   cron: z
     .object({
       enable: z.boolean().default(true),
-      timezone: z.string().optional(),
+      timezone: z.string().default("UTC"),
       tickInterval: z.number().default(1000),
       missedFirePolicy: z
         .enum(["skip", "run-once", "run-all"])
@@ -38,64 +70,62 @@ export const OqronConfigSchema = z.object({
       leaderElection: z.boolean().default(true),
       keepJobHistory: z.union([z.boolean(), z.number()]).default(true),
       keepFailedJobHistory: z.union([z.boolean(), z.number()]).default(true),
+      shutdownTimeout: z.number().default(25000),
+      lagMonitor: LagMonitorSchema,
     })
     .default({}),
 
+  // ── Scheduler ────────────────────────────────────────────────────────────
   scheduler: z
     .object({
       enable: z.boolean().default(true),
       tickInterval: z.number().default(1000),
+      timezone: z.string().default("UTC"),
+      leaderElection: z.boolean().default(true),
       keepJobHistory: z.union([z.boolean(), z.number()]).default(true),
       keepFailedJobHistory: z.union([z.boolean(), z.number()]).default(true),
+      shutdownTimeout: z.number().default(25000),
+      lagMonitor: LagMonitorSchema,
     })
     .default({}),
 
+  // ── TaskQueue ────────────────────────────────────────────────────────────
   taskQueue: z
     .object({
       concurrency: z.number().default(5),
       heartbeatMs: z.number().default(5000),
       lockTtlMs: z.number().default(30000),
-      retries: z
-        .object({
-          max: z.number().default(3),
-          strategy: z.enum(["fixed", "exponential"]).default("exponential"),
-          baseDelay: z.number().default(2000),
-          maxDelay: z.number().default(60000),
-        })
-        .default({}),
-      deadLetter: z
-        .object({
-          enabled: z.boolean().default(true),
-        })
-        .default({}),
+      retries: RetriesSchema,
+      deadLetter: DeadLetterSchema,
+      removeOnComplete: RemoveOnConfigSchema.default(false),
+      removeOnFail: RemoveOnConfigSchema.default(false),
+      shutdownTimeout: z.number().default(25000),
+      maxStalledCount: z.number().default(1),
+      stalledInterval: z.number().default(30000),
     })
     .default({}),
 
+  // ── Queue ────────────────────────────────────────────────────────────────
   queue: z
     .object({
-      defaultTtl: z.number().default(86400 * 1000), // 24 hours
+      defaultTtl: z.number().default(86400 * 1000),
       ack: z.enum(["leader", "all", "none"]).default("leader"),
     })
     .default({}),
 
+  // ── Worker ───────────────────────────────────────────────────────────────
   worker: z
     .object({
       concurrency: z.number().default(5),
       heartbeatMs: z.number().default(5000),
       lockTtlMs: z.number().default(30000),
-      retries: z
-        .object({
-          max: z.number().default(3),
-          strategy: z.enum(["fixed", "exponential"]).default("exponential"),
-          baseDelay: z.number().default(2000),
-          maxDelay: z.number().default(60000),
-        })
-        .default({}),
-      deadLetter: z
-        .object({
-          enabled: z.boolean().default(true),
-        })
-        .default({}),
+      retries: RetriesSchema,
+      deadLetter: DeadLetterSchema,
+      removeOnComplete: RemoveOnConfigSchema.default(false),
+      removeOnFail: RemoveOnConfigSchema.default(false),
+      shutdownTimeout: z.number().default(25000),
+      maxStalledCount: z.number().default(1),
+      stalledInterval: z.number().default(30000),
     })
     .default({}),
 
@@ -105,7 +135,7 @@ export const OqronConfigSchema = z.object({
   // Global tags
   tags: z.array(z.string()).default([]),
 
-  // Logger (voltlog-io config or false to disable)
+  // Logger
   logger: z
     .union([
       z.literal(false),

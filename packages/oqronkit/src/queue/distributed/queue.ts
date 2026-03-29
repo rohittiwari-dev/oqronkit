@@ -11,7 +11,7 @@ export interface QueueOptions {
 
 /**
  * Enterprise Queue Publisher.
- * Modeled after BullMQ. This class is strictly a sender and consumes no CPU/polling loops.
+ * Modeled after Industrygrade. This class is strictly a sender and consumes no CPU/polling loops.
  */
 export class Queue<T = any, R = any> {
   constructor(

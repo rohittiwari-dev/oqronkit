@@ -1,4 +1,5 @@
 import type { OqronLoggerConfig } from "../logger/index.js";
+import type { RemoveOnConfig } from "./job.types.js";
 
 /** Shared worker execution defaults — applies to taskQueue, worker, and all future modules */
 export interface WorkerDefaults {
@@ -46,7 +47,6 @@ export interface OqronConfig {
 
   /**
    * List of core modules to enable.
-   * e.g. ['cron', 'queue', 'workflow', 'batch', 'webhook', 'pipeline']
    * @default []
    */
   modules?: (
@@ -61,64 +61,115 @@ export interface OqronConfig {
     | "pipeline"
   )[];
 
-  /**
-   * Module-specific configs
-   */
+  // ── Module-specific configs ─────────────────────────────────────────────
+
   cron?: {
+    /** Enable/disable the cron module. @default true */
     enable?: boolean;
+    /** Global timezone fallback when a cron def doesn't specify one. @default "UTC" */
     timezone?: string;
+    /** Tick interval in ms for the cron polling loop. @default 1000 */
     tickInterval?: number;
+    /** Default missed-fire policy when not set on the definition. @default "run-once" */
     missedFirePolicy?: "skip" | "run-once" | "run-all";
+    /** Global max concurrent cron jobs (per-def can override). @default 5 */
     maxConcurrentJobs?: number;
+    /** Enable cluster-wide leader election for cron ticks. @default true */
     leaderElection?: boolean;
     /** Rolling execution history. `true` = infinite, `false` = 0, `number` = keep N */
     keepJobHistory?: boolean | number;
-    /** Override for failed tasks. Handled explicitly under errors */
+    /** Override for failed tasks retention */
     keepFailedJobHistory?: boolean | number;
+    /** Graceful shutdown drain timeout in ms. @default 25000 */
+    shutdownTimeout?: number;
+    /** Lag monitor thresholds */
+    lagMonitor?: { maxLagMs?: number; sampleIntervalMs?: number };
   };
 
   scheduler?: {
+    /** Enable/disable the scheduler module. @default true */
     enable?: boolean;
+    /** Tick interval in ms. @default 1000 */
     tickInterval?: number;
+    /** Global timezone fallback. @default "UTC" */
+    timezone?: string;
+    /** Enable cluster-wide leader election. @default true */
+    leaderElection?: boolean;
+    /** Rolling execution history retention */
     keepJobHistory?: boolean | number;
+    /** Failed job history retention */
     keepFailedJobHistory?: boolean | number;
+    /** Graceful shutdown drain timeout in ms. @default 25000 */
+    shutdownTimeout?: number;
+    /** Lag monitor thresholds */
+    lagMonitor?: { maxLagMs?: number; sampleIntervalMs?: number };
   };
 
   taskQueue?: {
+    /** Parallel execution limit. @default 5 */
     concurrency?: number;
+    /** Polling interval in ms. @default 5000 */
     heartbeatMs?: number;
+    /** Lock TTL in ms for crash recovery. @default 30000 */
     lockTtlMs?: number;
+    /** Default retry configuration for all task queues */
     retries?: {
       max?: number;
       strategy?: "fixed" | "exponential";
       baseDelay?: number;
       maxDelay?: number;
     };
+    /** Dead letter queue configuration */
     deadLetter?: { enabled?: boolean };
+    /** Global default: auto-remove completed jobs. @default false */
+    removeOnComplete?: RemoveOnConfig;
+    /** Global default: auto-remove failed jobs. @default false */
+    removeOnFail?: RemoveOnConfig;
+    /** Graceful shutdown drain timeout in ms. @default 25000 */
+    shutdownTimeout?: number;
+    /** Max stalled job retries before marking as permanently failed. @default 1 */
+    maxStalledCount?: number;
+    /** Stalled check interval in ms. @default 30000 */
+    stalledInterval?: number;
   };
 
   queue?: {
+    /** Default TTL in ms for queue messages. @default 86400000 (24h) */
     defaultTtl?: number;
+    /** Acknowledgement mode. @default "leader" */
     ack?: "leader" | "all" | "none";
   };
 
   worker?: {
+    /** Parallel execution limit. @default 5 */
     concurrency?: number;
+    /** Polling interval in ms. @default 5000 */
     heartbeatMs?: number;
+    /** Lock duration in ms (Industrygrade: lockDuration). @default 30000 */
     lockTtlMs?: number;
+    /** Default retry configuration */
     retries?: {
       max?: number;
       strategy?: "fixed" | "exponential";
       baseDelay?: number;
       maxDelay?: number;
     };
+    /** Dead letter queue configuration */
     deadLetter?: { enabled?: boolean };
+    /** Global default: auto-remove completed jobs. @default false */
+    removeOnComplete?: RemoveOnConfig;
+    /** Global default: auto-remove failed jobs. @default false */
+    removeOnFail?: RemoveOnConfig;
+    /** Graceful shutdown drain timeout in ms. @default 25000 */
+    shutdownTimeout?: number;
+    /** Max stalled job retries. @default 1 */
+    maxStalledCount?: number;
+    /** Stalled check interval in ms. @default 30000 */
+    stalledInterval?: number;
   };
 
   /**
    * Directory to auto-discover job definition files from.
-   * OqronKit.init() scans this directory recursively for .ts/.js files
-   * that export definitions and registers them automatically.
    * @default "./src/jobs"
    */
   jobsDir?: string;

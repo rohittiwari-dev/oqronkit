@@ -5,7 +5,7 @@ import type { IBrokerEngine } from "../types/engine.js";
  * Redis implementation of the universal Broker Engine.
  *
  * Provides extremely high-throughput, cross-node lock orchestration and signaling
- * exactly similar to BullMQ's core runtime methodology.
+ * exactly similar to Industrygrade's core runtime methodology.
  */
 export class RedisBroker implements IBrokerEngine {
   constructor(
