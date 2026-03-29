@@ -107,7 +107,6 @@ export class PostgresBroker implements IBrokerEngine {
       case "priority":
         orderBy = "priority ASC, created_at ASC";
         break;
-      case "fifo":
       default:
         orderBy = "created_at ASC";
         break;

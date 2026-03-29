@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { initEngine, Storage } from "../../src/engine/core.js";
+import { initEngine } from "../../src/engine/core.js";
 import { schedule } from "../../src/scheduler/define-schedule.js";
 import {
   _registerSchedule,
@@ -57,13 +57,13 @@ describe("Schedule — defineSchedule()", () => {
       name: "custom-sched",
       every: { minutes: 10 },
       missedFire: "run-all",
-      overlap: "allow",
+      overlap: "run",
       handler: async () => {},
     });
 
     const pending = _drainPendingSchedules();
     expect(pending[0].missedFire).toBe("run-all");
-    expect(pending[0].overlap).toBe("allow");
+    expect(pending[0].overlap).toBe("run");
   });
 
   it("includes tags, payload, retries in the definition", () => {
@@ -97,9 +97,7 @@ describe("Schedule — trigger()/schedule() without engine", () => {
     });
     _drainPendingSchedules();
 
-    await expect(s.trigger()).rejects.toThrow(
-      "ScheduleEngine is not running",
-    );
+    await expect(s.trigger()).rejects.toThrow("ScheduleEngine is not running");
   });
 
   it("schedule() throws when engine is not running", async () => {
@@ -110,9 +108,7 @@ describe("Schedule — trigger()/schedule() without engine", () => {
     });
     _drainPendingSchedules();
 
-    await expect(s.schedule()).rejects.toThrow(
-      "ScheduleEngine is not running",
-    );
+    await expect(s.schedule()).rejects.toThrow("ScheduleEngine is not running");
   });
 });
 
@@ -212,10 +208,16 @@ describe("Schedule Registry", () => {
   it("_drainPendingSchedules returns and clears all pending", () => {
     _registerSchedule({
       name: "s1",
+      missedFire: "skip",
+      overlap: "skip",
+      tags: [],
       handler: async () => {},
     } as ScheduleDefinition);
     _registerSchedule({
       name: "s2",
+      missedFire: "skip",
+      overlap: "skip",
+      tags: [],
       handler: async () => {},
     } as ScheduleDefinition);
 

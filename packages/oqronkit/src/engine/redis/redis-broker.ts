@@ -140,7 +140,6 @@ export class RedisBroker implements IBrokerEngine {
         luaScript = ATOMIC_CLAIM_PRIORITY_LUA;
         claimKey = this.getPriorityKey(brokerName);
         break;
-      case "fifo":
       default:
         luaScript = ATOMIC_CLAIM_FIFO_LUA;
         claimKey = this.getQueueKey(brokerName);

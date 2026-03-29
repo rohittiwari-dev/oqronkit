@@ -172,7 +172,7 @@ describe("OqronManager", () => {
         attemptMade: 3,
         progressPercent: 0,
         error: "crash",
-        stacktrace: "Error: crash\n  at ...",
+        stacktrace: ["Error: crash", "  at ..."],
         tags: [],
         createdAt: new Date(),
       };
