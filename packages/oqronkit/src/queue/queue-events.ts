@@ -1,9 +1,10 @@
 import { EventEmitter } from "eventemitter3";
-import { OqronEventBus, Storage } from "../engine/index.js";
+import { OqronContainer, OqronEventBus } from "../engine/index.js";
 import type { IBrokerEngine } from "../engine/types/engine.js";
 
 export interface QueueEventsOptions {
   connection?: IBrokerEngine;
+  container?: OqronContainer;
 }
 
 export type QueueEventsMap = {
@@ -23,12 +24,14 @@ export class QueueEvents extends EventEmitter<QueueEventsMap> {
   private progressListener = this._handleProgress.bind(this);
   private successListener = this._handleSuccess.bind(this);
   private errorListener = this._handleError.bind(this);
+  private _container?: OqronContainer;
 
   constructor(
     public readonly name: string,
-    _options?: QueueEventsOptions,
+    options?: QueueEventsOptions,
   ) {
     super();
+    this._container = options?.container;
 
     // In a fully deployed Redis setup, `options.connection` parses Redis streams directly.
     // In our abstract layer, we bind securely to the OqronKit global pubsub bus.
@@ -36,6 +39,10 @@ export class QueueEvents extends EventEmitter<QueueEventsMap> {
     OqronEventBus.on("job:progress", this.progressListener);
     OqronEventBus.on("job:success", this.successListener);
     OqronEventBus.on("job:fail", this.errorListener);
+  }
+
+  private get di(): OqronContainer {
+    return this._container ?? OqronContainer.get();
   }
 
   // -------------------------
@@ -56,7 +63,7 @@ export class QueueEvents extends EventEmitter<QueueEventsMap> {
   private async _handleSuccess(queueName: string, jobId: string) {
     if (queueName === this.name) {
       try {
-        const job = await Storage.get<any>("jobs", jobId);
+        const job = await this.di.storage.get<any>("jobs", jobId);
         this.emit("completed", {
           jobId,
           returnvalue: job?.returnValue,

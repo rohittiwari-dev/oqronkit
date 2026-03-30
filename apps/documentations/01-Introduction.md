@@ -29,6 +29,9 @@ OqronKit is a **unified background computation engine** that replaces all of the
 - Crash-safe heartbeat workers with stall detection
 - Mid-execution job cancellation via `AbortController` (`ctx.signal`)
 - Job ordering strategies: FIFO, LIFO, and Priority
+- **Job Dependencies (DAG)** — `dependsOn` parent IDs with configurable failure policy
+- **Cron Clustering** — Sharded multi-region leader election for geo-distributed scheduling
+- **Sandboxed Processors** — `worker_threads` isolation with resource limits for untrusted code
 - DI Container (`OqronContainer`) for multi-instance and testability
 - Multi-tenant environment isolation
 - Typed input/output generics for full type safety

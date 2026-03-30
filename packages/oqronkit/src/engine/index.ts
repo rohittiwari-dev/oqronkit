@@ -39,7 +39,11 @@ export { createLogger } from "./logger/index.js";
 export { OqronRegistry } from "./registry.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
-export type { OqronConfig, WorkerDefaults } from "./types/config.types.js";
+export type {
+  ClusteringConfig,
+  OqronConfig,
+  WorkerDefaults,
+} from "./types/config.types.js";
 export type {
   CronDefinition,
   CronHooks,
@@ -78,6 +82,7 @@ export type {
 export type { BackoffOptions } from "./utils/backoffs.js";
 // ── Utilities ────────────────────────────────────────────────────────────────
 export { calculateBackoff, normalizeBackoff } from "./utils/backoffs.js";
+export { DependencyResolver } from "./utils/dependency-resolver.js";
 export {
   keepHistoryToRemoveConfig,
   pruneAfterCompletion,

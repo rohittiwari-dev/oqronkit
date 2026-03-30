@@ -3,6 +3,37 @@
 
 ### Patch Changes
 
+- ## 0.0.1-alpha.4
+
+  ### New Features
+
+  - **Job Dependencies (DAG)** — Jobs can declare `dependsOn: [parentId]` to wait for parent completion before processing. Children stay in `"waiting-children"` status until all parents finish. Three configurable failure policies: `"block"` (default), `"cascade-fail"`, and `"ignore"`.
+  - **Cron Clustering** — `ShardedLeaderElection` enables multi-region geo-distributed scheduling. Schedule names are MD5-hashed to shard indices; each region claims a subset of shards. If a region goes down, surviving nodes recover the orphaned shard locks after TTL expiry.
+  - **Sandboxed Processors** — `SandboxWorker` provides `worker_threads` isolation with enforced `resourceLimits` (memory caps) and execution timeouts. Untrusted code runs in a separate V8 isolate — OOM crashes the sandbox thread, not the host process.
+  - **Full DI Container Migration** — Replaced all remaining global adapter imports (`Storage`, `Broker`, `Lock`) with explicit `OqronContainer` injection across `ScheduleEngine`, `Queue`, `QueueEvents`, and `TaskQueue`.
+
+  ### Environment Isolation Hardening
+
+  - **Adapter prefix now includes `environment`** — Redis keys changed from `{project}:store:...` to `{project}:{environment}:store:...`. Two deployments sharing the same Redis with different environments are now physically isolated at the key level.
+  - **Lock and leader keys namespaced** — Leader election keys (`oqron:scheduler:leader`) and execution lock keys (`oqron:run:{name}`) now include `{project}:{environment}`, preventing cross-environment leader theft and lock collisions.
+  - **Job records stamped with environment** — `taskQueue().add()` and `Queue.add()` now stamp `environment` and `project` from `OqronContainer.config` onto every job record, closing the gap where engine guards were silently bypassed for unstamped jobs.
+  - **Environment-mismatched jobs nack'd** — Workers now `broker.nack()` jobs from the wrong environment back to the queue instead of silently dropping them.
+  - **`OqronContainer` now holds `OqronConfig`** — Config is injected via constructor (Option A) for multi-instance support. Accessible via `container.config`.
+
+  ### Tests
+
+  - **275 tests across 29 files** (up from 253 tests across 26 files)
+  - New test suites: `job-dependencies.test.ts` (10 tests), `sharded-leader.test.ts` (7 tests), `sandbox.test.ts` (5 tests)
+  - A+ maturity rating across all modules
+
+  ### Documentation
+
+  - `02-Core-Concepts.md` — Added §8 Job Dependencies (DAG), §9 Cron Clustering, §10 Sandboxed Processors
+  - `08-Configuration-Reference.md` — Added `clustering` and `sandbox` config schemas
+  - `09-Real-World-Examples.md` — Added ETL DAG pipeline, multi-region cron, sandboxed code runner examples
+  - `10-Roadmap-and-Future.md` — Moved advanced patterns from "Future" to "Current State"
+  - New backend example: `apps/backend/src/jobs/advanced-patterns.ts`
+
 - ## 0.0.1-alpha.3
 
   ### New Features

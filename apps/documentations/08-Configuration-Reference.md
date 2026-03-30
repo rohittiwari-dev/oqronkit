@@ -62,6 +62,9 @@ cron: {
 | `shutdownTimeout` | `number` | `25000` | Max ms to wait for active crons to drain on shutdown |
 | `lagMonitor.maxLagMs` | `number` | `5000` | Alert threshold for tick lag |
 | `lagMonitor.sampleIntervalMs` | `number` | `1000` | Lag sampling frequency |
+| `clustering.totalShards` | `number` | `1` | Total shards across all regions (1 = single leader) |
+| `clustering.ownedShards` | `number[]` | `[0]` | Shards this node is eligible to claim |
+| `clustering.region` | `string` | `"default"` | Region identifier for logging |
 
 ---
 
@@ -77,6 +80,7 @@ scheduler: {
   keepFailedJobHistory: true,
   shutdownTimeout: 25000,
   lagMonitor: { maxLagMs: 5000, sampleIntervalMs: 1000 },
+  clustering: { totalShards: 4, ownedShards: [0, 1], region: "us-east" },
 }
 ```
 
@@ -89,6 +93,9 @@ scheduler: {
 | `keepJobHistory` | `boolean \| number` | `true` | Retention for successful schedule runs |
 | `keepFailedJobHistory` | `boolean \| number` | `true` | Retention for failed schedule runs |
 | `shutdownTimeout` | `number` | `25000` | Max ms to drain active schedules on shutdown |
+| `clustering.totalShards` | `number` | `1` | Shards across all regions (enables multi-region leader election) |
+| `clustering.ownedShards` | `number[]` | `[0]` | Shards this node is eligible to claim |
+| `clustering.region` | `string` | `"default"` | Region identifier for observability |
 
 ---
 
@@ -157,6 +164,25 @@ worker: {
 ```
 
 Same options as TaskQueue (plus `strategy`) — these serve as global defaults for all `Worker` instances. Per-worker options override these.
+
+> **Sandboxed Processors:** Workers accept a `sandbox` option for untrusted code isolation:
+>
+> ```typescript
+> new Worker("untrusted", "./processors/image.js", {
+>   sandbox: {
+>     enabled: true,
+>     timeout: 15_000,     // Force-kill after 15s
+>     maxMemoryMb: 256,    // Cap V8 heap at 256MB
+>   },
+> });
+> ```
+>
+> | Option | Type | Default | Description |
+> |--------|------|---------|-------------|
+> | `sandbox.enabled` | `boolean` | `false` | Enable worker_threads isolation |
+> | `sandbox.timeout` | `number` | `30000` | Max execution time in ms before force-kill |
+> | `sandbox.maxMemoryMb` | `number` | `512` | Max V8 old-gen heap in MB |
+> | `sandbox.transferOnly` | `boolean` | `true` | Deep-clone job data (no shared references) |
 
 ---
 

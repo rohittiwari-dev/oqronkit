@@ -27,6 +27,16 @@ export type RedisLike =
     }
   | any; // Escape hatch for direct ioredis passing
 
+/** Clustering config for sharded leader election across geo-regions */
+export interface ClusteringConfig {
+  /** Total shards across all regions. @default 1 (single leader) */
+  totalShards?: number;
+  /** Shards this node is eligible to claim. @default [0] */
+  ownedShards?: number[];
+  /** Region identifier for logging. @default "default" */
+  region?: string;
+}
+
 export interface OqronConfig {
   /**
    * The name of this project/service (e.g. 'acme-billing-svc')
@@ -85,6 +95,8 @@ export interface OqronConfig {
     shutdownTimeout?: number;
     /** Lag monitor thresholds */
     lagMonitor?: { maxLagMs?: number; sampleIntervalMs?: number };
+    /** Sharded leader election for multi-region cron distribution */
+    clustering?: ClusteringConfig;
   };
 
   scheduler?: {
@@ -104,6 +116,8 @@ export interface OqronConfig {
     shutdownTimeout?: number;
     /** Lag monitor thresholds */
     lagMonitor?: { maxLagMs?: number; sampleIntervalMs?: number };
+    /** Sharded leader election for multi-region schedule distribution */
+    clustering?: ClusteringConfig;
   };
 
   taskQueue?: {

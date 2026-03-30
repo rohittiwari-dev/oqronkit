@@ -20,6 +20,7 @@ let _logger: Logger | null = null;
 let _telemetry: TelemetryManager | null = null;
 
 export type {
+  ClusteringConfig,
   CronDefinition,
   CronHooks,
   EveryConfig,
@@ -39,14 +40,16 @@ export type {
 // ── Re-exports: single source of truth for ALL user-facing APIs ─────────────
 export {
   createLogger,
+  DependencyResolver,
   defineConfig,
   OqronContainer,
   OqronEventBus,
 } from "./engine/index.js";
-
+export { ShardedLeaderElection } from "./engine/lock/index.js";
 export { OqronManager } from "./manager/oqron-manager.js";
 export { Queue } from "./queue/queue.js";
 export { QueueEvents } from "./queue/queue-events.js";
+export { type SandboxOptions, SandboxWorker } from "./queue/sandbox-worker.js";
 export { Worker } from "./queue/worker.js";
 export {
   cron,

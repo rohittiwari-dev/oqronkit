@@ -340,3 +340,207 @@ OqronEventBus.on("job:fail", (queueName, jobId, error) => {
 ```
 
 This works for cron, schedule, taskQueue, and distributed worker jobs — all emit through the same EventBus.
+
+---
+
+## 8. ETL Pipeline with Job Dependencies — `taskQueue()` DAG
+
+Chain extract → transform → load steps, where each step waits for its parent to complete:
+
+```typescript
+import { taskQueue } from "oqronkit";
+
+// Step 1: Extract raw data
+const extractQueue = taskQueue<
+  { source: string; format: "csv" | "json" },
+  { rowCount: number; tempPath: string }
+>({
+  name: "etl-extract",
+  concurrency: 3,
+  retries: { max: 2, strategy: "fixed", baseDelay: 5_000 },
+
+  handler: async (ctx) => {
+    ctx.progress(10, "Downloading source file");
+    const data = await dataLake.download(ctx.data.source);
+    const parsed = await parser.parse(data, ctx.data.format);
+    const tempPath = await tempStorage.write(parsed);
+    ctx.progress(100, "Extraction complete");
+    return { rowCount: parsed.length, tempPath };
+  },
+});
+
+// Step 2: Transform (waits for extract)
+const transformQueue = taskQueue<
+  { tempPath: string; transformations: string[] },
+  { outputPath: string; processedRows: number }
+>({
+  name: "etl-transform",
+  concurrency: 2,
+  handler: async (ctx) => {
+    const raw = await tempStorage.read(ctx.data.tempPath);
+    const results = await transformer.apply(raw, ctx.data.transformations);
+    const outputPath = await tempStorage.write(results);
+    return { outputPath, processedRows: results.length };
+  },
+});
+
+// Step 3: Load (waits for transform)
+const loadQueue = taskQueue<
+  { outputPath: string; targetTable: string },
+  { insertedRows: number }
+>({
+  name: "etl-load",
+  concurrency: 1,
+  handler: async (ctx) => {
+    const data = await tempStorage.read(ctx.data.outputPath);
+    return await warehouse.bulkInsert(ctx.data.targetTable, data);
+  },
+});
+
+// ── Orchestration ────────────────────────────────────────────────
+app.post("/api/etl/run", async (req, res) => {
+  // Step 1: Extract
+  const extractJob = await extractQueue.add({
+    source: req.body.source,
+    format: req.body.format,
+  });
+
+  // Step 2: Transform waits for extract
+  const transformJob = await transformQueue.add(
+    { tempPath: "", transformations: req.body.transforms },
+    {
+      dependsOn: [extractJob.id],
+      parentFailurePolicy: "cascade-fail",
+    }
+  );
+
+  // Step 3: Load waits for transform
+  const loadJob = await loadQueue.add(
+    { outputPath: "", targetTable: req.body.target },
+    {
+      dependsOn: [transformJob.id],
+      parentFailurePolicy: "cascade-fail",
+    }
+  );
+
+  res.json({
+    pipeline: {
+      extract: extractJob.id,
+      transform: transformJob.id,
+      load: loadJob.id,
+    },
+  });
+});
+```
+
+---
+
+## 9. Multi-Region Cron Scheduling — `clustering`
+
+Distribute cron schedules across US-East and EU-West for low-latency execution:
+
+```typescript
+// ── config.us-east.ts (deployed to us-east pods) ────────────────
+import { defineConfig } from "oqronkit";
+
+export default defineConfig({
+  project: "global-saas",
+  environment: "production",
+  modules: ["scheduler"],
+
+  scheduler: {
+    clustering: {
+      totalShards: 8,
+      ownedShards: [0, 1, 2, 3],  // US-East handles shards 0-3
+      region: "us-east",
+    },
+  },
+});
+
+// ── config.eu-west.ts (deployed to eu-west pods) ────────────────
+import { defineConfig } from "oqronkit";
+
+export default defineConfig({
+  project: "global-saas",
+  environment: "production",
+  modules: ["scheduler"],
+
+  scheduler: {
+    clustering: {
+      totalShards: 8,
+      ownedShards: [4, 5, 6, 7],  // EU-West handles shards 4-7
+      region: "eu-west",
+    },
+  },
+});
+```
+
+Schedule names are MD5-hashed to a shard index. For example, `"billing-monthly"` might hash to shard 2 (US-East), while `"gdpr-cleanup"` might hash to shard 6 (EU-West). If EU-West goes down, US-East nodes can claim those shard locks after TTL expiry.
+
+---
+
+## 10. Sandboxed User Code Runner — `Worker` with `sandbox`
+
+Execute user-uploaded scripts with memory caps and execution timeouts:
+
+```typescript
+import { Queue, Worker } from "oqronkit";
+
+type UserCodeInput = {
+  userId: string;
+  scriptPath: string;    // Pre-validated and stored on server
+  inputData: unknown;
+};
+
+// ── API Server ──────────────────────────────────────────────────
+const codeQueue = new Queue<UserCodeInput>("user-code");
+
+app.post("/api/run-script", async (req, res) => {
+  const scriptPath = await scriptStore.save(req.body.code, req.user.id);
+  const job = await codeQueue.add("execute", {
+    userId: req.user.id,
+    scriptPath,
+    inputData: req.body.input,
+  });
+  res.json({ jobId: job.id, status: "queued" });
+});
+
+// ── Sandboxed Worker Pod ────────────────────────────────────────
+const codeWorker = new Worker(
+  "user-code",
+  "./processors/run-user-script.js",
+  {
+    concurrency: 5,
+    sandbox: {
+      enabled: true,
+      timeout: 10_000,     // Kill after 10 seconds
+      maxMemoryMb: 128,    // Hard cap at 128MB
+      transferOnly: true,  // No shared memory
+    },
+    hooks: {
+      onSuccess: async (job, result) => {
+        await resultsDb.save(job.data.userId, result);
+      },
+      onFail: async (job, error) => {
+        logger.warn(`User script failed: ${job.data.userId}`, { error: error.message });
+      },
+    },
+  }
+);
+```
+
+```typescript
+// ── ./processors/run-user-script.js ─────────────────────────────
+import { parentPort, workerData } from "node:worker_threads";
+
+const { job } = workerData;
+const userModule = await import(job.data.scriptPath);
+const result = await userModule.default(job.data.inputData);
+parentPort?.postMessage(result);
+```
+
+The sandbox ensures:
+- 🛡️ User code cannot access the parent process heap or file system beyond its scope
+- ⏱️ Infinite loops are force-killed after the timeout
+- 💾 Memory leaks crash the sandbox thread, not the host process
+
