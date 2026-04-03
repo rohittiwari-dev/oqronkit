@@ -53,8 +53,15 @@ export class ScheduleContext<TPayload = unknown>
   }
 
   log(level: string, message: string, meta?: Record<string, unknown>): void {
-    if (this.logger && typeof (this.logger as any)[level] === "function") {
-      (this.logger as any)[level](message, meta);
+    const validLevels: ReadonlySet<string> = new Set([
+      "trace", "debug", "info", "warn", "error", "fatal",
+    ]);
+    if (this.logger && validLevels.has(level)) {
+      type LogLevel = "trace" | "debug" | "info" | "warn" | "error" | "fatal";
+      const fn = this.logger[level as LogLevel];
+      if (typeof fn === "function") {
+        fn.call(this.logger, message, meta);
+      }
     }
   }
 

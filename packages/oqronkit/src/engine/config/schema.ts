@@ -56,44 +56,51 @@ const DEFAULT_QUEUE: Required<QueueModuleDef> = {
   stalledInterval: 30000,
 };
 
-/** Look up default configs by module name */
-const MODULE_DEFAULTS: Record<string, OqronModuleDef> = {
-  cron: DEFAULT_CRON as CronModuleDef,
-  scheduler: DEFAULT_SCHEDULER as SchedulerModuleDef,
-  queue: DEFAULT_QUEUE,
-};
-
 /**
  * Apply defaults to a normalized OqronModuleDef.
  * Deep-merges nested objects (lagMonitor, retries, deadLetter).
  */
 export function applyModuleDefaults(def: OqronModuleDef): OqronModuleDef {
-  const base = MODULE_DEFAULTS[def.module];
-  if (!base) return def;
-
-  // Shallow merge first
-  const merged = { ...base, ...def };
-
-  // Deep merge known nested objects
-  if (def.module === "cron" || def.module === "scheduler") {
-    const baseLag = (base as any).lagMonitor ?? {};
-    const userLag = (def as any).lagMonitor ?? {};
-    (merged as any).lagMonitor = { ...baseLag, ...userLag };
-    // Clustering: user-provided or undefined
-    (merged as any).clustering = (def as any).clustering;
+  switch (def.module) {
+    case "cron":
+      return applyCronDefaults(def);
+    case "scheduler":
+      return applySchedulerDefaults(def);
+    case "queue":
+      return applyQueueDefaults(def);
+    default:
+      return def;
   }
+}
 
-  if (def.module === "queue") {
-    const baseRetries = (base as QueueModuleDef).retries ?? {};
-    const userRetries = (def as QueueModuleDef).retries ?? {};
-    (merged as any).retries = { ...baseRetries, ...userRetries };
+function applyCronDefaults(def: CronModuleDef): CronModuleDef {
+  return {
+    ...DEFAULT_CRON,
+    ...def,
+    module: "cron",
+    lagMonitor: { ...DEFAULT_CRON.lagMonitor, ...(def.lagMonitor ?? {}) },
+    clustering: def.clustering,
+  };
+}
 
-    const baseDL = (base as QueueModuleDef).deadLetter ?? {};
-    const userDL = (def as QueueModuleDef).deadLetter ?? {};
-    (merged as any).deadLetter = { ...baseDL, ...userDL };
-  }
+function applySchedulerDefaults(def: SchedulerModuleDef): SchedulerModuleDef {
+  return {
+    ...DEFAULT_SCHEDULER,
+    ...def,
+    module: "scheduler",
+    lagMonitor: { ...DEFAULT_SCHEDULER.lagMonitor, ...(def.lagMonitor ?? {}) },
+    clustering: def.clustering,
+  };
+}
 
-  return merged;
+function applyQueueDefaults(def: QueueModuleDef): QueueModuleDef {
+  return {
+    ...DEFAULT_QUEUE,
+    ...def,
+    module: "queue",
+    retries: { ...DEFAULT_QUEUE.retries, ...(def.retries ?? {}) },
+    deadLetter: { ...DEFAULT_QUEUE.deadLetter, ...(def.deadLetter ?? {}) },
+  };
 }
 
 // ── Main Config Schema ──────────────────────────────────────────────────────

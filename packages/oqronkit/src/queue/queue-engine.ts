@@ -325,7 +325,27 @@ export class QueueEngine implements IOqronModule {
     let result: any;
 
     try {
-      result = await q.handler(ctx);
+      let timeoutHandle: any;
+      const executePromise = q.handler(ctx);
+
+      if (typeof q.timeout === "number") {
+        const timeoutPromise = new Promise((_, reject) => {
+          timeoutHandle = setTimeout(() => {
+            abortController.abort(); // Signal cancellation to the handler
+            const err = new Error(`Job exceeded timeout of ${q.timeout}ms`);
+            err.name = "TimeoutError";
+            reject(err);
+          }, q.timeout);
+        });
+
+        result = await Promise.race([executePromise, timeoutPromise]);
+      } else {
+        result = await executePromise;
+      }
+
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle);
+      }
 
       if (internalDiscarded) {
         throw new Error("Job discarded by handler");
@@ -437,18 +457,18 @@ export class QueueEngine implements IOqronModule {
       OqronEventBus.emit("job:success", job.queueName, job.id);
 
       if (q.hooks?.onSuccess) {
-        void Promise.resolve().then(() =>
-          q.hooks!.onSuccess!(job as any, result),
-        );
+        void Promise.resolve()
+          .then(() => q.hooks!.onSuccess!(job as OqronJob, result))
+          .catch((e) => this.logger.error("onSuccess hook failed", { err: String(e) }));
       }
     } else {
       const errorObject = new Error(error ?? "Unknown error");
       OqronEventBus.emit("job:fail", job.queueName, job.id, errorObject);
 
       if (q.hooks?.onFail) {
-        void Promise.resolve().then(() =>
-          q.hooks!.onFail!(job as any, errorObject),
-        );
+        void Promise.resolve()
+          .then(() => q.hooks!.onFail!(job as OqronJob, errorObject))
+          .catch((e) => this.logger.error("onFail hook failed", { err: String(e) }));
       }
 
       // DLQ: invoke dead letter hook if enabled and retries exhausted
@@ -456,7 +476,7 @@ export class QueueEngine implements IOqronModule {
         q.deadLetter?.enabled ?? this.queueConfig?.deadLetter?.enabled;
       if (dlqEnabled && q.deadLetter?.onDead) {
         void Promise.resolve().then(() =>
-          q.deadLetter!.onDead!(job as any).catch((e) =>
+          q.deadLetter!.onDead!(job as OqronJob).catch((e) =>
             this.logger.error("DLQ handler failed", { err: String(e) }),
           ),
         );

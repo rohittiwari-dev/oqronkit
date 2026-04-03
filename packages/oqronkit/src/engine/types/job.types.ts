@@ -30,6 +30,7 @@ export type JobStatus =
   | "waiting" // Signaled to broker, ready for worker
   | "waiting-children" // Blocked until all parent jobs complete
   | "active" // Claimed by a worker
+  | "running" // Handler actively executing (used by schedule engine)
   | "completed" // Finished successfully
   | "failed" // Finished with error (retries exhausted)
   | "delayed" // Waiting for a specific timestamp or retry delay

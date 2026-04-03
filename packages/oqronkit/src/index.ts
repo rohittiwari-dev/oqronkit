@@ -283,12 +283,12 @@ export const OqronKit = {
   },
 
   async pause(scheduleId: string): Promise<void> {
-    const s = (await Storage.get("schedules", scheduleId)) as any;
+    const s = await Storage.get<{ paused?: boolean }>("schedules", scheduleId);
     if (s) await Storage.save("schedules", scheduleId, { ...s, paused: true });
   },
 
   async resume(scheduleId: string): Promise<void> {
-    const s = (await Storage.get("schedules", scheduleId)) as any;
+    const s = await Storage.get<{ paused?: boolean }>("schedules", scheduleId);
     if (s) await Storage.save("schedules", scheduleId, { ...s, paused: false });
   },
 

@@ -41,8 +41,10 @@ export const Lock: ILockAdapter = createProxy(() => OqronContainer.get().lock);
  */
 let _redisClient: any = null;
 let _redisClientOwned = false; // true only when WE created it from a URL string
+import type { ICloseable } from "./types/engine.js";
+
 /** PostgreSQL adapters tracked for pool close on shutdown */
-let _pgAdapters: Array<{ close(): Promise<void> }> | null = null;
+let _pgAdapters: ICloseable[] | null = null;
 
 /**
  * Bootstraps the engines dynamically based on `config.mode`.
@@ -83,14 +85,14 @@ export async function initEngine(config: OqronConfig): Promise<void> {
     const conn = config.postgres.connectionString;
 
     storage = new PostgresStore(conn, prefix, pool);
-    _pgAdapters = [storage as any];
+    _pgAdapters = [storage as unknown as ICloseable];
 
     // Redis for broker + lock
     if (typeof config.redis === "string") {
       _redisClient = new Redis(config.redis);
       _redisClientOwned = true;
-    } else if (config.redis?.url) {
-      _redisClient = new Redis(config.redis.url, config.redis);
+    } else if (config.redis && (config.redis as any).url) {
+      _redisClient = new Redis((config.redis as any).url, config.redis as any);
       _redisClientOwned = true;
     } else {
       _redisClient = config.redis;
@@ -118,7 +120,7 @@ export async function initEngine(config: OqronConfig): Promise<void> {
     broker = new PostgresBroker(conn, prefix, pool);
     lock = new PostgresLock(conn, prefix, pool);
 
-    _pgAdapters = [storage, broker, lock] as any[];
+    _pgAdapters = [storage, broker, lock] as unknown as ICloseable[];
     _redisClient = null;
     _redisClientOwned = false;
   } else if (mode === "redis") {
@@ -135,8 +137,8 @@ export async function initEngine(config: OqronConfig): Promise<void> {
     if (typeof config.redis === "string") {
       _redisClient = new Redis(config.redis);
       _redisClientOwned = true;
-    } else if (config.redis?.url) {
-      _redisClient = new Redis(config.redis.url, config.redis);
+    } else if (config.redis && (config.redis as any).url) {
+      _redisClient = new Redis((config.redis as any).url, config.redis as any);
       _redisClientOwned = true;
     } else {
       _redisClient = config.redis;
@@ -174,7 +176,7 @@ export async function stopEngine(): Promise<void> {
       try {
         await adapter.close();
       } catch {
-        /* best-effort */
+        // best-effort: PG adapter close failed during shutdown — non-critical
       }
     }
     _pgAdapters = null;
@@ -188,7 +190,7 @@ export async function stopEngine(): Promise<void> {
       try {
         _redisClient.disconnect();
       } catch {
-        /* swallow */
+        // best-effort: Redis disconnect failed during shutdown — non-critical
       }
     }
   }

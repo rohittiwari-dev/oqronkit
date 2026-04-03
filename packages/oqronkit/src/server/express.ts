@@ -28,7 +28,9 @@ export function expressRouter(): any {
       if (
         result.status === 404 &&
         result.body &&
-        (result.body as any).error === "Not found"
+        typeof result.body === "object" &&
+        "error" in result.body &&
+        (result.body as { error?: string }).error === "Not found"
       ) {
         // If not found in our handlers, let express continue
         return next();

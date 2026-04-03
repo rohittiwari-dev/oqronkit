@@ -1,4 +1,3 @@
-import _cronParser from "cron-parser";
 import type {
   CronDefinition,
   CronHooks,
@@ -8,8 +7,7 @@ import type {
   OverlapPolicy,
   RetryConfig,
 } from "../engine/index.js";
-
-const cronParser = (_cronParser as any).default ?? _cronParser;
+import { cronParser } from "./cron-compat.js";
 
 import { _registerCron } from "./registry.js";
 

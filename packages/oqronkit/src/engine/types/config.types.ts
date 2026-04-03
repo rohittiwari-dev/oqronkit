@@ -1,15 +1,23 @@
 import type { OqronModuleInput } from "../../modules.js";
 import type { OqronLoggerConfig } from "../logger/index.js";
 
+/**
+ * Accepted Redis connection shapes:
+ *
+ * - `string` — A Redis URL like `"redis://localhost:6379"`
+ * - Config object — `{ url: "redis://...", password?: string, db?: number, tls?: boolean }`
+ * - `ioredis.Redis` — A pre-initialized ioredis client instance
+ */
 export type RedisLike =
+  | string
   | {
       url: string;
       password?: string;
       db?: number;
       tls?: boolean;
-      [key: string]: any;
+      [key: string]: unknown;
     }
-  | any; // Escape hatch for direct ioredis passing
+  | import("ioredis").Redis;
 
 /** Clustering config for sharded leader election across geo-regions */
 export interface ClusteringConfig {

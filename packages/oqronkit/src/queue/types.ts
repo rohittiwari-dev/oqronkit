@@ -76,6 +76,12 @@ export interface QueueConfig<T = any, R = any> {
   };
 
   /**
+   * Execution timeout in milliseconds.
+   * If the handler does not fulfill within this time, it is aborted and fails.
+   */
+  timeout?: number;
+
+  /**
    * The monolithic processing function.
    * Required for queue definitions.
    */

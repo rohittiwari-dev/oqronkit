@@ -76,7 +76,7 @@ export function queue<T = any, R = any>(
         );
       }
 
-      return job as any;
+      return job as OqronJob<T, R>;
     },
   };
 }
