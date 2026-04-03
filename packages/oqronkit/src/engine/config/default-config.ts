@@ -4,6 +4,7 @@ import type { ValidatedConfig } from "./schema.js";
 const defaultConfig: ValidatedConfig = {
   project: "oqronkit",
   environment: "development",
+  mode: "default",
   modules: [],
 
   cron: {
@@ -30,31 +31,7 @@ const defaultConfig: ValidatedConfig = {
     lagMonitor: { maxLagMs: 5000, sampleIntervalMs: 1000 },
   },
 
-  taskQueue: {
-    concurrency: 5,
-    heartbeatMs: 5000,
-    lockTtlMs: 30000,
-    strategy: "fifo",
-    retries: {
-      max: 3,
-      strategy: "exponential",
-      baseDelay: 2000,
-      maxDelay: 60000,
-    },
-    deadLetter: { enabled: true },
-    removeOnComplete: false,
-    removeOnFail: false,
-    shutdownTimeout: 25000,
-    maxStalledCount: 1,
-    stalledInterval: 30000,
-  },
-
   queue: {
-    defaultTtl: 86400000,
-    ack: "leader",
-  },
-
-  worker: {
     concurrency: 5,
     heartbeatMs: 5000,
     lockTtlMs: 30000,
@@ -89,6 +66,20 @@ const defaultConfig: ValidatedConfig = {
     opentelemetry: { enabled: false },
   },
 
+  observability: {
+    maxJobLogs: 200,
+    maxTimelineEntries: 20,
+    trackMemory: true,
+    logCollector: true,
+    logCollectorMaxGlobal: 500,
+    logCollectorMaxPerCategory: 200,
+  },
+
+  ui: {
+    enabled: false,
+    retention: { runs: "30d", events: "7d", metrics: "30d" },
+  },
+
   shutdown: {
     enabled: true,
     timeout: 30000,
@@ -100,6 +91,7 @@ export function reconfigureConfig(config: OqronConfig): ValidatedConfig {
   return {
     project: config.project ?? defaultConfig.project,
     environment: config.environment ?? defaultConfig.environment,
+    mode: config.mode ?? defaultConfig.mode,
 
     redis: config.redis,
 
@@ -112,6 +104,7 @@ export function reconfigureConfig(config: OqronConfig): ValidatedConfig {
         ...defaultConfig.cron.lagMonitor,
         ...config.cron?.lagMonitor,
       },
+      clustering: config.cron?.clustering,
     },
 
     scheduler: {
@@ -121,36 +114,19 @@ export function reconfigureConfig(config: OqronConfig): ValidatedConfig {
         ...defaultConfig.scheduler.lagMonitor,
         ...config.scheduler?.lagMonitor,
       },
-    },
-
-    taskQueue: {
-      ...defaultConfig.taskQueue,
-      ...config.taskQueue,
-      retries: {
-        ...defaultConfig.taskQueue.retries,
-        ...config.taskQueue?.retries,
-      },
-      deadLetter: {
-        ...defaultConfig.taskQueue.deadLetter,
-        ...config.taskQueue?.deadLetter,
-      },
+      clustering: config.scheduler?.clustering,
     },
 
     queue: {
       ...defaultConfig.queue,
       ...config.queue,
-    },
-
-    worker: {
-      ...defaultConfig.worker,
-      ...config.worker,
       retries: {
-        ...defaultConfig.worker.retries,
-        ...config.worker?.retries,
+        ...defaultConfig.queue.retries,
+        ...config.queue?.retries,
       },
       deadLetter: {
-        ...defaultConfig.worker.deadLetter,
-        ...config.worker?.deadLetter,
+        ...defaultConfig.queue.deadLetter,
+        ...config.queue?.deadLetter,
       },
     },
 
@@ -176,6 +152,21 @@ export function reconfigureConfig(config: OqronConfig): ValidatedConfig {
       opentelemetry: {
         ...defaultConfig.telemetry.opentelemetry,
         ...config.telemetry?.opentelemetry,
+      },
+    },
+
+    observability: {
+      ...defaultConfig.observability,
+      ...config.observability,
+    },
+
+    ui: {
+      ...defaultConfig.ui,
+      ...config.ui,
+      auth: config.ui?.auth,
+      retention: {
+        ...defaultConfig.ui.retention,
+        ...config.ui?.retention,
       },
     },
 

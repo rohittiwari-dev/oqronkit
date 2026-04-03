@@ -17,7 +17,6 @@ import { TelemetryManager } from "./telemetry/index.js";
 
 let _config: ValidatedConfig | null = null;
 let _logger: Logger | null = null;
-let _telemetry: TelemetryManager | null = null;
 
 export type {
   ClusteringConfig,
@@ -26,7 +25,10 @@ export type {
   EveryConfig,
   ICronContext,
   IScheduleContext,
+  JobLogEntry,
   JobRecord,
+  JobTimelineEntry,
+  JobTriggerSource,
   Logger,
   MissedFirePolicy,
   OqronLoggerConfig,
@@ -46,11 +48,15 @@ export {
   OqronEventBus,
 } from "./engine/index.js";
 export { ShardedLeaderElection } from "./engine/lock/index.js";
-export { OqronManager } from "./manager/oqron-manager.js";
-export { Queue } from "./queue/queue.js";
-export { QueueEvents } from "./queue/queue-events.js";
-export { type SandboxOptions, SandboxWorker } from "./queue/sandbox-worker.js";
-export { Worker } from "./queue/worker.js";
+export {
+  type JobHistoryResult,
+  type ModuleInfo,
+  OqronManager,
+  type QueueInfoResult,
+  type QueueMetrics,
+} from "./manager/oqron-manager.js";
+export { queue } from "./queue/define-queue.js";
+export type { IQueue, QueueConfig, QueueJobContext } from "./queue/types.js";
 export {
   cron,
   type DefineCronOptions,
@@ -58,12 +64,6 @@ export {
   type ScheduleInstance,
   schedule,
 } from "./scheduler/index.js";
-export { taskQueue } from "./task-queue/define-task-queue.js";
-export type {
-  ITaskQueue,
-  TaskJobContext,
-  TaskQueueConfig,
-} from "./task-queue/types.js";
 
 export const OqronKit = {
   /**
@@ -149,17 +149,9 @@ export const OqronKit = {
       OqronRegistry.getInstance().register(scheduleEngine);
     }
 
-    if (_config.modules.includes("taskQueue")) {
-      const { TaskQueueEngine } = await import(
-        "./task-queue/task-queue-engine.js"
-      );
-      const engine = new TaskQueueEngine(_config, _logger!);
-      OqronRegistry.getInstance().register(engine);
-    }
-
-    if (_config.modules.includes("worker")) {
-      const { WorkerEngine } = await import("./queue/worker-engine.js");
-      const engine = new WorkerEngine(_config, _logger!);
+    if (_config.modules.includes("queue")) {
+      const { QueueEngine } = await import("./queue/queue-engine.js");
+      const engine = new QueueEngine(_config, _logger!);
       OqronRegistry.getInstance().register(engine);
     }
 
@@ -174,6 +166,9 @@ export const OqronKit = {
     _logger.info("OqronKit ready ✓");
     const { configureHandlers } = await import("./server/handlers.js");
     configureHandlers(registry, _config);
+
+    // Start TelemetryManager — collects throughput, latency, memory from EventBus
+    TelemetryManager.getInstance().start();
   },
 
   async stop(): Promise<void> {
@@ -216,6 +211,29 @@ export const OqronKit = {
     if (s) await Storage.save("schedules", scheduleId, { ...s, paused: false });
   },
 
+  /**
+   * Returns a sealed configuration object for the OqronUI dashboard package.
+   * Used as: `app.use("/oqron", OqronUI.register(OqronKit.ui()))`
+   */
+  ui(): {
+    apiBasePath: string;
+    auth?: { username?: string; password?: string };
+    retention?: { runs?: string; events?: string; metrics?: string };
+    project: string;
+    environment: string;
+    modules: string[];
+  } {
+    if (!_config) throw new Error("OqronKit.ui() called before init()");
+    return {
+      apiBasePath: "/api/oqron",
+      auth: _config.ui?.auth,
+      retention: _config.ui?.retention,
+      project: _config.project ?? "unnamed",
+      environment: _config.environment ?? "development",
+      modules: (_config.modules ?? []) as string[],
+    };
+  },
+
   expressRouter() {
     return _expressRouter();
   },
@@ -223,18 +241,10 @@ export const OqronKit = {
     return _fastifyPlugin(fastify, opts, done);
   },
   getMetrics(): string {
-    if (!_telemetry) {
-      _telemetry = new TelemetryManager();
-      _telemetry.start();
-    }
-    return _telemetry.serialize();
+    return TelemetryManager.getInstance().serialize();
   },
   getTelemetry(): TelemetryManager {
-    if (!_telemetry) {
-      _telemetry = new TelemetryManager();
-      _telemetry.start();
-    }
-    return _telemetry;
+    return TelemetryManager.getInstance();
   },
 };
 

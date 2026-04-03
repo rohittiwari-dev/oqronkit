@@ -31,14 +31,34 @@ const LagMonitorSchema = z
   })
   .default({ maxLagMs: 5000, sampleIntervalMs: 1000 });
 
+const ClusteringSchema = z
+  .object({
+    totalShards: z.number().optional(),
+    ownedShards: z.array(z.number()).optional(),
+    region: z.string().optional(),
+  })
+  .optional();
+
 // ── Main Config Schema ──────────────────────────────────────────────────────
 
 export const OqronConfigSchema = z.object({
   project: z.string().optional(),
   environment: z.string().default("development"),
 
+  // Storage mode
+  mode: z.enum(["default", "db", "redis", "hybrid-db"]).default("default"),
+
   // Infrastructure
   redis: z.any().optional(),
+
+  // PostgreSQL
+  postgres: z
+    .object({
+      connectionString: z.string(),
+      tablePrefix: z.string().default("oqron"),
+      poolSize: z.number().default(10),
+    })
+    .optional(),
 
   // Modules
   modules: z
@@ -46,9 +66,7 @@ export const OqronConfigSchema = z.object({
       z.enum([
         "cron",
         "scheduler",
-        "taskQueue",
         "queue",
-        "worker",
         "workflow",
         "batch",
         "webhook",
@@ -72,6 +90,7 @@ export const OqronConfigSchema = z.object({
       keepFailedJobHistory: z.union([z.boolean(), z.number()]).default(true),
       shutdownTimeout: z.number().default(25000),
       lagMonitor: LagMonitorSchema,
+      clustering: ClusteringSchema,
     })
     .default({}),
 
@@ -86,36 +105,12 @@ export const OqronConfigSchema = z.object({
       keepFailedJobHistory: z.union([z.boolean(), z.number()]).default(true),
       shutdownTimeout: z.number().default(25000),
       lagMonitor: LagMonitorSchema,
+      clustering: ClusteringSchema,
     })
     .default({}),
 
-  // ── TaskQueue ────────────────────────────────────────────────────────────
-  taskQueue: z
-    .object({
-      concurrency: z.number().default(5),
-      heartbeatMs: z.number().default(5000),
-      lockTtlMs: z.number().default(30000),
-      strategy: z.enum(["fifo", "lifo", "priority"]).default("fifo"),
-      retries: RetriesSchema,
-      deadLetter: DeadLetterSchema,
-      removeOnComplete: RemoveOnConfigSchema.default(false),
-      removeOnFail: RemoveOnConfigSchema.default(false),
-      shutdownTimeout: z.number().default(25000),
-      maxStalledCount: z.number().default(1),
-      stalledInterval: z.number().default(30000),
-    })
-    .default({}),
-
-  // ── Queue ────────────────────────────────────────────────────────────────
+  // ── Queue (renamed from TaskQueue) ────────────────────────────────────
   queue: z
-    .object({
-      defaultTtl: z.number().default(86400 * 1000),
-      ack: z.enum(["leader", "all", "none"]).default("leader"),
-    })
-    .default({}),
-
-  // ── Worker ───────────────────────────────────────────────────────────────
-  worker: z
     .object({
       concurrency: z.number().default(5),
       heartbeatMs: z.number().default(5000),
@@ -174,6 +169,38 @@ export const OqronConfigSchema = z.object({
     })
     .default({}),
 
+  // Observability (alpha-5 port)
+  observability: z
+    .object({
+      maxJobLogs: z.number().default(200),
+      maxTimelineEntries: z.number().default(20),
+      trackMemory: z.boolean().default(true),
+      logCollector: z.boolean().default(true),
+      logCollectorMaxGlobal: z.number().default(500),
+      logCollectorMaxPerCategory: z.number().default(200),
+    })
+    .default({}),
+
+  // UI Dashboard configuration
+  ui: z
+    .object({
+      enabled: z.boolean().default(false),
+      auth: z
+        .object({
+          username: z.string().optional(),
+          password: z.string().optional(),
+        })
+        .optional(),
+      retention: z
+        .object({
+          runs: z.string().default("30d"),
+          events: z.string().default("7d"),
+          metrics: z.string().default("30d"),
+        })
+        .default({}),
+    })
+    .default({}),
+
   // Shutdown
   shutdown: z
     .object({
@@ -182,15 +209,6 @@ export const OqronConfigSchema = z.object({
       signals: z.array(z.string()).default(["SIGINT", "SIGTERM"]),
     })
     .default({}),
-
-  // PostgreSQL (optional — alternative to Redis for persistence)
-  postgres: z
-    .object({
-      connectionString: z.string(),
-      tablePrefix: z.string().default("oqron"),
-      poolSize: z.number().default(10),
-    })
-    .optional(),
 });
 
 export type ValidatedConfig = z.infer<typeof OqronConfigSchema>;

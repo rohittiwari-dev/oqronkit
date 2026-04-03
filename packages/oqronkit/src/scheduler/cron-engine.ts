@@ -258,7 +258,7 @@ export class SchedulerModule implements IOqronModule {
 
   private async detectClusterStalls() {
     try {
-      const activeDbJobs = await Storage.list<any>("cron_history", {
+      const activeDbJobs = await Storage.list<any>("jobs", {
         status: "running",
       });
       for (const job of activeDbJobs) {
@@ -271,7 +271,7 @@ export class SchedulerModule implements IOqronModule {
 
         if (ageMs > ttl + 10_000) {
           this.logger.warn("Cluster stall detected", { runId: job.id });
-          await Storage.save("cron_history", job.id, {
+          await Storage.save("jobs", job.id, {
             ...job,
             status: "failed",
             error: "Stall detected (lock assumed expired)",
@@ -414,7 +414,7 @@ export class SchedulerModule implements IOqronModule {
     const entry: ActiveJobEntry = { runId, lockKey, worker, abort };
     this.activeJobs.set(runId, entry);
 
-    await Storage.save("cron_history", runId, {
+    await Storage.save("jobs", runId, {
       id: runId,
       type: "cron",
       queueName: "system_cron",
@@ -445,9 +445,9 @@ export class SchedulerModule implements IOqronModule {
         project: this.project,
         onProgress: async (percent, label) => {
           try {
-            const job = await Storage.get<any>("cron_history", runId);
+            const job = await Storage.get<any>("jobs", runId);
             if (job) {
-              await Storage.save("cron_history", runId, {
+              await Storage.save("jobs", runId, {
                 ...job,
                 progressPercent: percent,
                 progressLabel: label,
@@ -537,7 +537,7 @@ export class SchedulerModule implements IOqronModule {
       }
 
       const finishedAt = new Date();
-      await Storage.save("cron_history", runId, {
+      await Storage.save("jobs", runId, {
         id: runId,
         type: "cron",
         queueName: "system_cron",
@@ -589,7 +589,7 @@ export class SchedulerModule implements IOqronModule {
         def.keepFailedHistory ?? this.config?.keepFailedJobHistory ?? true;
 
       await pruneAfterCompletion({
-        namespace: "cron_history",
+        namespace: "jobs",
         jobId: runId,
         status,
         jobRemoveConfig: keepHistoryToRemoveConfig(

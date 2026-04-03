@@ -1,7 +1,7 @@
 import type { BrokerStrategy } from "../engine/types/engine.js";
 import type { OqronJob, OqronJobOptions } from "../engine/types/job.types.js";
 
-export interface TaskJobContext<T = any> {
+export interface QueueJobContext<T = any> {
   /** The internal idempotency key or generated UUID of the job */
   id: string;
 
@@ -24,7 +24,7 @@ export interface TaskJobContext<T = any> {
   discard: () => void;
 }
 
-export interface TaskQueueConfig<T = any, R = any> {
+export interface QueueConfig<T = any, R = any> {
   /** The unified identifier for this specific task pipeline */
   name: string;
 
@@ -77,15 +77,15 @@ export interface TaskQueueConfig<T = any, R = any> {
 
   /**
    * The monolithic processing function.
-   * Required for taskQueue.
+   * Required for queue definitions.
    */
-  handler: (job: TaskJobContext<T>) => Promise<R>;
+  handler: (job: QueueJobContext<T>) => Promise<R>;
 }
 
-export interface ITaskQueue<T = any, R = any> {
+export interface IQueue<T = any, R = any> {
   name: string;
   /**
-   * Pushes a new payload onto the task queue.
+   * Pushes a new payload onto the queue.
    */
   add(data: T, opts?: OqronJobOptions): Promise<OqronJob<T, R>>;
 }

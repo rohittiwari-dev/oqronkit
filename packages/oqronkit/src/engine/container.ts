@@ -15,7 +15,7 @@ import type {
  * For multi-instance setups:
  * ```ts
  * const container = new OqronContainer(store, broker, lock);
- * const engine = new TaskQueueEngine(config, logger, container);
+ * const engine = new QueueEngine(config, logger, container);
  * ```
  *
  * For monolith / default:

@@ -2,21 +2,6 @@ import type { OqronLoggerConfig } from "../logger/index.js";
 import type { BrokerStrategy } from "./engine.js";
 import type { RemoveOnConfig } from "./job.types.js";
 
-/** Shared worker execution defaults — applies to taskQueue, worker, and all future modules */
-export interface WorkerDefaults {
-  concurrency?: number;
-  heartbeatMs?: number;
-  lockTtlMs?: number;
-  retries?: {
-    max?: number;
-    strategy?: "fixed" | "exponential";
-    baseDelay?: number;
-    maxDelay?: number;
-  };
-  deadLetter?: { enabled?: boolean };
-  limiter?: { max: number; duration: number; groupKey?: string };
-}
-
 export type RedisLike =
   | {
       url: string;
@@ -37,6 +22,16 @@ export interface ClusteringConfig {
   region?: string;
 }
 
+/**
+ * Storage mode controls which adapter combination is used.
+ *
+ * - `"default"` — Everything in-memory. Single-process, no external dependencies.
+ * - `"db"`      — PostgreSQL required. Storage + Broker + Lock all via PG.
+ * - `"redis"`   — Redis required. Storage + Broker + Lock all via Redis.
+ * - `"hybrid-db"` — Both PG + Redis required. PG for durable Storage, Redis for fast Broker + Lock.
+ */
+export type OqronStorageMode = "default" | "db" | "redis" | "hybrid-db";
+
 export interface OqronConfig {
   /**
    * The name of this project/service (e.g. 'acme-billing-svc')
@@ -51,10 +46,35 @@ export interface OqronConfig {
   environment?: string;
 
   /**
+   * Storage mode. Controls which combination of adapters is used.
+   *
+   * - `"default"` (default) — Everything in-memory (single-process monolith)
+   * - `"db"` — PostgreSQL for all adapters. Requires `postgres` config.
+   * - `"redis"` — Redis for all adapters. Requires `redis` config.
+   * - `"hybrid-db"` — PG for storage, Redis for broker + lock. Requires both `postgres` and `redis`.
+   *
+   * @default "default"
+   */
+  mode?: OqronStorageMode;
+
+  /**
    * Primary Redis connection.
-   * If provided, automatically handles fast-path operations (locking and message broker).
+   * Required when `mode` is `"redis"` or `"hybrid-db"`.
    */
   redis?: RedisLike;
+
+  /**
+   * PostgreSQL connection configuration.
+   * Required when `mode` is `"db"` or `"hybrid-db"`.
+   */
+  postgres?: {
+    /** Connection string (e.g. 'postgresql://user:pass@host:5432/db') */
+    connectionString: string;
+    /** Table name prefix. @default "oqron" */
+    tablePrefix?: string;
+    /** Connection pool size. @default 10 */
+    poolSize?: number;
+  };
 
   /**
    * List of core modules to enable.
@@ -63,9 +83,7 @@ export interface OqronConfig {
   modules?: (
     | "cron"
     | "scheduler"
-    | "taskQueue"
     | "queue"
-    | "worker"
     | "workflow"
     | "batch"
     | "webhook"
@@ -120,7 +138,7 @@ export interface OqronConfig {
     clustering?: ClusteringConfig;
   };
 
-  taskQueue?: {
+  queue?: {
     /** Parallel execution limit. @default 5 */
     concurrency?: number;
     /** Polling interval in ms. @default 5000 */
@@ -129,7 +147,7 @@ export interface OqronConfig {
     lockTtlMs?: number;
     /** Job ordering strategy. @default "fifo" */
     strategy?: BrokerStrategy;
-    /** Default retry configuration for all task queues */
+    /** Default retry configuration for all queues */
     retries?: {
       max?: number;
       strategy?: "fixed" | "exponential";
@@ -145,43 +163,6 @@ export interface OqronConfig {
     /** Graceful shutdown drain timeout in ms. @default 25000 */
     shutdownTimeout?: number;
     /** Max stalled job retries before marking as permanently failed. @default 1 */
-    maxStalledCount?: number;
-    /** Stalled check interval in ms. @default 30000 */
-    stalledInterval?: number;
-  };
-
-  queue?: {
-    /** Default TTL in ms for queue messages. @default 86400000 (24h) */
-    defaultTtl?: number;
-    /** Acknowledgement mode. @default "leader" */
-    ack?: "leader" | "all" | "none";
-  };
-
-  worker?: {
-    /** Parallel execution limit. @default 5 */
-    concurrency?: number;
-    /** Polling interval in ms. @default 5000 */
-    heartbeatMs?: number;
-    /** Lock duration in ms. @default 30000 */
-    lockTtlMs?: number;
-    /** Job ordering strategy. @default "fifo" */
-    strategy?: BrokerStrategy;
-    /** Default retry configuration */
-    retries?: {
-      max?: number;
-      strategy?: "fixed" | "exponential";
-      baseDelay?: number;
-      maxDelay?: number;
-    };
-    /** Dead letter queue configuration */
-    deadLetter?: { enabled?: boolean };
-    /** Global default: auto-remove completed jobs. @default false */
-    removeOnComplete?: RemoveOnConfig;
-    /** Global default: auto-remove failed jobs. @default false */
-    removeOnFail?: RemoveOnConfig;
-    /** Graceful shutdown drain timeout in ms. @default 25000 */
-    shutdownTimeout?: number;
-    /** Max stalled job retries. @default 1 */
     maxStalledCount?: number;
     /** Stalled check interval in ms. @default 30000 */
     stalledInterval?: number;
@@ -219,25 +200,50 @@ export interface OqronConfig {
   };
 
   /**
+   * Observability configuration (Log & Timeline Settings)
+   */
+  observability?: {
+    /** Max number of log entries per job record. Default: 200 */
+    maxJobLogs?: number;
+    /** Max number of timeline entries per job. Default: 20 */
+    maxTimelineEntries?: number;
+    /** Enable memory measurement on job completion. Default: true */
+    trackMemory?: boolean;
+    /** Enable the log collector for category-level log views. Default: true */
+    logCollector?: boolean;
+    /** Max entries in the global log collector buffer. Default: 500 */
+    logCollectorMaxGlobal?: number;
+    /** Max entries per queue/schedule in log collector. Default: 200 */
+    logCollectorMaxPerCategory?: number;
+  };
+
+  /**
+   * Oqron UI Dashboard configuration
+   */
+  ui?: {
+    enabled?: boolean;
+    auth?: {
+      username?: string;
+      password?: string;
+    };
+    /**
+     * Data retention policy surfaced to the dashboard.
+     * Controls how long run history, events, and metrics are kept.
+     * Values like "7d", "30d", "unlimited".
+     */
+    retention?: {
+      runs?: string;
+      events?: string;
+      metrics?: string;
+    };
+  };
+
+  /**
    * Graceful shutdown configuration
    */
   shutdown?: {
     enabled?: boolean;
     timeout?: number;
     signals?: string[];
-  };
-
-  /**
-   * PostgreSQL connection configuration.
-   * When provided, OqronKit uses PostgreSQL as the persistence backend
-   * instead of Redis, using FOR UPDATE SKIP LOCKED for atomic job claiming.
-   */
-  postgres?: {
-    /** Connection string (e.g. 'postgresql://user:pass@host:5432/db') */
-    connectionString: string;
-    /** Table name prefix. @default "oqron" */
-    tablePrefix?: string;
-    /** Connection pool size. @default 10 */
-    poolSize?: number;
   };
 }

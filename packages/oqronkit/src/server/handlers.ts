@@ -202,8 +202,13 @@ export async function handleAdminJob(
     return { status: 200, body: { ok: true, job } };
   }
   if (action === "retry") {
-    await mgr.retryJob(id);
-    return { status: 200, body: { ok: true } };
+    const retryId = await mgr.retryJob(id);
+    if (!retryId)
+      return {
+        status: 400,
+        body: { ok: false, error: "Job not found or not in failed state" },
+      };
+    return { status: 200, body: { ok: true, retryId } };
   }
   if (req.method === "DELETE") {
     await mgr.cancelJob(id);

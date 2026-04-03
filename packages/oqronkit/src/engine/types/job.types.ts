@@ -15,8 +15,16 @@ export type JobType =
   | "schedule"
   | "webhook"
   | "batch"
-  | "workflow"
-  | "saga";
+  | "workflow";
+
+/** How a job/run was triggered */
+export type JobTriggerSource =
+  | "cron"
+  | "schedule"
+  | "api"
+  | "manual"
+  | "retry"
+  | "flow";
 
 export type JobStatus =
   | "waiting" // Signaled to broker, ready for worker
@@ -28,7 +36,7 @@ export type JobStatus =
   | "paused" // Manually stopped
   | "stalled"; // Worker lost heartbeat — will be reclaimed
 
-// ── Industrygrade-Compatible KeepJobs ──────────────────────────────────────────────
+// ── KeepJobs ────────────────────────────────────────────────────────────────
 
 /**
  * Controls automatic job removal after completion or failure.
@@ -115,6 +123,49 @@ export interface OqronJobOptions {
    * @default "block"
    */
   parentFailurePolicy?: "block" | "cascade-fail" | "ignore";
+
+  /**
+   * Distributed tracing correlation ID.
+   * Threaded from the caller into the job record for cross-service tracing.
+   */
+  correlationId?: string;
+}
+
+// ── Telemetry Sub-types ─────────────────────────────────────────────────────
+
+/** A single structured log entry captured during job execution */
+export interface JobLogEntry {
+  ts: Date;
+  level: string;
+  msg: string;
+}
+
+/** A single state transition in the job lifecycle */
+export interface JobTimelineEntry {
+  ts: Date;
+  from: string;
+  to: string;
+  reason?: string;
+}
+
+/** A single step in the execution trace (Inngest-style) */
+export interface JobStepEntry {
+  /** Step index (0-based) */
+  idx: number;
+  /** Step label from progress() or auto-generated */
+  label: string;
+  /** When this step started */
+  startedAt: Date;
+  /** When this step ended */
+  finishedAt?: Date;
+  /** Duration in ms */
+  durationMs?: number;
+  /** Status */
+  status: "running" | "completed" | "failed";
+  /** Output/return value */
+  output?: any;
+  /** Error if step failed */
+  error?: string;
 }
 
 // ── Flow Jobs (DAG) ─────────────────────────────────────────────────────────
@@ -131,10 +182,9 @@ export interface FlowJobNode<T = any> {
 
 /**
  * The single source of truth for every background operation in OqronKit.
- * Aligns with Industrygrade's Job class properties for maximum compatibility.
  *
- * Every module (cron, schedule, taskQueue, worker) writes this
- * exact format to Storage, ensuring a unified dashboard/API.
+ * Every module (cron, schedule, queue) writes this exact format to the
+ * unified `jobs` namespace in Storage, ensuring a single dashboard/API.
  */
 export interface OqronJob<T = any, R = any> {
   /** Unique job identifier (UUID or custom jobId) */
@@ -148,6 +198,9 @@ export interface OqronJob<T = any, R = any> {
 
   /** Current lifecycle state */
   status: JobStatus;
+
+  /** Which module definition created this job (e.g. "email-queue", "daily-report") */
+  moduleName?: string;
 
   // ── Payloads ────────────────────────────────────────────────────────────
 
@@ -200,6 +253,9 @@ export interface OqronJob<T = any, R = any> {
   /** Linked cron/schedule definition name */
   scheduleId?: string;
 
+  /** Original job ID when this is a retry (memoization link) */
+  retriedFromId?: string;
+
   // ── Metadata ────────────────────────────────────────────────────────────
 
   /** Tags for categorization and filtering */
@@ -210,6 +266,44 @@ export interface OqronJob<T = any, R = any> {
 
   /** Project namespace */
   project?: string;
+
+  // ── Enhanced Execution Telemetry ──────────────────────────────────────
+
+  /** Pre-computed execution duration in ms (finishedAt - startedAt) */
+  durationMs?: number;
+
+  /** When the job entered the queue (before any processing delay) */
+  queuedAt?: Date;
+
+  /** When the worker actually picked up the job */
+  processedOn?: Date;
+
+  /** Total allowed attempts (including first run) */
+  maxAttempts?: number;
+
+  /** Reason for last retry (if retried) */
+  retryReason?: string;
+
+  /** Time spent waiting in the queue before processing started (in ms) */
+  latencyMs?: number;
+
+  /** Peak memory usage during execution (in MB) */
+  memoryUsageMb?: number;
+
+  /** How this run was triggered */
+  triggeredBy?: JobTriggerSource;
+
+  /** Distributed tracing correlation ID */
+  correlationId?: string;
+
+  /** Structured execution logs (collected via ctx.log) */
+  logs?: JobLogEntry[];
+
+  /** State transition timeline (capped at configurable max, default 20) */
+  timeline?: JobTimelineEntry[];
+
+  /** Step-level execution trace (Inngest-style step waterfall) */
+  steps?: JobStepEntry[];
 
   // ── Timestamps ──────────────────────────────────────────────────────────
 

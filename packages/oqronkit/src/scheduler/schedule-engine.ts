@@ -476,7 +476,7 @@ export class ScheduleEngine implements IOqronModule {
     this.activeJobs.set(runId, entry);
 
     // Persist running job state
-    await this.di.storage.save("schedule_history", runId, {
+    await this.di.storage.save("jobs", runId, {
       id: runId,
       type: "schedule",
       queueName: "system_schedule",
@@ -504,12 +504,9 @@ export class ScheduleEngine implements IOqronModule {
         project: this.project,
         onProgress: async (percent, label) => {
           try {
-            const job = await this.di.storage.get<any>(
-              "schedule_history",
-              runId,
-            );
+            const job = await this.di.storage.get<any>("jobs", runId);
             if (job) {
-              await this.di.storage.save("schedule_history", runId, {
+              await this.di.storage.save("jobs", runId, {
                 ...job,
                 progressPercent: percent,
                 progressLabel: label,
@@ -600,7 +597,7 @@ export class ScheduleEngine implements IOqronModule {
       }
 
       const finishedAt = new Date();
-      await this.di.storage.save("schedule_history", runId, {
+      await this.di.storage.save("jobs", runId, {
         id: runId,
         type: "schedule",
         queueName: "system_schedule",
@@ -637,7 +634,7 @@ export class ScheduleEngine implements IOqronModule {
         def.keepFailedHistory ?? this.config?.keepFailedJobHistory ?? true;
 
       await pruneAfterCompletion({
-        namespace: "schedule_history",
+        namespace: "jobs",
         jobId: runId,
         status,
         jobRemoveConfig: keepHistoryToRemoveConfig(

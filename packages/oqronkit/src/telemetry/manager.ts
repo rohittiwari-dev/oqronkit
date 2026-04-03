@@ -11,6 +11,15 @@ import { OqronEventBus } from "../engine/events/event-bus.js";
  * All metrics are collected passively via EventBus — no manual calls needed.
  */
 export class TelemetryManager {
+  private static _instance: TelemetryManager | null = null;
+
+  static getInstance(): TelemetryManager {
+    if (!TelemetryManager._instance) {
+      TelemetryManager._instance = new TelemetryManager();
+    }
+    return TelemetryManager._instance;
+  }
+
   // ── Counters ────────────────────────────────────────────────────
   private jobsStartedTotal = new Map<string, number>();
   private jobsCompletedTotal = new Map<string, number>();

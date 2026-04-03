@@ -2,17 +2,30 @@ import { randomUUID } from "node:crypto";
 import { OqronContainer } from "../engine/index.js";
 import type { OqronJob } from "../engine/types/job.types.js";
 import { DependencyResolver } from "../engine/utils/dependency-resolver.js";
-import { registerTaskQueue } from "./registry.js";
-import type { ITaskQueue, TaskQueueConfig } from "./types.js";
+import { registerQueue } from "./registry.js";
+import type { IQueue, QueueConfig } from "./types.js";
 
 /**
- * Enterprise Task Queue Factory.
- * Simple API for monolithic applications where publisher and worker live together.
+ * Enterprise Queue Factory.
+ * Simple API for monolithic/server-centric applications where publisher and consumer live together.
+ *
+ * @example
+ * ```ts
+ * const emailQueue = queue<{ to: string; subject: string }, void>({
+ *   name: "email-queue",
+ *   handler: async (ctx) => {
+ *     await sendEmail(ctx.data.to, ctx.data.subject);
+ *   },
+ * });
+ *
+ * // Later, push a job:
+ * await emailQueue.add({ to: "user@example.com", subject: "Welcome!" });
+ * ```
  */
-export function taskQueue<T = any, R = any>(
-  config: TaskQueueConfig<T, R>,
-): ITaskQueue<T, R> {
-  registerTaskQueue(config);
+export function queue<T = any, R = any>(
+  config: QueueConfig<T, R>,
+): IQueue<T, R> {
+  registerQueue(config);
 
   return {
     name: config.name,

@@ -1,19 +1,17 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect } from "vitest";
 import { OqronConfigSchema } from "../../src/engine/config/schema.js";
 import { reconfigureConfig } from "../../src/engine/config/default-config.js";
-import type { OqronConfig } from "../../src/engine/types/config.types.js";
 
 describe("OqronConfigSchema — Zod Validation", () => {
   it("applies all defaults for minimal config", () => {
     const result = OqronConfigSchema.parse({});
-    // project is optional at schema level — default comes from reconfigureConfig()
     expect(result.project).toBeUndefined();
     expect(result.environment).toBe("development");
+    expect(result.mode).toBe("default");
     expect(result.modules).toEqual([]);
     expect(result.cron.enable).toBe(true);
     expect(result.cron.timezone).toBe("UTC");
-    expect(result.taskQueue.concurrency).toBe(5);
-    expect(result.worker.concurrency).toBe(5);
+    expect(result.queue.concurrency).toBe(5);
     expect(result.shutdown.enabled).toBe(true);
   });
 
@@ -21,13 +19,13 @@ describe("OqronConfigSchema — Zod Validation", () => {
     const result = OqronConfigSchema.parse({
       project: "my-app",
       environment: "production",
-      taskQueue: { concurrency: 20 },
+      queue: { concurrency: 20 },
     });
     expect(result.project).toBe("my-app");
     expect(result.environment).toBe("production");
-    expect(result.taskQueue.concurrency).toBe(20);
-    // Other taskQueue fields should still have defaults
-    expect(result.taskQueue.heartbeatMs).toBe(5000);
+    expect(result.queue.concurrency).toBe(20);
+    // Other queue fields should still have defaults
+    expect(result.queue.heartbeatMs).toBe(5000);
   });
 
   it("validates cron configuration", () => {
@@ -51,21 +49,19 @@ describe("OqronConfigSchema — Zod Validation", () => {
     expect(result.scheduler.leaderElection).toBe(false);
   });
 
-  it("validates taskQueue retry configuration", () => {
+  it("validates queue retry configuration", () => {
     const result = OqronConfigSchema.parse({
-      taskQueue: {
+      queue: {
         retries: { max: 10, strategy: "fixed", baseDelay: 5000 },
       },
     });
-    expect(result.taskQueue.retries.max).toBe(10);
-    expect(result.taskQueue.retries.strategy).toBe("fixed");
+    expect(result.queue.retries.max).toBe(10);
+    expect(result.queue.retries.strategy).toBe("fixed");
   });
 
-  it("validates worker strategy", () => {
-    const result = OqronConfigSchema.parse({
-      worker: { strategy: "priority" },
-    });
-    expect(result.worker.strategy).toBe("priority");
+  it("validates mode enum", () => {
+    const result = OqronConfigSchema.parse({ mode: "hybrid-db" });
+    expect(result.mode).toBe("hybrid-db");
   });
 
   it("validates logger can be false", () => {
@@ -90,6 +86,26 @@ describe("OqronConfigSchema — Zod Validation", () => {
     });
     expect(result.telemetry.prometheus.enabled).toBe(true);
     expect(result.telemetry.prometheus.path).toBe("/custom-metrics");
+  });
+
+  it("validates observability configuration", () => {
+    const result = OqronConfigSchema.parse({
+      observability: { maxJobLogs: 500, trackMemory: false },
+    });
+    expect(result.observability.maxJobLogs).toBe(500);
+    expect(result.observability.trackMemory).toBe(false);
+    expect(result.observability.maxTimelineEntries).toBe(20); // default
+  });
+
+  it("validates ui configuration", () => {
+    const result = OqronConfigSchema.parse({
+      ui: {
+        enabled: true,
+        auth: { username: "admin", password: "secret" },
+      },
+    });
+    expect(result.ui.enabled).toBe(true);
+    expect(result.ui.auth?.username).toBe("admin");
   });
 
   it("validates postgres configuration", () => {
@@ -143,20 +159,13 @@ describe("reconfigureConfig — Deep Merge", () => {
     expect(result.cron.lagMonitor.sampleIntervalMs).toBe(1000); // default preserved
   });
 
-  it("deep-merges taskQueue retries", () => {
+  it("deep-merges queue retries", () => {
     const result = reconfigureConfig({
-      taskQueue: { retries: { max: 10 } },
+      queue: { retries: { max: 10 } },
     });
-    expect(result.taskQueue.retries.max).toBe(10);
-    expect(result.taskQueue.retries.strategy).toBe("exponential"); // default
-    expect(result.taskQueue.retries.baseDelay).toBe(2000); // default
-  });
-
-  it("deep-merges worker deadLetter", () => {
-    const result = reconfigureConfig({
-      worker: { deadLetter: { enabled: false } },
-    });
-    expect(result.worker.deadLetter.enabled).toBe(false);
+    expect(result.queue.retries.max).toBe(10);
+    expect(result.queue.retries.strategy).toBe("exponential"); // default
+    expect(result.queue.retries.baseDelay).toBe(2000); // default
   });
 
   it("handles logger: false", () => {
@@ -180,7 +189,6 @@ describe("reconfigureConfig — Deep Merge", () => {
 
   it("strategy defaults to fifo", () => {
     const result = reconfigureConfig({});
-    expect(result.taskQueue.strategy).toBe("fifo");
-    expect(result.worker.strategy).toBe("fifo");
+    expect(result.queue.strategy).toBe("fifo");
   });
 });
