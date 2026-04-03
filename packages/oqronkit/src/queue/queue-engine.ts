@@ -9,6 +9,7 @@ import type { OqronJob } from "../engine/types/job.types.js";
 import { calculateBackoff } from "../engine/utils/backoffs.js";
 import { DependencyResolver } from "../engine/utils/dependency-resolver.js";
 import { pruneAfterCompletion } from "../engine/utils/job-retention.js";
+import type { QueueModuleDef } from "../modules.js";
 import { getRegisteredQueues } from "./registry.js";
 import type { QueueConfig, QueueJobContext } from "./types.js";
 
@@ -32,6 +33,7 @@ export class QueueEngine implements IOqronModule {
   constructor(
     private config: OqronConfig,
     private logger: Logger,
+    private queueConfig?: QueueModuleDef,
     private container?: OqronContainer,
   ) {}
 
@@ -40,17 +42,11 @@ export class QueueEngine implements IOqronModule {
   }
 
   async init(): Promise<void> {
-    const modules = this.config.modules || [];
-    if (!modules.includes("queue")) return;
-
     const qs = getRegisteredQueues();
     this.logger.info(`Initialized QueueEngine covering ${qs.length} endpoints`);
   }
 
   async start(): Promise<void> {
-    const modules = this.config.modules || [];
-    if (!modules.includes("queue")) return;
-
     if (this.running) return;
     this.running = true;
 
@@ -60,7 +56,7 @@ export class QueueEngine implements IOqronModule {
     }
 
     // Start stall detector — checks for jobs whose heartbeat locks have expired
-    const stalledInterval = this.config.queue?.stalledInterval ?? 30000;
+    const stalledInterval = this.queueConfig?.stalledInterval ?? 30000;
 
     this.stallDetector = new StallDetector(
       this.di.lock,
@@ -164,7 +160,7 @@ export class QueueEngine implements IOqronModule {
       this.logger.info(
         `QueueEngine draining ${allActive.length} active jobs...`,
       );
-      const timeout = this.config.queue?.shutdownTimeout ?? 25000;
+      const timeout = this.queueConfig?.shutdownTimeout ?? 25000;
       await Promise.race([
         Promise.allSettled(allActive),
         new Promise((r) => {
@@ -176,7 +172,7 @@ export class QueueEngine implements IOqronModule {
   }
 
   private startPolling(q: QueueConfig) {
-    const heartbeatMs = q.heartbeatMs ?? this.config.queue?.heartbeatMs ?? 5000;
+    const heartbeatMs = q.heartbeatMs ?? this.queueConfig?.heartbeatMs ?? 5000;
     const t = setInterval(() => {
       this.poll(q).catch((e) =>
         this.logger.error(`Queue poller crashed for ${q.name}`, e),
@@ -190,8 +186,8 @@ export class QueueEngine implements IOqronModule {
   private async poll(q: QueueConfig): Promise<void> {
     if (!this.running) return;
 
-    const concurrency = q.concurrency ?? this.config.queue?.concurrency ?? 5;
-    const lockTtlMs = q.lockTtlMs ?? this.config.queue?.lockTtlMs ?? 30000;
+    const concurrency = q.concurrency ?? this.queueConfig?.concurrency ?? 5;
+    const lockTtlMs = q.lockTtlMs ?? this.queueConfig?.lockTtlMs ?? 30000;
 
     // Per-queue concurrency: count only active jobs for THIS queue, not all queues
     const activeForQueue = this.activeJobsByQueue.get(q.name)?.size ?? 0;
@@ -200,7 +196,7 @@ export class QueueEngine implements IOqronModule {
 
     // 1. Claim IDs from Broker with ordering strategy
     const strategy: BrokerStrategy =
-      q.strategy ?? this.config.queue?.strategy ?? "fifo";
+      q.strategy ?? this.queueConfig?.strategy ?? "fifo";
     const jobIds = await this.di.broker.claim(
       q.name,
       this.workerIdStr,
@@ -248,20 +244,20 @@ export class QueueEngine implements IOqronModule {
 
   private async executeJob(job: OqronJob, q: QueueConfig): Promise<void> {
     let internalDiscarded = false;
-    const lockTtlMs = q.lockTtlMs ?? this.config.queue?.lockTtlMs ?? 30000;
-    const heartbeatMs = q.heartbeatMs ?? this.config.queue?.heartbeatMs ?? 5000;
+    const lockTtlMs = q.lockTtlMs ?? this.queueConfig?.lockTtlMs ?? 30000;
+    const heartbeatMs = q.heartbeatMs ?? this.queueConfig?.heartbeatMs ?? 5000;
     const useGuaranteed = q.guaranteedWorker !== false;
 
     // Resolve retry config: per-queue → global → default
-    const maxRetries = q.retries?.max ?? this.config.queue?.retries?.max ?? 0;
+    const maxRetries = q.retries?.max ?? this.queueConfig?.retries?.max ?? 0;
     const retryStrategy =
       q.retries?.strategy ??
-      this.config.queue?.retries?.strategy ??
+      this.queueConfig?.retries?.strategy ??
       "exponential";
     const baseDelay =
-      q.retries?.baseDelay ?? this.config.queue?.retries?.baseDelay ?? 2000;
+      q.retries?.baseDelay ?? this.queueConfig?.retries?.baseDelay ?? 2000;
     const maxDelay =
-      q.retries?.maxDelay ?? this.config.queue?.retries?.maxDelay ?? 60000;
+      q.retries?.maxDelay ?? this.queueConfig?.retries?.maxDelay ?? 60000;
 
     // Per-job attempts override takes highest priority
     const effectiveMaxRetries = job.opts?.attempts
@@ -457,7 +453,7 @@ export class QueueEngine implements IOqronModule {
 
       // DLQ: invoke dead letter hook if enabled and retries exhausted
       const dlqEnabled =
-        q.deadLetter?.enabled ?? this.config.queue?.deadLetter?.enabled;
+        q.deadLetter?.enabled ?? this.queueConfig?.deadLetter?.enabled;
       if (dlqEnabled && q.deadLetter?.onDead) {
         void Promise.resolve().then(() =>
           q.deadLetter!.onDead!(job as any).catch((e) =>
@@ -480,8 +476,8 @@ export class QueueEngine implements IOqronModule {
         status === "completed" ? q.removeOnComplete : q.removeOnFail,
       globalRemoveConfig:
         status === "completed"
-          ? this.config.queue?.removeOnComplete
-          : this.config.queue?.removeOnFail,
+          ? this.queueConfig?.removeOnComplete
+          : this.queueConfig?.removeOnFail,
       filterKey: "queueName",
       filterValue: q.name,
     });

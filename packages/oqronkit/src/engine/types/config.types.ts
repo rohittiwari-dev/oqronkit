@@ -1,6 +1,5 @@
+import type { OqronModuleInput } from "../../modules.js";
 import type { OqronLoggerConfig } from "../logger/index.js";
-import type { BrokerStrategy } from "./engine.js";
-import type { RemoveOnConfig } from "./job.types.js";
 
 export type RedisLike =
   | {
@@ -77,96 +76,17 @@ export interface OqronConfig {
   };
 
   /**
-   * List of core modules to enable.
+   * List of modules to enable. Supports multiple input forms:
+   *
+   * - String shorthand: `"cron"`, `"queue"`, `"scheduler"`
+   * - Inline object: `{ module: "cron", tickInterval: 500 }`
+   * - Factory reference: `cronModule` (uses defaults)
+   * - Factory invocation: `cronModule({ tickInterval: 500 })`
+   *
+   * If a module is not in this list, it will not boot.
    * @default []
    */
-  modules?: (
-    | "cron"
-    | "scheduler"
-    | "queue"
-    | "workflow"
-    | "batch"
-    | "webhook"
-    | "pipeline"
-  )[];
-
-  // ── Module-specific configs ─────────────────────────────────────────────
-
-  cron?: {
-    /** Enable/disable the cron module. @default true */
-    enable?: boolean;
-    /** Global timezone fallback when a cron def doesn't specify one. @default "UTC" */
-    timezone?: string;
-    /** Tick interval in ms for the cron polling loop. @default 1000 */
-    tickInterval?: number;
-    /** Default missed-fire policy when not set on the definition. @default "run-once" */
-    missedFirePolicy?: "skip" | "run-once" | "run-all";
-    /** Global max concurrent cron jobs (per-def can override). @default 5 */
-    maxConcurrentJobs?: number;
-    /** Enable cluster-wide leader election for cron ticks. @default true */
-    leaderElection?: boolean;
-    /** Rolling execution history. `true` = infinite, `false` = 0, `number` = keep N */
-    keepJobHistory?: boolean | number;
-    /** Override for failed tasks retention */
-    keepFailedJobHistory?: boolean | number;
-    /** Graceful shutdown drain timeout in ms. @default 25000 */
-    shutdownTimeout?: number;
-    /** Lag monitor thresholds */
-    lagMonitor?: { maxLagMs?: number; sampleIntervalMs?: number };
-    /** Sharded leader election for multi-region cron distribution */
-    clustering?: ClusteringConfig;
-  };
-
-  scheduler?: {
-    /** Enable/disable the scheduler module. @default true */
-    enable?: boolean;
-    /** Tick interval in ms. @default 1000 */
-    tickInterval?: number;
-    /** Global timezone fallback. @default "UTC" */
-    timezone?: string;
-    /** Enable cluster-wide leader election. @default true */
-    leaderElection?: boolean;
-    /** Rolling execution history retention */
-    keepJobHistory?: boolean | number;
-    /** Failed job history retention */
-    keepFailedJobHistory?: boolean | number;
-    /** Graceful shutdown drain timeout in ms. @default 25000 */
-    shutdownTimeout?: number;
-    /** Lag monitor thresholds */
-    lagMonitor?: { maxLagMs?: number; sampleIntervalMs?: number };
-    /** Sharded leader election for multi-region schedule distribution */
-    clustering?: ClusteringConfig;
-  };
-
-  queue?: {
-    /** Parallel execution limit. @default 5 */
-    concurrency?: number;
-    /** Polling interval in ms. @default 5000 */
-    heartbeatMs?: number;
-    /** Lock TTL in ms for crash recovery. @default 30000 */
-    lockTtlMs?: number;
-    /** Job ordering strategy. @default "fifo" */
-    strategy?: BrokerStrategy;
-    /** Default retry configuration for all queues */
-    retries?: {
-      max?: number;
-      strategy?: "fixed" | "exponential";
-      baseDelay?: number;
-      maxDelay?: number;
-    };
-    /** Dead letter queue configuration */
-    deadLetter?: { enabled?: boolean };
-    /** Global default: auto-remove completed jobs. @default false */
-    removeOnComplete?: RemoveOnConfig;
-    /** Global default: auto-remove failed jobs. @default false */
-    removeOnFail?: RemoveOnConfig;
-    /** Graceful shutdown drain timeout in ms. @default 25000 */
-    shutdownTimeout?: number;
-    /** Max stalled job retries before marking as permanently failed. @default 1 */
-    maxStalledCount?: number;
-    /** Stalled check interval in ms. @default 30000 */
-    stalledInterval?: number;
-  };
+  modules?: OqronModuleInput[];
 
   /**
    * Directory to auto-discover job definition files from.

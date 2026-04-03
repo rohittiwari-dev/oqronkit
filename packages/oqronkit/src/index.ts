@@ -11,6 +11,12 @@ import {
   reconfigureConfig,
   type ValidatedConfig,
 } from "./engine/index.js";
+import {
+  type CronModuleDef,
+  getModuleConfig,
+  type QueueModuleDef,
+  type SchedulerModuleDef,
+} from "./modules.js";
 import { expressRouter as _expressRouter } from "./server/express.js";
 import { fastifyPlugin as _fastifyPlugin } from "./server/fastify.js";
 import { TelemetryManager } from "./telemetry/index.js";
@@ -55,6 +61,23 @@ export {
   type QueueInfoResult,
   type QueueMetrics,
 } from "./manager/oqron-manager.js";
+// ── Module factories ────────────────────────────────────────────────────────
+export {
+  type CronModuleConfig,
+  type CronModuleDef,
+  cronModule,
+  getModuleConfig,
+  normalizeModules,
+  type OqronModuleDef,
+  type OqronModuleInput,
+  type OqronModuleName,
+  type QueueModuleConfig,
+  type QueueModuleDef,
+  queueModule,
+  type SchedulerModuleConfig,
+  type SchedulerModuleDef,
+  scheduleModule,
+} from "./modules.js";
 export { queue } from "./queue/define-queue.js";
 export type { IQueue, QueueConfig, QueueJobContext } from "./queue/types.js";
 export {
@@ -114,8 +137,9 @@ export const OqronKit = {
       } catch (_err) {}
     }
 
-    // --- Boot modules ---
-    if (_config.modules.includes("cron")) {
+    // --- Boot modules from normalized definitions ---
+    const cronConf = getModuleConfig<CronModuleDef>(_config.modules, "cron");
+    if (cronConf) {
       const { SchedulerModule, _drainPending } = await import(
         "./scheduler/index.js"
       );
@@ -127,12 +151,16 @@ export const OqronKit = {
         _logger!,
         _config.environment,
         _config.project,
-        _config.cron,
+        cronConf,
       );
       OqronRegistry.getInstance().register(scheduler);
     }
 
-    if (_config.modules.includes("scheduler")) {
+    const schedulerConf = getModuleConfig<SchedulerModuleDef>(
+      _config.modules,
+      "scheduler",
+    );
+    if (schedulerConf) {
       const { ScheduleEngine, _drainPendingSchedules } = await import(
         "./scheduler/index.js"
       );
@@ -144,14 +172,15 @@ export const OqronKit = {
         _logger!,
         _config.environment,
         _config.project,
-        _config.scheduler,
+        schedulerConf,
       );
       OqronRegistry.getInstance().register(scheduleEngine);
     }
 
-    if (_config.modules.includes("queue")) {
+    const queueConf = getModuleConfig<QueueModuleDef>(_config.modules, "queue");
+    if (queueConf) {
       const { QueueEngine } = await import("./queue/queue-engine.js");
-      const engine = new QueueEngine(_config, _logger!);
+      const engine = new QueueEngine(_config, _logger!, queueConf);
       OqronRegistry.getInstance().register(engine);
     }
 
@@ -230,7 +259,7 @@ export const OqronKit = {
       retention: _config.ui?.retention,
       project: _config.project ?? "unnamed",
       environment: _config.environment ?? "development",
-      modules: (_config.modules ?? []) as string[],
+      modules: (_config.modules ?? []).map((m) => m.module),
     };
   },
 

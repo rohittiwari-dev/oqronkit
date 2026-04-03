@@ -22,7 +22,13 @@
 
 import { mkdirSync } from "node:fs";
 import express from "express";
-import { OqronKit, OqronManager } from "oqronkit";
+import {
+  cronModule,
+  OqronKit,
+  OqronManager,
+  queueModule,
+  scheduleModule,
+} from "oqronkit";
 
 // ─── 1. Prepare data directory ───────────────────────────────────────────────
 mkdirSync("data", { recursive: true });
@@ -34,7 +40,7 @@ async function main(): Promise<void> {
   await OqronKit.init({
     config: {
       // All four modules active — cron, scheduler, taskQueue, worker
-      modules: ["cron", "scheduler", "taskQueue", "worker"],
+      modules: [cronModule, scheduleModule, queueModule],
 
       // Pretty-print structured logs for development
       logger: {
@@ -73,35 +79,6 @@ async function main(): Promise<void> {
   );
   console.log("🔔 Payment webhook enqueued: order_42");
 
-  // ── Distributed Queue Demo — Publish jobs for worker pods ──────────────
-  const { placeOrder, sendBulkNotifications, requestDataExport } = await import(
-    "./jobs/distributed-workers.js"
-  );
-
-  await placeOrder(
-    "order_100",
-    "cust_42",
-    [
-      { sku: "WIDGET-A", qty: 2, price: 29.99 },
-      { sku: "GADGET-B", qty: 1, price: 79.99 },
-    ],
-    "123 Main St, NYC",
-  );
-  console.log("📦 Order published to distributed queue: order_100");
-
-  await sendBulkNotifications(
-    ["u_001", "u_002", "u_003"],
-    "New Feature!",
-    "Check out our new dashboard analytics",
-  );
-  console.log("🔔 Bulk notifications published for 3 users");
-
-  const exportId = await requestDataExport("tenant_acme", "csv", {
-    dateFrom: "2026-01-01",
-    dateTo: "2026-03-29",
-  });
-  console.log(`📤 Data export requested: ${exportId} (5s delay)\n`);
-
   // ─── 3. Express HTTP server ────────────────────────────────────────────
   const app = express();
   app.use(express.json());
@@ -122,17 +99,6 @@ async function main(): Promise<void> {
         metrics: "GET  /api/oqron/metrics",
       },
     });
-  });
-
-  // Example API route: place an order (publishes to distributed queue)
-  app.post("/api/orders", async (req, res) => {
-    try {
-      const { orderId, customerId, items, shippingAddress } = req.body;
-      await placeOrder(orderId, customerId, items, shippingAddress);
-      res.status(202).json({ message: "Order accepted", orderId });
-    } catch (err: unknown) {
-      res.status(500).json({ error: (err as Error).message });
-    }
   });
 
   // Example API route: trigger image processing

@@ -1,11 +1,11 @@
 /**
  * ═══════════════════════════════════════════════════════════════════════════════
  *  OqronKit — Task Queue Examples
- *  Real-world production examples showcasing the taskQueue() monolithic API.
+ *  Real-world production examples showcasing the queue() monolithic API.
  * ═══════════════════════════════════════════════════════════════════════════════
  *
- *  taskQueue vs. Queue/Worker:
- *  • taskQueue()   → Monolithic — publisher and consumer live in the SAME process.
+ *  queue vs. Queue/Worker:
+ *  • queue()   → Monolithic — publisher and consumer live in the SAME process.
  *                     Best for single-server apps, background jobs, API-triggered tasks.
  *  • Queue/Worker  → Distributed — publisher and consumer live in SEPARATE processes.
  *                     Best for microservices, horizontal scaling, dedicated worker pods.
@@ -25,7 +25,7 @@
  *  ✓ AbortController cancellation (ctx.signal)
  */
 
-import { taskQueue } from "oqronkit";
+import { queue } from "oqronkit";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. IMAGE PROCESSING PIPELINE
@@ -42,7 +42,7 @@ type ImageOutput = {
   variants: Array<{ label: string; url: string; sizeKb: number }>;
 };
 
-export const imageProcessingQueue = taskQueue<ImageInput, ImageOutput>({
+export const imageProcessingQueue = queue<ImageInput, ImageOutput>({
   name: "image-processing",
 
   concurrency: 3, // Process up to 3 images in parallel
@@ -131,7 +131,7 @@ type EmailOutput = {
   deliveredAt: Date;
 };
 
-export const emailQueue = taskQueue<EmailInput, EmailOutput>({
+export const emailQueue = queue<EmailInput, EmailOutput>({
   name: "email-sender",
 
   concurrency: 5, // SES rate limit friendly
@@ -204,7 +204,7 @@ type PdfOutput = {
   sizeKb: number;
 };
 
-export const pdfGenerationQueue = taskQueue<PdfInput, PdfOutput>({
+export const pdfGenerationQueue = queue<PdfInput, PdfOutput>({
   name: "pdf-generation",
 
   concurrency: 1, // CPU-heavy — one at a time
@@ -279,7 +279,7 @@ type WebhookOutput = {
   responseTimeMs: number;
 };
 
-export const webhookDeliveryQueue = taskQueue<WebhookInput, WebhookOutput>({
+export const webhookDeliveryQueue = queue<WebhookInput, WebhookOutput>({
   name: "webhook-delivery",
 
   concurrency: 10, // 10 parallel webhook dispatches

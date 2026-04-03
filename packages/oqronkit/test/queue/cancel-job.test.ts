@@ -9,6 +9,7 @@ import { OqronEventBus } from "../../src/engine/events/event-bus.js";
 import { QueueEngine } from "../../src/queue/queue-engine.js";
 import type { OqronConfig } from "../../src/engine/types/config.types.js";
 import type { OqronJob } from "../../src/engine/types/job.types.js";
+import { queueModule } from "../../src/modules.js";
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -24,11 +25,12 @@ function createLogger() {
   } as any;
 }
 
+const queueConf = queueModule({ concurrency: 1, heartbeatMs: 100 });
+
 const config: OqronConfig = {
   project: "test",
   environment: "test",
-  modules: ["queue"],
-  queue: { concurrency: 1, heartbeatMs: 100 },
+  modules: [queueConf],
 };
 
 function makeJob(
@@ -62,7 +64,7 @@ describe("QueueEngine — cancelActiveJob()", () => {
     await initEngine({ project: "test", environment: "test" });
     OqronRegistry.getInstance()._reset();
     logger = createLogger();
-    engine = new QueueEngine(config, logger);
+    engine = new QueueEngine(config, logger, queueConf);
   });
 
   afterEach(async () => {

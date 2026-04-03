@@ -1,43 +1,100 @@
 import { z } from "zod";
+import type {
+  CronModuleDef,
+  OqronModuleDef,
+  QueueModuleDef,
+  SchedulerModuleDef,
+} from "../../modules.js";
 
-// ── Shared sub-schemas ──────────────────────────────────────────────────────
+// ── Resolved Module Config Defaults ─────────────────────────────────────────
 
-const KeepJobsSchema = z.object({
-  age: z.number().optional(),
-  count: z.number().optional(),
-});
+const DEFAULT_CRON: Omit<Required<CronModuleDef>, "clustering"> & {
+  clustering?: CronModuleDef["clustering"];
+} = {
+  module: "cron",
+  timezone: "UTC",
+  tickInterval: 1000,
+  missedFirePolicy: "run-once",
+  maxConcurrentJobs: 5,
+  leaderElection: true,
+  keepJobHistory: true,
+  keepFailedJobHistory: true,
+  shutdownTimeout: 25000,
+  lagMonitor: { maxLagMs: 5000, sampleIntervalMs: 1000 },
+};
 
-const RemoveOnConfigSchema = z.union([z.boolean(), z.number(), KeepJobsSchema]);
+const DEFAULT_SCHEDULER: Omit<Required<SchedulerModuleDef>, "clustering"> & {
+  clustering?: SchedulerModuleDef["clustering"];
+} = {
+  module: "scheduler",
+  tickInterval: 1000,
+  timezone: "UTC",
+  leaderElection: true,
+  keepJobHistory: true,
+  keepFailedJobHistory: true,
+  shutdownTimeout: 25000,
+  lagMonitor: { maxLagMs: 5000, sampleIntervalMs: 1000 },
+};
 
-const RetriesSchema = z
-  .object({
-    max: z.number().default(3),
-    strategy: z.enum(["fixed", "exponential"]).default("exponential"),
-    baseDelay: z.number().default(2000),
-    maxDelay: z.number().default(60000),
-  })
-  .default({});
+const DEFAULT_QUEUE: Required<QueueModuleDef> = {
+  module: "queue",
+  concurrency: 5,
+  heartbeatMs: 5000,
+  lockTtlMs: 30000,
+  strategy: "fifo",
+  retries: {
+    max: 3,
+    strategy: "exponential",
+    baseDelay: 2000,
+    maxDelay: 60000,
+  },
+  deadLetter: { enabled: true },
+  removeOnComplete: false,
+  removeOnFail: false,
+  shutdownTimeout: 25000,
+  maxStalledCount: 1,
+  stalledInterval: 30000,
+};
 
-const DeadLetterSchema = z
-  .object({
-    enabled: z.boolean().default(true),
-  })
-  .default({});
+/** Look up default configs by module name */
+const MODULE_DEFAULTS: Record<string, OqronModuleDef> = {
+  cron: DEFAULT_CRON as CronModuleDef,
+  scheduler: DEFAULT_SCHEDULER as SchedulerModuleDef,
+  queue: DEFAULT_QUEUE,
+};
 
-const LagMonitorSchema = z
-  .object({
-    maxLagMs: z.number().default(5000),
-    sampleIntervalMs: z.number().default(1000),
-  })
-  .default({ maxLagMs: 5000, sampleIntervalMs: 1000 });
+/**
+ * Apply defaults to a normalized OqronModuleDef.
+ * Deep-merges nested objects (lagMonitor, retries, deadLetter).
+ */
+export function applyModuleDefaults(def: OqronModuleDef): OqronModuleDef {
+  const base = MODULE_DEFAULTS[def.module];
+  if (!base) return def;
 
-const ClusteringSchema = z
-  .object({
-    totalShards: z.number().optional(),
-    ownedShards: z.array(z.number()).optional(),
-    region: z.string().optional(),
-  })
-  .optional();
+  // Shallow merge first
+  const merged = { ...base, ...def };
+
+  // Deep merge known nested objects
+  if (def.module === "cron" || def.module === "scheduler") {
+    const baseLag = (base as any).lagMonitor ?? {};
+    const userLag = (def as any).lagMonitor ?? {};
+    (merged as any).lagMonitor = { ...baseLag, ...userLag };
+    // Clustering: user-provided or undefined
+    (merged as any).clustering = (def as any).clustering;
+  }
+
+  if (def.module === "queue") {
+    const baseRetries = (base as QueueModuleDef).retries ?? {};
+    const userRetries = (def as QueueModuleDef).retries ?? {};
+    (merged as any).retries = { ...baseRetries, ...userRetries };
+
+    const baseDL = (base as QueueModuleDef).deadLetter ?? {};
+    const userDL = (def as QueueModuleDef).deadLetter ?? {};
+    (merged as any).deadLetter = { ...baseDL, ...userDL };
+  }
+
+  return merged;
+}
 
 // ── Main Config Schema ──────────────────────────────────────────────────────
 
@@ -60,71 +117,8 @@ export const OqronConfigSchema = z.object({
     })
     .optional(),
 
-  // Modules
-  modules: z
-    .array(
-      z.enum([
-        "cron",
-        "scheduler",
-        "queue",
-        "workflow",
-        "batch",
-        "webhook",
-        "pipeline",
-      ]),
-    )
-    .default([]),
-
-  // ── Cron ─────────────────────────────────────────────────────────────────
-  cron: z
-    .object({
-      enable: z.boolean().default(true),
-      timezone: z.string().default("UTC"),
-      tickInterval: z.number().default(1000),
-      missedFirePolicy: z
-        .enum(["skip", "run-once", "run-all"])
-        .default("run-once"),
-      maxConcurrentJobs: z.number().default(5),
-      leaderElection: z.boolean().default(true),
-      keepJobHistory: z.union([z.boolean(), z.number()]).default(true),
-      keepFailedJobHistory: z.union([z.boolean(), z.number()]).default(true),
-      shutdownTimeout: z.number().default(25000),
-      lagMonitor: LagMonitorSchema,
-      clustering: ClusteringSchema,
-    })
-    .default({}),
-
-  // ── Scheduler ────────────────────────────────────────────────────────────
-  scheduler: z
-    .object({
-      enable: z.boolean().default(true),
-      tickInterval: z.number().default(1000),
-      timezone: z.string().default("UTC"),
-      leaderElection: z.boolean().default(true),
-      keepJobHistory: z.union([z.boolean(), z.number()]).default(true),
-      keepFailedJobHistory: z.union([z.boolean(), z.number()]).default(true),
-      shutdownTimeout: z.number().default(25000),
-      lagMonitor: LagMonitorSchema,
-      clustering: ClusteringSchema,
-    })
-    .default({}),
-
-  // ── Queue (renamed from TaskQueue) ────────────────────────────────────
-  queue: z
-    .object({
-      concurrency: z.number().default(5),
-      heartbeatMs: z.number().default(5000),
-      lockTtlMs: z.number().default(30000),
-      strategy: z.enum(["fifo", "lifo", "priority"]).default("fifo"),
-      retries: RetriesSchema,
-      deadLetter: DeadLetterSchema,
-      removeOnComplete: RemoveOnConfigSchema.default(false),
-      removeOnFail: RemoveOnConfigSchema.default(false),
-      shutdownTimeout: z.number().default(25000),
-      maxStalledCount: z.number().default(1),
-      stalledInterval: z.number().default(30000),
-    })
-    .default({}),
+  // Modules — accepts any[] at the Zod layer; runtime normalizes before use
+  modules: z.array(z.any()).default([]),
 
   // Auto-discovery directory
   jobsDir: z.string().default("./src/jobs"),
@@ -211,4 +205,10 @@ export const OqronConfigSchema = z.object({
     .default({}),
 });
 
-export type ValidatedConfig = z.infer<typeof OqronConfigSchema>;
+export type ValidatedConfig = Omit<
+  z.infer<typeof OqronConfigSchema>,
+  "modules"
+> & {
+  /** Normalized and default-merged module definitions */
+  modules: OqronModuleDef[];
+};
