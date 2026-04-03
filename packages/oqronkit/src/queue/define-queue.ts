@@ -34,23 +34,47 @@ export function queue<T = any, R = any>(
       const jobId = opts?.jobId ?? randomUUID();
       const hasDeps = opts?.dependsOn && opts.dependsOn.length > 0;
 
+      const instanceState = await di.storage.get<{enabled: boolean}>("queue_instances", config.name);
+      const isInstanceEnabled = instanceState ? instanceState.enabled : true;
+
+      const behavior = config.disabledBehavior ?? "hold";
+
+      if (!isInstanceEnabled && behavior === "reject") {
+         throw new Error(`Queue ${config.name} is disabled and configured to reject new jobs`);
+      }
+
+      if (!isInstanceEnabled && behavior === "ignore") {
+         // Silently drop
+         return { id: jobId, status: "completed" } as any; // Mock response
+      }
+
       const job: OqronJob = {
         id: jobId,
         type: "task",
         queueName: config.name,
-        status: hasDeps
-          ? "waiting-children"
-          : opts?.delay
-            ? "delayed"
-            : "waiting",
+        moduleName: config.name,
+        status: !isInstanceEnabled && behavior === "hold" 
+          ? "paused" 
+          : hasDeps
+            ? "waiting-children"
+            : opts?.delay
+              ? "delayed"
+              : "waiting",
         data,
         opts: opts ?? {},
         attemptMade: 0,
         progressPercent: 0,
         tags: [],
-        environment: di.config?.environment,
-        project: di.config?.project,
+        environment: di.config?.environment ?? "default",
+        project: di.config?.project ?? "default",
         createdAt: new Date(),
+        queuedAt: new Date(),
+        triggeredBy: "api",
+        correlationId: opts?.correlationId,
+        maxAttempts: opts?.attempts ?? 1,
+        logs: [],
+        timeline: [],
+        steps: [],
         runAt: opts?.delay ? new Date(Date.now() + opts.delay) : undefined,
       };
 
@@ -66,7 +90,7 @@ export function queue<T = any, R = any>(
           di.lock,
         );
         // Don't publish to broker — job stays in waiting-children until parents finish
-      } else {
+      } else if (job.status !== "paused") {
         // 3. Transport
         await di.broker.publish(
           config.name,

@@ -11,6 +11,7 @@ export interface ScheduleContextOptions<TPayload> {
   environment?: string;
   project?: string;
   onProgress?: (percent: number, label?: string) => void;
+  onLog?: (level: string, message: string) => void;
 }
 
 export class ScheduleContext<TPayload = unknown>
@@ -26,6 +27,7 @@ export class ScheduleContext<TPayload = unknown>
   private readonly signal: AbortSignal;
   private readonly startedLocalAt: number;
   private readonly _onProgress?: (percent: number, label?: string) => void;
+  private readonly _onLog?: (level: string, message: string) => void;
 
   constructor(opts: ScheduleContextOptions<TPayload>) {
     this.id = opts.id;
@@ -38,6 +40,7 @@ export class ScheduleContext<TPayload = unknown>
     this.project = opts.project;
     this.startedLocalAt = Date.now();
     this._onProgress = opts.onProgress;
+    this._onLog = opts.onLog;
 
     // Bind methods so they can be destructured safely
     this.log = this.log.bind(this);
@@ -66,6 +69,10 @@ export class ScheduleContext<TPayload = unknown>
       const fn = this.logger[level as LogLevel];
       if (typeof fn === "function") {
         fn.call(this.logger, message, meta);
+      }
+      
+      if (this._onLog) {
+        this._onLog(level, message);
       }
     }
   }

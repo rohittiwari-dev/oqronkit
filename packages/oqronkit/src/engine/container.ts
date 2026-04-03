@@ -5,6 +5,40 @@ import type {
   IStorageEngine,
 } from "./types/engine.js";
 
+const makeIsolatedStorage = (
+  base: IStorageEngine,
+  prefix: string,
+): IStorageEngine => ({
+  save: (ns, id, data) => base.save(`${prefix}:${ns}`, id, data),
+  get: (ns, id) => base.get(`${prefix}:${ns}`, id),
+  list: (ns, filter, opts) => base.list(`${prefix}:${ns}`, filter, opts),
+  delete: (ns, id) => base.delete(`${prefix}:${ns}`, id),
+  prune: (ns, before) => base.prune(`${prefix}:${ns}`, before),
+  count: (ns, filter) => base.count(`${prefix}:${ns}`, filter),
+});
+
+const makeIsolatedBroker = (
+  base: IBrokerEngine,
+  prefix: string,
+): IBrokerEngine => ({
+  publish: (ns, id, delay, prio) =>
+    base.publish(`${prefix}:${ns}`, id, delay, prio),
+  claim: (ns, cid, limit, ttl, strat) =>
+    base.claim(`${prefix}:${ns}`, cid, limit, ttl, strat),
+  ack: (ns, id) => base.ack(`${prefix}:${ns}`, id),
+  nack: (ns, id, delay) => base.nack(`${prefix}:${ns}`, id, delay),
+  extendLock: (id, cid, ttl) => base.extendLock(id, cid, ttl),
+  pause: (ns) => base.pause(`${prefix}:${ns}`),
+  resume: (ns) => base.resume(`${prefix}:${ns}`),
+});
+
+const makeIsolatedLock = (base: ILockAdapter, prefix: string): ILockAdapter => ({
+  acquire: (key, owner, ttl) => base.acquire(`${prefix}:${key}`, owner, ttl),
+  renew: (key, owner, ttl) => base.renew(`${prefix}:${key}`, owner, ttl),
+  release: (key, owner) => base.release(`${prefix}:${key}`, owner),
+  isOwner: (key, owner) => base.isOwner(`${prefix}:${key}`, owner),
+});
+
 /**
  * OqronContainer — Dependency Injection container for OqronKit adapters.
  *
@@ -49,10 +83,14 @@ export class OqronContainer {
     lock: ILockAdapter,
     config?: OqronConfig,
   ): OqronContainer {
+    const envStr = config?.environment ?? "default";
+    const projStr = config?.project ?? "default";
+    const isolationPrefix = `oqron:${projStr}:${envStr}`;
+
     OqronContainer._instance = new OqronContainer(
-      storage,
-      broker,
-      lock,
+      makeIsolatedStorage(storage, isolationPrefix),
+      makeIsolatedBroker(broker, isolationPrefix),
+      makeIsolatedLock(lock, isolationPrefix),
       config,
     );
     return OqronContainer._instance;

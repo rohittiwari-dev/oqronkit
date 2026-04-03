@@ -142,6 +142,46 @@ export class OqronManager {
     return false;
   }
 
+  // ── Instance Management ───────────────────────────────────────────────────
+
+  /**
+   * Enable a specific registered instance (e.g., a specific queue or cron definition).
+   */
+  async enableInstance(type: JobType, name: string): Promise<boolean> {
+    if (type === "task" || type === "queue" as any) {
+      await Storage.save("queue_instances", name, { enabled: true });
+      return true;
+    }
+    if (type === "cron" || type === "schedule") {
+      const def = await Storage.get<any>("schedules", name);
+      if (def) {
+        def.paused = false;
+        await Storage.save("schedules", name, def);
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /**
+   * Disable a specific registered instance (e.g., a specific queue or cron definition).
+   */
+  async disableInstance(type: JobType, name: string): Promise<boolean> {
+    if (type === "task" || type === "queue" as any) {
+      await Storage.save("queue_instances", name, { enabled: false });
+      return true;
+    }
+    if (type === "cron" || type === "schedule") {
+      const def = await Storage.get<any>("schedules", name);
+      if (def) {
+        def.paused = true;
+        await Storage.save("schedules", name, def);
+        return true;
+      }
+    }
+    return false;
+  }
+
   // ── Queue Administration ───────────────────────────────────────────────────
 
   async getQueueInfo(

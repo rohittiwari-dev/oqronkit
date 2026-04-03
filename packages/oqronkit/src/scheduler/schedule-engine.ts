@@ -32,7 +32,7 @@ type ActiveJobEntry = {
 
 export class ScheduleEngine implements IOqronModule {
   public readonly name = "scheduler";
-  public readonly enabled = true;
+  public enabled = true;
 
   private readonly nodeId: string;
   private readonly logger: Logger;
@@ -188,8 +188,27 @@ export class ScheduleEngine implements IOqronModule {
               key,
               runId: id,
             });
-            job.abort?.abort();
-            this.activeJobs.delete(id);
+            this.di.storage.get<any>("jobs", id).then(async dbJob => {
+              if (dbJob) {
+                dbJob.stalledCount = (dbJob.stalledCount ?? 0) + 1;
+                if (!dbJob.timeline) dbJob.timeline = [];
+                dbJob.timeline.push({
+                   ts: new Date(),
+                   from: dbJob.status,
+                   to: "stalled",
+                   reason: "Worker lock expired. Job aborted."
+                });
+                dbJob.status = "stalled";
+                try {
+                  await this.di.storage.save("jobs", id, dbJob);
+                } catch (e) {
+                  this.logger.error("Failed to commit stall telemetry for schedule", { runId: id, error: String(e) });
+                }
+              }
+            }).finally(() => {
+               job.abort?.abort();
+               this.activeJobs.delete(id);
+            });
           }
         }
       },
@@ -237,6 +256,17 @@ export class ScheduleEngine implements IOqronModule {
     this.logger.info("Manual trigger requested", { scheduleId });
     void this.fire(def);
     return true;
+  }
+
+  async enable(): Promise<void> {
+    this.enabled = true;
+    if (!this.tickTimer) {
+      await this.start();
+    }
+  }
+
+  async disable(): Promise<void> {
+    this.enabled = false;
   }
 
   // ── Core scheduling helpers ─────────────────────────────────────────────────
@@ -351,6 +381,8 @@ export class ScheduleEngine implements IOqronModule {
   }
 
   private async tick(): Promise<void> {
+    if (!this.enabled) return;
+
     // Check leadership: either single-leader or at least one shard
     const isLeader = this.shardedLeader
       ? this.shardedLeader.isLeader
@@ -516,6 +548,7 @@ export class ScheduleEngine implements IOqronModule {
       id: runId,
       type: "schedule",
       queueName: "system_schedule",
+      moduleName: def.name,
       status: "running",
       data: def.payload,
       opts: {},
@@ -523,12 +556,28 @@ export class ScheduleEngine implements IOqronModule {
       progressPercent: 0,
       tags: [],
       scheduleId: def.name,
+      environment: this.environment ?? "default",
+      project: this.project ?? "default",
       createdAt: startedAt,
+      queuedAt: startedAt,
+      triggeredBy: "schedule",
+      logs: [],
+      timeline: [{
+        ts: startedAt,
+        from: "waiting",
+        to: "running",
+        reason: `Schedule ${def.name} fired`,
+      }],
+      steps: [],
       startedAt,
     });
 
     OqronEventBus.emit("job:start", "system_schedule", runId, def.name);
     entry.promise = Promise.resolve().then(async () => {
+      // Local accumulator — guarantees no log entries are lost to async races
+      const localLogs: Array<{ level: string; msg: string; ts: Date }> = [];
+      const localTimeline: Array<{ ts: Date; from: string; to: string; reason: string }> = [];
+
       const ctx = new ScheduleContext({
         id: runId,
         logger: this.logger.child({ schedule: def.name }),
@@ -540,12 +589,20 @@ export class ScheduleEngine implements IOqronModule {
         project: this.project,
         onProgress: async (percent, label) => {
           try {
+            localTimeline.push({
+              ts: new Date(),
+              from: "running",
+              to: "running",
+              reason: `Progress: ${percent}% ${label || ""}`,
+            });
             const job = await this.di.storage.get<any>("jobs", runId);
             if (job) {
               await this.di.storage.save("jobs", runId, {
                 ...job,
                 progressPercent: percent,
                 progressLabel: label,
+                timeline: [...(job.timeline || []), ...localTimeline],
+                logs: [...(job.logs || []), ...localLogs],
               });
             }
           } catch (err) {
@@ -554,6 +611,11 @@ export class ScheduleEngine implements IOqronModule {
               err,
             });
           }
+        },
+        onLog: (level, msg) => {
+          // Synchronous push — no async race, no lost logs
+          (this.logger as any)[level]?.(`[Schedule:${def.name}] ${msg}`, { runId });
+          localLogs.push({ level, msg, ts: new Date() });
         },
       });
 
@@ -633,10 +695,27 @@ export class ScheduleEngine implements IOqronModule {
       }
 
       const finishedAt = new Date();
+      const existingJob = await this.di.storage.get<any>("jobs", runId) ?? {};
+
+      // Push the final completion event into local accumulator
+      localTimeline.push({
+        ts: finishedAt,
+        from: "running",
+        to: status,
+        reason: status === "failed" ? (error ?? "Unknown error") : "Finished successfully",
+      });
+
+      // Merge: initial timeline from DB + all locally accumulated entries
+      const mergedTimeline = [...(existingJob.timeline || []), ...localTimeline];
+      // Merge: initial logs from DB + all locally accumulated entries
+      const mergedLogs = [...(existingJob.logs || []), ...localLogs];
+
       await this.di.storage.save("jobs", runId, {
+        ...existingJob,
         id: runId,
         type: "schedule",
         queueName: "system_schedule",
+        moduleName: def.name,
         status,
         data: def.payload,
         opts: {},
@@ -646,14 +725,19 @@ export class ScheduleEngine implements IOqronModule {
         tags: def.tags ?? [],
         scheduleId: def.name,
         workerId: this.nodeId,
-        environment: this.environment,
-        project: this.project,
+        environment: this.environment ?? "default",
+        project: this.project ?? "default",
+        durationMs: finishedAt.getTime() - startedAt.getTime(),
         error,
         stacktrace: error && status === "failed" ? [error] : undefined,
         returnValue: finalResult !== undefined ? finalResult : undefined,
         createdAt: startedAt,
+        queuedAt: existingJob.queuedAt ?? startedAt,
         startedAt,
+        processedOn: startedAt,
         finishedAt,
+        logs: mergedLogs,
+        timeline: mergedTimeline,
       });
 
       if (worker) {

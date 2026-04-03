@@ -22,6 +22,18 @@ export interface QueueJobContext<T = any> {
 
   /** Mark the job as permanently failed without triggering backoff retries */
   discard: () => void;
+
+  /** The queue this job belongs to */
+  queueName: string;
+
+  /** The module definition name that created this job */
+  moduleName: string;
+
+  /** The environment context (isolation boundary) */
+  environment: string;
+
+  /** The project context (isolation boundary) */
+  project: string;
 }
 
 export interface QueueConfig<T = any, R = any> {
@@ -56,6 +68,14 @@ export interface QueueConfig<T = any, R = any> {
     enabled?: boolean;
     onDead?: (job: OqronJob<T, R>) => Promise<void>;
   };
+
+  /**
+   * Behavior when a job is added to this queue but the queue is disabled.
+   * - "hold": Accept the job, place it in "paused" status (default)
+   * - "reject": Throw an error explicitly rejecting the enqueue attempt
+   * - "ignore": Silently drop the job without enqueueing
+   */
+  disabledBehavior?: "hold" | "reject" | "ignore";
 
   /**
    * Auto-remove completed jobs after processing.

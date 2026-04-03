@@ -15,7 +15,7 @@ import type { QueueConfig, QueueJobContext } from "./types.js";
 
 export class QueueEngine implements IOqronModule {
   public readonly name = "queue";
-  public readonly enabled = true;
+  public enabled = true;
   private running = false;
   private timers: NodeJS.Timeout[] = [];
   private workerIdStr = randomUUID();
@@ -80,7 +80,27 @@ export class QueueEngine implements IOqronModule {
         // Find the queue name for nack
         const queueName = qs.find((_q) => this.activeJobs.has(jobId))?.name;
         if (queueName) {
-          void this.di.broker.nack(queueName, jobId);
+          // Increment stalledCount and update telemetry before returning to broker
+          this.di.storage.get<any>("jobs", jobId).then(async job => {
+            if (job) {
+              job.stalledCount = (job.stalledCount ?? 0) + 1;
+              if (!job.timeline) job.timeline = [];
+              job.timeline.push({
+                ts: new Date(),
+                from: job.status,
+                to: "stalled",
+                reason: `Worker lock expired. Re-enqueuing.`
+              });
+              job.status = "stalled";
+              try {
+                await this.di.storage.save("jobs", jobId, job);
+              } catch (e) {
+                this.logger.error("Failed to commit stall telemetry", { jobId, error: String(e) });
+              }
+            }
+          }).finally(() => {
+            void this.di.broker.nack(queueName, jobId);
+          });
         }
       },
     );
@@ -93,6 +113,17 @@ export class QueueEngine implements IOqronModule {
       return true;
     }
     return false;
+  }
+
+  async enable(): Promise<void> {
+    this.enabled = true;
+    if (!this.running) {
+      await this.start();
+    }
+  }
+
+  async disable(): Promise<void> {
+    this.enabled = false;
   }
 
   /**
@@ -184,7 +215,7 @@ export class QueueEngine implements IOqronModule {
   }
 
   private async poll(q: QueueConfig): Promise<void> {
-    if (!this.running) return;
+    if (!this.running || !this.enabled) return;
 
     const concurrency = q.concurrency ?? this.queueConfig?.concurrency ?? 5;
     const lockTtlMs = q.lockTtlMs ?? this.queueConfig?.lockTtlMs ?? 30000;
@@ -294,9 +325,20 @@ export class QueueEngine implements IOqronModule {
       id: job.id,
       data: job.data,
       signal: abortController.signal,
+      queueName: job.queueName,
+      moduleName: job.moduleName ?? q.name,
+      environment: job.environment ?? this.config.environment ?? "default",
+      project: job.project ?? this.config.project ?? "default",
       progress: async (percent, label) => {
         job.progressPercent = percent;
         job.progressLabel = label;
+        if (!job.timeline) job.timeline = [];
+        job.timeline.push({
+          ts: new Date(),
+          from: "active",
+          to: "active",
+          reason: `Progress: ${percent}% ${label || ""}`,
+        });
         await this.di.storage.save("jobs", job.id, job);
         OqronEventBus.emit("job:progress", job.queueName, job.id, percent);
       },
@@ -305,6 +347,10 @@ export class QueueEngine implements IOqronModule {
         method.call(this.logger, `[Queue:${q.name}] ${msg}`, {
           jobId: job.id,
         });
+        if (!job.logs) job.logs = [];
+        job.logs.push({ level, msg, ts: new Date() });
+        // Best effort async save for logs without blocking execution
+        this.di.storage.save("jobs", job.id, job).catch(() => {});
       },
       discard: () => {
         internalDiscarded = true;
@@ -312,10 +358,19 @@ export class QueueEngine implements IOqronModule {
     };
 
     // Update state to active
+    const oldStatus = job.status;
     job.status = "active";
     job.workerId = this.workerIdStr;
     job.startedAt = new Date();
+    job.processedOn = new Date();
     job.attemptMade = (job.attemptMade ?? 0) + 1;
+    if (!job.timeline) job.timeline = [];
+    job.timeline.push({
+      ts: job.startedAt,
+      from: oldStatus,
+      to: "active",
+      reason: `Worker ${this.workerIdStr} claimed job`,
+    });
     await this.di.storage.save("jobs", job.id, job);
 
     OqronEventBus.emit("job:start", job.queueName, job.id, q.name);
@@ -439,6 +494,14 @@ export class QueueEngine implements IOqronModule {
     if (job.startedAt) {
       job.durationMs = finishedAt.getTime() - new Date(job.startedAt).getTime();
     }
+
+    if (!job.timeline) job.timeline = [];
+    job.timeline.push({
+      ts: finishedAt,
+      from: "active",
+      to: status,
+      reason: status === "failed" ? error : "Finished successfully",
+    });
 
     await this.di.storage.save("jobs", job.id, job);
     await this.di.broker.ack(q.name, job.id);
