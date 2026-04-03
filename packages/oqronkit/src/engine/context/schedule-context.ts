@@ -54,7 +54,12 @@ export class ScheduleContext<TPayload = unknown>
 
   log(level: string, message: string, meta?: Record<string, unknown>): void {
     const validLevels: ReadonlySet<string> = new Set([
-      "trace", "debug", "info", "warn", "error", "fatal",
+      "trace",
+      "debug",
+      "info",
+      "warn",
+      "error",
+      "fatal",
     ]);
     if (this.logger && validLevels.has(level)) {
       type LogLevel = "trace" | "debug" | "info" | "warn" | "error" | "fatal";

@@ -459,7 +459,9 @@ export class QueueEngine implements IOqronModule {
       if (q.hooks?.onSuccess) {
         void Promise.resolve()
           .then(() => q.hooks!.onSuccess!(job as OqronJob, result))
-          .catch((e) => this.logger.error("onSuccess hook failed", { err: String(e) }));
+          .catch((e) =>
+            this.logger.error("onSuccess hook failed", { err: String(e) }),
+          );
       }
     } else {
       const errorObject = new Error(error ?? "Unknown error");
@@ -468,7 +470,9 @@ export class QueueEngine implements IOqronModule {
       if (q.hooks?.onFail) {
         void Promise.resolve()
           .then(() => q.hooks!.onFail!(job as OqronJob, errorObject))
-          .catch((e) => this.logger.error("onFail hook failed", { err: String(e) }));
+          .catch((e) =>
+            this.logger.error("onFail hook failed", { err: String(e) }),
+          );
       }
 
       // DLQ: invoke dead letter hook if enabled and retries exhausted

@@ -9,16 +9,16 @@ test("StallDetector triggers onStalled when lock is lost", async () => {
   const mockLock: ILockAdapter = {
     acquire: vi.fn(),
     release: vi.fn(),
-    extend: vi.fn(),
+    renew: vi.fn(),
     isOwner: vi.fn().mockResolvedValue(false),
   };
 
-  const logger: Logger = {
+  const logger = {
     debug: vi.fn(),
     info: vi.fn(),
     warn: vi.fn(),
     error: vi.fn(),
-  };
+  } as unknown as Logger;
 
   const detector = new StallDetector(mockLock, logger, 100);
   

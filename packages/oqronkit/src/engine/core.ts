@@ -41,6 +41,7 @@ export const Lock: ILockAdapter = createProxy(() => OqronContainer.get().lock);
  */
 let _redisClient: any = null;
 let _redisClientOwned = false; // true only when WE created it from a URL string
+
 import type { ICloseable } from "./types/engine.js";
 
 /** PostgreSQL adapters tracked for pool close on shutdown */

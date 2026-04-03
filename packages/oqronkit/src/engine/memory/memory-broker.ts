@@ -123,17 +123,17 @@ export class MemoryBroker implements IBrokerEngine {
   ): Promise<void> {
     const lock = this.activeLocks.get(id);
     const now = Date.now();
-    
+
     // Explicit expiration check: if lock naturally expired, delete it and reject extension
     if (lock && lock.expiresAt < now) {
       this.activeLocks.delete(id);
     }
-    
+
     const currentLock = this.activeLocks.get(id);
     if (!currentLock || currentLock.consumerId !== consumerId) {
       throw new Error(`Lock lost or stolen for entity ${id}`);
     }
-    
+
     currentLock.expiresAt = now + lockTtlMs;
   }
 
