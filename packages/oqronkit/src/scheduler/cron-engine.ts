@@ -3,6 +3,7 @@ import {
   CronContext,
   type CronDefinition,
   createLogger,
+  type DisabledBehavior,
   type IOqronModule,
   LagMonitor,
   type Logger,
@@ -58,6 +59,12 @@ export class SchedulerModule implements IOqronModule {
       keepFailedJobHistory?: boolean | number;
       shutdownTimeout?: number;
       lagMonitor?: { maxLagMs?: number; sampleIntervalMs?: number };
+      /**
+       * Module-level default disabled behavior for all cron definitions.
+       * Individual definitions can override this.
+       * @default "hold"
+       */
+      disabledBehavior?: DisabledBehavior;
     },
     private readonly container?: OqronContainer,
   ) {
@@ -343,12 +350,58 @@ export class SchedulerModule implements IOqronModule {
       const allSchedules = await this.di.storage.list<any>("schedules");
 
       const due = allSchedules.filter(
-        (s: any) => s.nextRunAt && new Date(s.nextRunAt) <= now && !s.paused,
+        (s: any) => s.nextRunAt && new Date(s.nextRunAt) <= now,
       );
 
       for (const record of due) {
         const def = this.schedules.find((s) => s.name === record.name);
         if (!def) continue;
+
+        // ── Disabled behavior enforcement ──────────────────────────────────
+        if (record.paused) {
+          const behavior = def.disabledBehavior ?? this.config?.disabledBehavior ?? "hold";
+
+          if (behavior === "skip") {
+            // Silently skip — don't fire, don't record
+            continue;
+          }
+
+          if (behavior === "reject") {
+            this.logger.warn("Cron fire rejected — instance is disabled", {
+              name: def.name,
+              behavior: "reject",
+            });
+            OqronEventBus.emit("job:fail", "cron", record.name, new Error(`Cron ${def.name} is disabled and configured to reject fires`));
+            continue;
+          }
+
+          // behavior === "hold" — save a paused job record so it's visible in the dashboard
+          const holdId = randomUUID();
+          await this.di.storage.save("jobs", holdId, {
+            id: holdId,
+            type: "cron",
+            queueName: "system_cron",
+            moduleName: def.name,
+            scheduleId: def.name,
+            status: "paused",
+            data: null,
+            opts: {},
+            attemptMade: 0,
+            progressPercent: 0,
+            workerId: this.nodeId,
+            tags: def.tags ?? [],
+            environment: this.environment ?? "default",
+            project: this.project ?? "default",
+            queuedAt: now,
+            triggeredBy: "cron",
+            logs: [{ level: "warn", msg: `Cron ${def.name} fired while disabled — job held`, ts: now }],
+            timeline: [{ ts: now, from: "waiting", to: "paused", reason: "Instance disabled — hold" }],
+            steps: [],
+            createdAt: now,
+          });
+          this.logger.info("Cron fire held — instance is disabled", { name: def.name, holdId });
+          continue;
+        }
 
         // CRITICAL: Compute and persist nextRunAt BEFORE firing.
         const nextRun = this.computeNextRun(def, now);

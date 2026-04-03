@@ -41,6 +41,7 @@ export { OqronRegistry } from "./registry.js";
 // ── Types ────────────────────────────────────────────────────────────────────
 export type {
   ClusteringConfig,
+  DisabledBehavior,
   OqronConfig,
   OqronStorageMode,
 } from "./types/config.types.js";

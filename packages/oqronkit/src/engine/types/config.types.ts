@@ -30,6 +30,15 @@ export interface ClusteringConfig {
 }
 
 /**
+ * Behavior when a disabled module/instance receives a new job or fire event.
+ *
+ * - `"hold"` — Accept job / record run, set status to "paused" (default)
+ * - `"skip"` — Silently skip execution without recording anything
+ * - `"reject"` — Throw an error / log a rejection
+ */
+export type DisabledBehavior = "hold" | "skip" | "reject";
+
+/**
  * Storage mode controls which adapter combination is used.
  *
  * - `"default"` — Everything in-memory. Single-process, no external dependencies.

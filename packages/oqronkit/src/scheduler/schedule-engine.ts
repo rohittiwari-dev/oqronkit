@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { RRule, rrulestr } from "rrule";
 import {
   createLogger,
+  type DisabledBehavior,
   type IOqronModule,
   LagMonitor,
   type Logger,
@@ -64,6 +65,12 @@ export class ScheduleEngine implements IOqronModule {
         ownedShards?: number[];
         region?: string;
       };
+      /**
+       * Module-level default disabled behavior for all schedule definitions.
+       * Individual definitions can override this.
+       * @default "hold"
+       */
+      disabledBehavior?: DisabledBehavior;
     },
     private readonly container?: OqronContainer,
   ) {
@@ -402,17 +409,60 @@ export class ScheduleEngine implements IOqronModule {
 
       const now = new Date();
       const allSchedules = await this.di.storage.list<any>("schedules");
-      const due = allSchedules
-        .filter((s) => s.nextRunAt && new Date(s.nextRunAt) <= now && !s.paused)
-        .map((s) => s.name)
+      const dueRecords = allSchedules
+        .filter((s) => s.nextRunAt && new Date(s.nextRunAt) <= now)
         // If using sharded leader, only process schedules that hash to our owned shards
-        .filter((name) =>
-          this.shardedLeader ? this.shardedLeader.ownsJob(name) : true,
+        .filter((s) =>
+          this.shardedLeader ? this.shardedLeader.ownsJob(s.name) : true,
         );
 
-      for (const name of due) {
-        const def = this.schedules.get(name);
+      for (const record of dueRecords) {
+        const def = this.schedules.get(record.name);
         if (!def) continue;
+
+        // ── Disabled behavior enforcement ──────────────────────────────────
+        if (record.paused) {
+          const behavior = def.disabledBehavior ?? this.config?.disabledBehavior ?? "hold";
+
+          if (behavior === "skip") {
+            continue;
+          }
+
+          if (behavior === "reject") {
+            this.logger.warn("Schedule fire rejected — instance is disabled", {
+              name: def.name,
+              behavior: "reject",
+            });
+            OqronEventBus.emit("job:fail", "system_schedule", record.name, new Error(`Schedule ${def.name} is disabled and configured to reject fires`));
+            continue;
+          }
+
+          // behavior === "hold"
+          const holdId = randomUUID();
+          await this.di.storage.save("jobs", holdId, {
+            id: holdId,
+            type: "schedule",
+            queueName: "system_schedule",
+            moduleName: def.name,
+            scheduleId: def.name,
+            status: "paused",
+            data: def.payload,
+            opts: {},
+            attemptMade: 0,
+            progressPercent: 0,
+            tags: def.tags ?? [],
+            environment: this.environment ?? "default",
+            project: this.project ?? "default",
+            queuedAt: now,
+            triggeredBy: "schedule",
+            logs: [{ level: "warn", msg: `Schedule ${def.name} fired while disabled — job held`, ts: now }],
+            timeline: [{ ts: now, from: "waiting", to: "paused", reason: "Instance disabled — hold" }],
+            steps: [],
+            createdAt: now,
+          });
+          this.logger.info("Schedule fire held — instance is disabled", { name: def.name, holdId });
+          continue;
+        }
 
         if (def.condition) {
           try {

@@ -28,6 +28,7 @@ export type {
   ClusteringConfig,
   CronDefinition,
   CronHooks,
+  DisabledBehavior,
   EveryConfig,
   ICronContext,
   IScheduleContext,

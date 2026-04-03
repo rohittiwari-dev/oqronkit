@@ -1,3 +1,4 @@
+import type { DisabledBehavior } from "../engine/types/config.types.js";
 import type { BrokerStrategy } from "../engine/types/engine.js";
 import type { OqronJob, OqronJobOptions } from "../engine/types/job.types.js";
 
@@ -72,10 +73,10 @@ export interface QueueConfig<T = any, R = any> {
   /**
    * Behavior when a job is added to this queue but the queue is disabled.
    * - "hold": Accept the job, place it in "paused" status (default)
+   * - "skip": Silently drop the job without enqueueing
    * - "reject": Throw an error explicitly rejecting the enqueue attempt
-   * - "ignore": Silently drop the job without enqueueing
    */
-  disabledBehavior?: "hold" | "reject" | "ignore";
+  disabledBehavior?: DisabledBehavior;
 
   /**
    * Auto-remove completed jobs after processing.

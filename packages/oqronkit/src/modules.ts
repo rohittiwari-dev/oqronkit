@@ -1,4 +1,4 @@
-import type { ClusteringConfig } from "./engine/types/config.types.js";
+import type { ClusteringConfig, DisabledBehavior } from "./engine/types/config.types.js";
 import type { BrokerStrategy } from "./engine/types/engine.js";
 import type { RemoveOnConfig } from "./engine/types/job.types.js";
 
@@ -36,6 +36,12 @@ export interface CronModuleConfig {
   lagMonitor?: { maxLagMs?: number; sampleIntervalMs?: number };
   /** Sharded leader election for multi-region cron distribution */
   clustering?: ClusteringConfig;
+  /**
+   * Default behavior when a disabled cron instance fires.
+   * Individual cron definitions can override this.
+   * @default "hold"
+   */
+  disabledBehavior?: DisabledBehavior;
 }
 
 export interface SchedulerModuleConfig {
@@ -55,6 +61,12 @@ export interface SchedulerModuleConfig {
   lagMonitor?: { maxLagMs?: number; sampleIntervalMs?: number };
   /** Sharded leader election for multi-region schedule distribution */
   clustering?: ClusteringConfig;
+  /**
+   * Default behavior when a disabled schedule instance fires.
+   * Individual schedule definitions can override this.
+   * @default "hold"
+   */
+  disabledBehavior?: DisabledBehavior;
 }
 
 export interface QueueModuleConfig {
@@ -85,6 +97,12 @@ export interface QueueModuleConfig {
   maxStalledCount?: number;
   /** Stalled check interval in ms. @default 30000 */
   stalledInterval?: number;
+  /**
+   * Default behavior when a disabled queue instance receives a new job.
+   * Individual queue definitions can override this.
+   * @default "hold"
+   */
+  disabledBehavior?: DisabledBehavior;
 }
 
 // ── Discriminated Union (resolved module definitions) ───────────────────────

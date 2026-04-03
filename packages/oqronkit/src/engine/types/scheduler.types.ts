@@ -1,3 +1,4 @@
+import type { DisabledBehavior } from "./config.types.js";
 import type {
   MissedFirePolicy,
   OverlapPolicy,
@@ -80,4 +81,10 @@ export interface ScheduleDefinition<TPayload = unknown> {
   payload?: TPayload;
   status?: "active" | "paused";
   maxConcurrent?: number;
+  /**
+   * Behavior when this schedule fires while disabled/paused.
+   * Overrides the module-level `disabledBehavior` if set.
+   * @default "hold"
+   */
+  disabledBehavior?: DisabledBehavior;
 }

@@ -37,13 +37,15 @@ export function queue<T = any, R = any>(
       const instanceState = await di.storage.get<{enabled: boolean}>("queue_instances", config.name);
       const isInstanceEnabled = instanceState ? instanceState.enabled : true;
 
-      const behavior = config.disabledBehavior ?? "hold";
+      // Resolve disabledBehavior: per-queue → module-level → "hold" default
+      const moduleConfig = di.config?.modules?.find?.((m: any) => m.module === "queue") as any;
+      const behavior = config.disabledBehavior ?? moduleConfig?.disabledBehavior ?? "hold";
 
       if (!isInstanceEnabled && behavior === "reject") {
          throw new Error(`Queue ${config.name} is disabled and configured to reject new jobs`);
       }
 
-      if (!isInstanceEnabled && behavior === "ignore") {
+      if (!isInstanceEnabled && behavior === "skip") {
          // Silently drop
          return { id: jobId, status: "completed" } as any; // Mock response
       }
