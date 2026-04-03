@@ -20,6 +20,7 @@ export class LeaderElection {
     const jitter = Math.floor(baseInterval * 0.2 * (Math.random() * 2 - 1));
     const interval = baseInterval + jitter;
     this.electionTimer = setInterval(() => void this.campaign(), interval);
+    this.electionTimer.unref();
   }
 
   private async campaign(): Promise<void> {

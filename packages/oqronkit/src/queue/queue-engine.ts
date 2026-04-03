@@ -18,7 +18,10 @@ export class QueueEngine implements IOqronModule {
   private running = false;
   private timers: NodeJS.Timeout[] = [];
   private workerIdStr = randomUUID();
+  /** All active job promises — used for drain during shutdown */
   private activeJobs = new Map<string, Promise<void>>();
+  /** Per-queue active job tracking — ensures concurrency is isolated per queue */
+  private activeJobsByQueue = new Map<string, Set<string>>();
   /** Active heartbeat workers keyed by job ID — for crash-safe lock renewal */
   private heartbeats = new Map<string, HeartbeatWorker>();
   /** AbortControllers keyed by job ID — for mid-execution cancellation */
@@ -164,7 +167,10 @@ export class QueueEngine implements IOqronModule {
       const timeout = this.config.queue?.shutdownTimeout ?? 25000;
       await Promise.race([
         Promise.allSettled(allActive),
-        new Promise((r) => setTimeout(r, timeout)),
+        new Promise((r) => {
+          const h = setTimeout(r, timeout);
+          h.unref();
+        }),
       ]);
     }
   }
@@ -187,7 +193,9 @@ export class QueueEngine implements IOqronModule {
     const concurrency = q.concurrency ?? this.config.queue?.concurrency ?? 5;
     const lockTtlMs = q.lockTtlMs ?? this.config.queue?.lockTtlMs ?? 30000;
 
-    const freeSlots = concurrency - this.activeJobs.size;
+    // Per-queue concurrency: count only active jobs for THIS queue, not all queues
+    const activeForQueue = this.activeJobsByQueue.get(q.name)?.size ?? 0;
+    const freeSlots = concurrency - activeForQueue;
     if (freeSlots <= 0) return;
 
     // 1. Claim IDs from Broker with ordering strategy
@@ -224,8 +232,15 @@ export class QueueEngine implements IOqronModule {
         continue;
       }
 
+      // Track in per-queue active set
+      if (!this.activeJobsByQueue.has(q.name)) {
+        this.activeJobsByQueue.set(q.name, new Set());
+      }
+      this.activeJobsByQueue.get(q.name)!.add(id);
+
       const p = this.executeJob(job, q).finally(() => {
         this.activeJobs.delete(id);
+        this.activeJobsByQueue.get(q.name)?.delete(id);
       });
       this.activeJobs.set(id, p);
     }

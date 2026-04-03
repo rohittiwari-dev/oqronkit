@@ -116,9 +116,13 @@ export async function handleTrigger(
 
 // ── Admin Handlers ─────────────────────────────────────────────────────────
 
+let _manager: OqronManager | null = null;
 function getManager(): OqronManager | null {
   if (!_config) return null;
-  return OqronManager.from(_config);
+  if (!_manager) {
+    _manager = OqronManager.from(_config);
+  }
+  return _manager;
 }
 
 export async function handleAdminSystem(

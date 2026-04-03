@@ -48,6 +48,7 @@ export class HeartbeatWorker {
         });
       }
     }, pingInterval);
+    this.heartbeatTimer.unref();
 
     return true;
   }

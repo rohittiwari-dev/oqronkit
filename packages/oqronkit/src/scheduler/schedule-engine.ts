@@ -162,6 +162,7 @@ export class ScheduleEngine implements IOqronModule {
     this.tickTimer = setInterval(() => {
       void this.tick();
     }, interval);
+    this.tickTimer.unref();
 
     this.logger.info("Schedule engine started", {
       nodeId: this.nodeId,
@@ -211,7 +212,10 @@ export class ScheduleEngine implements IOqronModule {
         `Schedule Engine draining ${activePromises.length} active jobs...`,
       );
       const drainMs = this.config?.shutdownTimeout ?? 25_000;
-      const drainTimeout = new Promise<void>((r) => setTimeout(r, drainMs));
+      const drainTimeout = new Promise<void>((r) => {
+        const h = setTimeout(r, drainMs);
+        h.unref();
+      });
       await Promise.race([Promise.allSettled(activePromises), drainTimeout]);
     }
 
@@ -299,19 +303,51 @@ export class ScheduleEngine implements IOqronModule {
 
   private async handleLeaderInit(): Promise<void> {
     this.logger.info("Schedule Engine: Performing leader initialization...");
-    this.stallDetector.start(
-      () => {
-        return Array.from(this.activeJobs.values())
-          .filter((job) => job.worker !== undefined)
-          .map((job) => ({
-            key: job.lockKey,
-            ownerId: this.nodeId,
-          }));
-      },
-      (key: string) => {
-        this.logger.warn("Local stall detected", { key });
-      },
-    );
+
+    // Note: StallDetector is already started in start() with abort-capable
+    // callbacks. Do NOT re-initialize here — it would overwrite the abort
+    // callback with a weaker log-only version, silently disabling crash recovery.
+
+    // ── Missed-Fire Recovery ──────────────────────────────────────────────
+    // Check if any recurring schedules missed their fire window during downtime.
+    // One-shot schedules (runAt/runAfter) are skipped — they should only fire once.
+    try {
+      const allSchedules = await this.di.storage.list<any>("schedules");
+      const now = new Date();
+
+      for (const record of allSchedules) {
+        const def = this.schedules.get(record.name);
+        if (!def) continue;
+
+        // Skip one-shot schedules — they are not recurring
+        if (def.runAt || def.runAfter) continue;
+
+        // If nextRunAt is in the past and the schedule isn't paused, it missed
+        if (
+          record.nextRunAt &&
+          !record.paused &&
+          new Date(record.nextRunAt) < now
+        ) {
+          this.logger.info("Triggering recovery for missed schedule", {
+            name: def.name,
+            missedAt: record.nextRunAt,
+          });
+          void this.fire(def);
+
+          // Advance nextRunAt so we don't re-fire on the next tick
+          const nextRun = this.computeNextRun(def, now);
+          if (nextRun) {
+            await this.di.storage.save("schedules", def.name, {
+              ...record,
+              nextRunAt: nextRun,
+              lastRunAt: now,
+            });
+          }
+        }
+      }
+    } catch (err) {
+      this.logger.error("Missed-fire recovery failed", { err: String(err) });
+    }
   }
 
   private async tick(): Promise<void> {

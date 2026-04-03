@@ -63,6 +63,7 @@ export function queue<T = any, R = any>(
           di.storage,
           jobId,
           opts!.dependsOn!,
+          di.lock,
         );
         // Don't publish to broker — job stays in waiting-children until parents finish
       } else {

@@ -25,7 +25,7 @@ export class TelemetryManager {
   private jobsCompletedTotal = new Map<string, number>();
   private jobsFailedTotal = new Map<string, number>();
   private jobsActiveGauge = new Map<string, number>();
-  private jobDurationsMs: Array<{ schedule: string; duration: number }> = [];
+  private jobDurationsMs: Array<{ schedule: string; duration: number; ts: number }> = [];
 
   // Track start times so we can compute duration on completion
   private jobStartTimes = new Map<string, { ts: number; schedule: string }>();
@@ -66,12 +66,17 @@ export class TelemetryManager {
     this.decrement(this.jobsActiveGauge, schedule);
 
     if (entry) {
-      const duration = Date.now() - entry.ts;
-      this.jobDurationsMs.push({ schedule, duration });
+      const now = Date.now();
+      const duration = now - entry.ts;
+      this.jobDurationsMs.push({ schedule, duration, ts: now });
       this.jobStartTimes.delete(jobId);
 
-      if (this.jobDurationsMs.length > 10_000) {
-        this.jobDurationsMs = this.jobDurationsMs.slice(-5_000);
+      if (this.jobDurationsMs.length > 2000) {
+        const cutoff = now - 5 * 60 * 1000;
+        this.jobDurationsMs = this.jobDurationsMs.filter(d => d.ts > cutoff);
+        if (this.jobDurationsMs.length > 2000) {
+          this.jobDurationsMs = this.jobDurationsMs.slice(-2000);
+        }
       }
     }
   }
@@ -84,8 +89,9 @@ export class TelemetryManager {
     this.decrement(this.jobsActiveGauge, schedule);
 
     if (entry) {
-      const duration = Date.now() - entry.ts;
-      this.jobDurationsMs.push({ schedule, duration });
+      const now = Date.now();
+      const duration = now - entry.ts;
+      this.jobDurationsMs.push({ schedule, duration, ts: now });
       this.jobStartTimes.delete(jobId);
     }
   }
@@ -161,7 +167,9 @@ export class TelemetryManager {
 
     // ── Duration summary (p50, p95, p99) ──
     if (this.jobDurationsMs.length > 0) {
-      const schedules = new Set(this.jobDurationsMs.map((d) => d.schedule));
+      const cutoff = Date.now() - 5 * 60 * 1000;
+      const recentDurations = this.jobDurationsMs.filter(d => d.ts > cutoff);
+      const schedules = new Set(recentDurations.map((d) => d.schedule));
 
       lines.push("");
       lines.push(
@@ -170,7 +178,7 @@ export class TelemetryManager {
       lines.push("# TYPE oqronkit_job_duration_ms summary");
 
       for (const sched of schedules) {
-        const durations = this.jobDurationsMs
+        const durations = recentDurations
           .filter((d) => d.schedule === sched)
           .map((d) => d.duration)
           .sort((a, b) => a - b);
