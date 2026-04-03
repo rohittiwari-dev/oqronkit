@@ -1,4 +1,8 @@
-import type { IBrokerEngine, ILockAdapter, IStorageEngine } from "../types/engine.js";
+import type {
+  IBrokerEngine,
+  ILockAdapter,
+  IStorageEngine,
+} from "../types/engine.js";
 import type { OqronJob } from "../types/job.types.js";
 
 /**
@@ -141,4 +145,3 @@ export class DependencyResolver {
     }
   }
 }
-

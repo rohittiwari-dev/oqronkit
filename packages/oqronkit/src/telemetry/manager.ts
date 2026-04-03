@@ -25,7 +25,11 @@ export class TelemetryManager {
   private jobsCompletedTotal = new Map<string, number>();
   private jobsFailedTotal = new Map<string, number>();
   private jobsActiveGauge = new Map<string, number>();
-  private jobDurationsMs: Array<{ schedule: string; duration: number; ts: number }> = [];
+  private jobDurationsMs: Array<{
+    schedule: string;
+    duration: number;
+    ts: number;
+  }> = [];
 
   // Track start times so we can compute duration on completion
   private jobStartTimes = new Map<string, { ts: number; schedule: string }>();
@@ -73,7 +77,7 @@ export class TelemetryManager {
 
       if (this.jobDurationsMs.length > 2000) {
         const cutoff = now - 5 * 60 * 1000;
-        this.jobDurationsMs = this.jobDurationsMs.filter(d => d.ts > cutoff);
+        this.jobDurationsMs = this.jobDurationsMs.filter((d) => d.ts > cutoff);
         if (this.jobDurationsMs.length > 2000) {
           this.jobDurationsMs = this.jobDurationsMs.slice(-2000);
         }
@@ -168,7 +172,7 @@ export class TelemetryManager {
     // ── Duration summary (p50, p95, p99) ──
     if (this.jobDurationsMs.length > 0) {
       const cutoff = Date.now() - 5 * 60 * 1000;
-      const recentDurations = this.jobDurationsMs.filter(d => d.ts > cutoff);
+      const recentDurations = this.jobDurationsMs.filter((d) => d.ts > cutoff);
       const schedules = new Set(recentDurations.map((d) => d.schedule));
 
       lines.push("");

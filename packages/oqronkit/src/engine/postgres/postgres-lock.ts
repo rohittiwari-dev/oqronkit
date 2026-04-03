@@ -121,4 +121,3 @@ export class PostgresLock implements ILockAdapter {
     if (this.pool) await this.pool.end();
   }
 }
-
