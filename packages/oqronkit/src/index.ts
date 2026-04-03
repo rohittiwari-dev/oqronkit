@@ -1,5 +1,5 @@
-import fs from "node:fs/promises";
-import path from "node:path";
+import { access, readdir } from "node:fs/promises";
+import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { initEngine, Storage, stopEngine } from "./engine/core.js";
 import {
@@ -88,11 +88,80 @@ export {
   schedule,
 } from "./scheduler/index.js";
 
+// ── Trigger Auto-Discovery ──────────────────────────────────────────────────
+
+/** Well-known directories checked when `triggers` is not set */
+const TRIGGER_PROBE_PATHS = ["src/triggers", "triggers", "src/jobs", "jobs"];
+
+/** Recursively import all .ts/.js files in a directory */
+async function scanDir(dir: string): Promise<number> {
+  let count = 0;
+  const entries = await readdir(dir, { withFileTypes: true });
+  for (const entry of entries) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      count += await scanDir(full);
+    } else if (entry.isFile() && /\.(js|ts|mjs|cjs)$/.test(entry.name)) {
+      await import(pathToFileURL(full).toString());
+      count++;
+      ``;
+    }
+  }
+  return count;
+}
+
+async function discoverTriggers(
+  config: ValidatedConfig,
+  cwd: string,
+  logger: Logger,
+): Promise<void> {
+  // Explicitly disabled
+  if (config.triggers === false) return;
+
+  // Explicit path provided
+  if (typeof config.triggers === "string") {
+    const resolved = path.resolve(cwd, config.triggers);
+    try {
+      await access(resolved);
+      const count = await scanDir(resolved);
+      logger.info(`Loaded ${count} trigger file(s) from ${config.triggers}`);
+    } catch {
+      logger.warn(
+        `Triggers directory "${config.triggers}" not found at ${resolved}. ` +
+          `Ensure trigger files are imported manually before OqronKit.init().`,
+      );
+    }
+    return;
+  }
+
+  // Auto-detect: probe common directories
+  for (const probe of TRIGGER_PROBE_PATHS) {
+    const resolved = path.resolve(cwd, probe);
+    try {
+      await access(resolved);
+      const count = await scanDir(resolved);
+      logger.info(`Auto-discovered ${count} trigger file(s) from ${probe}/`);
+      return;
+    } catch {
+      // Not found — try next
+    }
+  }
+
+  // Nothing found — warn with guidance
+  logger.warn(
+    "No triggers directory found. OqronKit checked: " +
+      TRIGGER_PROBE_PATHS.join(", ") +
+      ". To fix: (1) create a triggers/ directory, (2) set config.triggers to an explicit path, " +
+      "or (3) import job files manually before OqronKit.init(). " +
+      "Set triggers: false to silence this warning.",
+  );
+}
+
 export const OqronKit = {
   /**
-   * Initialize OqronKit: loads config, auto-discovers jobs, and boots modules.
+   * Initialize OqronKit: loads config and boots modules.
    *
-   * @param opts.cwd - Working directory for config file lookup and jobsDir resolution
+   * @param opts.cwd - Working directory for config file lookup
    * @param opts.config - Explicit config object (skips loadConfig)
    */
   async init(opts?: { cwd?: string; config?: OqronConfig }): Promise<void> {
@@ -119,30 +188,14 @@ export const OqronKit = {
       }
     }
 
-    // --- Auto-discover jobs ---
-    if (_config.jobsDir) {
-      const jobsPath = path.resolve(cwd, _config.jobsDir);
-      try {
-        async function scan(dir: string) {
-          const entries = await fs.readdir(dir, { withFileTypes: true });
-          for (const entry of entries) {
-            const fullPath = path.join(dir, entry.name);
-            if (entry.isDirectory()) await scan(fullPath);
-            else if (entry.isFile() && /\.(js|ts|mjs|cjs)$/.test(entry.name)) {
-              await import(pathToFileURL(fullPath).toString());
-            }
-          }
-        }
-        await scan(jobsPath);
-      } catch (_err) {}
-    }
+    // --- Auto-discover trigger/job definitions ---
+    await discoverTriggers(_config, cwd, _logger);
 
     // --- Boot modules from normalized definitions ---
     const cronConf = getModuleConfig<CronModuleDef>(_config.modules, "cron");
     if (cronConf) {
-      const { SchedulerModule, _drainPending } = await import(
-        "./scheduler/index.js"
-      );
+      const { SchedulerModule, _drainPending } =
+        await import("./scheduler/index.js");
       const schedules = _drainPending();
       for (const s of schedules)
         s.tags = [...new Set([...(s.tags ?? []), ..._config.tags])];
@@ -161,9 +214,8 @@ export const OqronKit = {
       "scheduler",
     );
     if (schedulerConf) {
-      const { ScheduleEngine, _drainPendingSchedules } = await import(
-        "./scheduler/index.js"
-      );
+      const { ScheduleEngine, _drainPendingSchedules } =
+        await import("./scheduler/index.js");
       const schedules = _drainPendingSchedules();
       for (const s of schedules)
         s.tags = [...new Set([...(s.tags ?? []), ..._config.tags])];
@@ -276,5 +328,3 @@ export const OqronKit = {
     return TelemetryManager.getInstance();
   },
 };
-
-export default OqronKit;

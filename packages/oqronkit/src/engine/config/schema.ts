@@ -120,8 +120,8 @@ export const OqronConfigSchema = z.object({
   // Modules — accepts any[] at the Zod layer; runtime normalizes before use
   modules: z.array(z.any()).default([]),
 
-  // Auto-discovery directory
-  jobsDir: z.string().default("./src/jobs"),
+  // Trigger auto-discovery: string path, false to disable, or omit for auto-detect
+  triggers: z.union([z.string(), z.literal(false)]).optional(),
 
   // Global tags
   tags: z.array(z.string()).default([]),

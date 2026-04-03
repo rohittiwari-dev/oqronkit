@@ -22,13 +22,7 @@
 
 import { mkdirSync } from "node:fs";
 import express from "express";
-import {
-  cronModule,
-  OqronKit,
-  OqronManager,
-  queueModule,
-  scheduleModule,
-} from "oqronkit";
+import { cronModule, OqronKit, queueModule, scheduleModule } from "oqronkit";
 
 // ─── 1. Prepare data directory ───────────────────────────────────────────────
 mkdirSync("data", { recursive: true });
@@ -49,79 +43,79 @@ async function main(): Promise<void> {
     },
   });
 
-  // ── Dynamic Scheduling Demo ────────────────────────────────────────────
-  // Schedule a full onboarding drip campaign for a simulated new user signup
-  const { scheduleOnboardingDrip } = await import("./jobs/scheduler.js");
-  const userId = `u_${Math.random().toString(36).slice(2, 8)}`;
-  await scheduleOnboardingDrip(userId, "Rohit Tiwari", "rohit@example.com");
-  console.log(`\n📧 Onboarding drip campaign scheduled for user: ${userId}`);
+  // // ── Dynamic Scheduling Demo ────────────────────────────────────────────
+  // // Schedule a full onboarding drip campaign for a simulated new user signup
+  // const { scheduleOnboardingDrip } = await import("./jobs/scheduler.js");
+  // const userId = `u_${Math.random().toString(36).slice(2, 8)}`;
+  // await scheduleOnboardingDrip(userId, "Rohit Tiwari", "rohit@example.com");
+  // console.log(`\n📧 Onboarding drip campaign scheduled for user: ${userId}`);
 
-  // ── Dynamic Trial Start Demo ───────────────────────────────────────────
-  // Schedule trial expiration for a simulated new tenant
-  const { startTrial } = await import("./jobs/scheduler.js");
-  await startTrial("tenant_acme", "Pro Plan", "admin@acme.com");
-  console.log("⏰ Trial expiration scheduled for tenant: tenant_acme\n");
+  // // ── Dynamic Trial Start Demo ───────────────────────────────────────────
+  // // Schedule trial expiration for a simulated new tenant
+  // const { startTrial } = await import("./jobs/scheduler.js");
+  // await startTrial("tenant_acme", "Pro Plan", "admin@acme.com");
+  // console.log("⏰ Trial expiration scheduled for tenant: tenant_acme\n");
 
-  // ── Task Queue Demo — Enqueue some background tasks ────────────────────
-  const { handleImageUpload, sendDelayedWelcomeEmail, dispatchPaymentWebhook } =
-    await import("./jobs/task-queues.js");
+  // // ── Task Queue Demo — Enqueue some background tasks ────────────────────
+  // const { handleImageUpload, sendDelayedWelcomeEmail, dispatchPaymentWebhook } =
+  //   await import("./jobs/task-queues.js");
 
-  await handleImageUpload("img_001", "https://uploads.example.com/photo.jpg");
-  console.log("🖼️  Image processing job enqueued: img_001");
+  // await handleImageUpload("img_001", "https://uploads.example.com/photo.jpg");
+  // console.log("🖼️  Image processing job enqueued: img_001");
 
-  await sendDelayedWelcomeEmail("rohit@example.com", "Rohit");
-  console.log("📧 Delayed welcome email enqueued (5s delay)");
+  // await sendDelayedWelcomeEmail("rohit@example.com", "Rohit");
+  // console.log("📧 Delayed welcome email enqueued (5s delay)");
 
-  await dispatchPaymentWebhook(
-    "https://hooks.example.com/payment",
-    "order_42",
-    99.99,
-  );
-  console.log("🔔 Payment webhook enqueued: order_42");
+  // await dispatchPaymentWebhook(
+  //   "https://hooks.example.com/payment",
+  //   "order_42",
+  //   99.99,
+  // );
+  // console.log("🔔 Payment webhook enqueued: order_42");
 
-  // ─── 3. Express HTTP server ────────────────────────────────────────────
+  // // ─── 3. Express HTTP server ────────────────────────────────────────────
   const app = express();
   app.use(express.json());
 
-  // Mount OqronKit monitoring routes — /health, /events, /jobs/:id/trigger, etc.
+  // // Mount OqronKit monitoring routes — /health, /events, /jobs/:id/trigger, etc.
   app.use("/api/oqron", OqronKit.expressRouter());
 
-  // Basic root info
-  app.get("/", (_req, res) => {
-    res.json({
-      name: "OqronKit Enterprise Backend Demo",
-      version: "1.0.0",
-      modules: ["cron", "scheduler", "taskQueue", "worker"],
-      endpoints: {
-        health: "GET  /api/oqron/health",
-        events: "GET  /api/oqron/events?limit=50",
-        trigger: "POST /api/oqron/jobs/:id/trigger",
-        metrics: "GET  /api/oqron/metrics",
-      },
-    });
-  });
+  // // Basic root info
+  // app.get("/", (_req, res) => {
+  //   res.json({
+  //     name: "OqronKit Enterprise Backend Demo",
+  //     version: "1.0.0",
+  //     modules: ["cron", "scheduler", "taskQueue", "worker"],
+  //     endpoints: {
+  //       health: "GET  /api/oqron/health",
+  //       events: "GET  /api/oqron/events?limit=50",
+  //       trigger: "POST /api/oqron/jobs/:id/trigger",
+  //       metrics: "GET  /api/oqron/metrics",
+  //     },
+  //   });
+  // });
 
-  // Example API route: trigger image processing
-  app.post("/api/images/process", async (req, res) => {
-    try {
-      const { imageId, sourceUrl } = req.body;
-      await handleImageUpload(imageId, sourceUrl);
-      res.status(202).json({ message: "Image processing started", imageId });
-    } catch (err: unknown) {
-      res.status(500).json({ error: (err as Error).message });
-    }
-  });
+  // // Example API route: trigger image processing
+  // app.post("/api/images/process", async (req, res) => {
+  //   try {
+  //     const { imageId, sourceUrl } = req.body;
+  //     await handleImageUpload(imageId, sourceUrl);
+  //     res.status(202).json({ message: "Image processing started", imageId });
+  //   } catch (err: unknown) {
+  //     res.status(500).json({ error: (err as Error).message });
+  //   }
+  // });
 
-  // Example API route: cancel a running job (AbortController support)
-  app.delete("/api/jobs/:jobId", async (req, res) => {
-    try {
-      const mgr = OqronManager.from(OqronKit.getConfig());
-      await mgr.cancelJob(req.params.jobId);
-      res.json({ message: "Job cancelled", jobId: req.params.jobId });
-    } catch (err: unknown) {
-      res.status(500).json({ error: (err as Error).message });
-    }
-  });
+  // // Example API route: cancel a running job (AbortController support)
+  // app.delete("/api/jobs/:jobId", async (req, res) => {
+  //   try {
+  //     const mgr = OqronManager.from(OqronKit.getConfig());
+  //     await mgr.cancelJob(req.params.jobId);
+  //     res.json({ message: "Job cancelled", jobId: req.params.jobId });
+  //   } catch (err: unknown) {
+  //     res.status(500).json({ error: (err as Error).message });
+  //   }
+  // });
 
   const PORT = Number(process.env.PORT ?? 4000);
   app.listen(PORT, () => {

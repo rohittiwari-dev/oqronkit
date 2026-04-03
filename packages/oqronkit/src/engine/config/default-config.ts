@@ -18,7 +18,7 @@ export function reconfigureConfig(config: OqronConfig): ValidatedConfig {
 
     modules,
 
-    jobsDir: config.jobsDir ?? "./src/jobs",
+    triggers: config.triggers,
     tags: config.tags ?? [],
 
     logger:

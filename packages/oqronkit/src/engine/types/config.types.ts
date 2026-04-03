@@ -89,10 +89,13 @@ export interface OqronConfig {
   modules?: OqronModuleInput[];
 
   /**
-   * Directory to auto-discover job definition files from.
-   * @default "./src/jobs"
+   * Directory to auto-discover trigger/job definition files (scanned recursively).
+   *
+   * - `string` — explicit path relative to cwd (e.g. `"./src/triggers"`)
+   * - `false`  — disable auto-discovery entirely (use manual imports)
+   * - omitted  — auto-detect common directories: `triggers/`, `jobs/`, `src/triggers/`, `src/jobs/`
    */
-  jobsDir?: string;
+  triggers?: string | false;
 
   /**
    * Global tags applied to every job processed by this node.
