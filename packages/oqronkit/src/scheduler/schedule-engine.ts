@@ -429,6 +429,18 @@ export class ScheduleEngine implements IOqronModule {
         if (record.paused) {
           const behavior = def.disabledBehavior ?? this.config?.disabledBehavior ?? "hold";
 
+          // ALL disabled behaviors must advance the nextRunAt, otherwise we infinite-loop 
+          // every tick since the record stays in the past.
+          const nextRun = this.computeNextRun(def, now);
+          if (nextRun) {
+            const existing = (await this.di.storage.get<any>("schedules", def.name)) || {};
+            await this.di.storage.save("schedules", def.name, {
+              ...existing,
+              nextRunAt: nextRun,
+              lastRunAt: now,
+            });
+          }
+
           if (behavior === "skip") {
             continue;
           }
@@ -469,26 +481,19 @@ export class ScheduleEngine implements IOqronModule {
 
           // Prune excess held jobs for this definition (FIFO — oldest removed first)
           const maxHeld = this.config?.maxHeldJobs ?? 100;
-          const allJobs = await this.di.storage.list<any>("jobs");
-          const heldJobs = allJobs
-            .filter((j: any) => j.moduleName === def.name && j.status === "paused" && j.pausedReason === "disabled-hold")
-            .sort((a: any, b: any) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+          const heldJobs = await this.di.storage.list<any>("jobs", {
+            moduleName: def.name,
+            status: "paused",
+            pausedReason: "disabled-hold",
+          }, { limit: 100_000 });
+          
+          heldJobs.sort((a: any, b: any) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+
           if (heldJobs.length > maxHeld) {
             const toRemove = heldJobs.slice(0, heldJobs.length - maxHeld);
             for (const old of toRemove) {
               await this.di.storage.delete("jobs", old.id);
             }
-          }
-
-          // Advance nextRunAt so this schedule doesn't re-fire on the very next tick
-          const heldNextRun = this.computeNextRun(def, now);
-          if (heldNextRun) {
-            const existing = (await this.di.storage.get<any>("schedules", def.name)) || {};
-            await this.di.storage.save("schedules", def.name, {
-              ...existing,
-              nextRunAt: heldNextRun,
-              lastRunAt: now,
-            });
           }
 
           this.logger.info("Schedule fire held — instance is disabled", { name: def.name, holdId });
