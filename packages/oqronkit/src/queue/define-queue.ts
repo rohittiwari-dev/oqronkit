@@ -84,6 +84,25 @@ export function queue<T = any, R = any>(
       // 1. Storage
       await di.storage.save("jobs", jobId, job);
 
+      // 1.5 Handle pruning for held jobs
+      if (!isInstanceEnabled && behavior === "hold") {
+        const maxHeld = moduleConfig?.maxHeldJobs ?? 100;
+        const heldJobs = await di.storage.list<any>("jobs", {
+          moduleName: config.name,
+          status: "paused",
+          pausedReason: "disabled-hold",
+        }, { limit: 100_000 });
+        
+        heldJobs.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+
+        if (heldJobs.length > maxHeld) {
+          const toRemove = heldJobs.slice(0, heldJobs.length - maxHeld);
+          for (const old of toRemove) {
+            await di.storage.delete("jobs", old.id);
+          }
+        }
+      }
+
       // 2. Register dependencies (add childId to parent jobs)
       if (hasDeps) {
         await DependencyResolver.registerDependencies(
