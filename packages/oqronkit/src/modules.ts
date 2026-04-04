@@ -42,6 +42,12 @@ export interface CronModuleConfig {
    * @default "hold"
    */
   disabledBehavior?: DisabledBehavior;
+  /**
+   * Maximum number of held jobs to keep per definition when disabledBehavior is "hold".
+   * Oldest held jobs are pruned when this limit is exceeded.
+   * @default 100
+   */
+  maxHeldJobs?: number;
 }
 
 export interface SchedulerModuleConfig {
@@ -67,6 +73,12 @@ export interface SchedulerModuleConfig {
    * @default "hold"
    */
   disabledBehavior?: DisabledBehavior;
+  /**
+   * Maximum number of held jobs to keep per definition when disabledBehavior is "hold".
+   * Oldest held jobs are pruned when this limit is exceeded.
+   * @default 100
+   */
+  maxHeldJobs?: number;
 }
 
 export interface QueueModuleConfig {
@@ -103,6 +115,12 @@ export interface QueueModuleConfig {
    * @default "hold"
    */
   disabledBehavior?: DisabledBehavior;
+  /**
+   * Maximum number of held jobs to keep per definition when disabledBehavior is "hold".
+   * Oldest held jobs are pruned when this limit is exceeded.
+   * @default 100
+   */
+  maxHeldJobs?: number;
 }
 
 // ── Discriminated Union (resolved module definitions) ───────────────────────

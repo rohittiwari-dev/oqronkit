@@ -62,6 +62,7 @@ export function queue<T = any, R = any>(
             : opts?.delay
               ? "delayed"
               : "waiting",
+        pausedReason: !isInstanceEnabled && behavior === "hold" ? "disabled-hold" : undefined,
         data,
         opts: opts ?? {},
         attemptMade: 0,

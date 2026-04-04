@@ -8,8 +8,10 @@ import type {
 
 // ── Resolved Module Config Defaults ─────────────────────────────────────────
 
-const DEFAULT_CRON: Omit<Required<CronModuleDef>, "clustering"> & {
+const DEFAULT_CRON: Omit<Required<CronModuleDef>, "clustering" | "disabledBehavior" | "maxHeldJobs"> & {
   clustering?: CronModuleDef["clustering"];
+  disabledBehavior?: CronModuleDef["disabledBehavior"];
+  maxHeldJobs?: CronModuleDef["maxHeldJobs"];
 } = {
   module: "cron",
   timezone: "UTC",
@@ -23,8 +25,10 @@ const DEFAULT_CRON: Omit<Required<CronModuleDef>, "clustering"> & {
   lagMonitor: { maxLagMs: 5000, sampleIntervalMs: 1000 },
 };
 
-const DEFAULT_SCHEDULER: Omit<Required<SchedulerModuleDef>, "clustering"> & {
+const DEFAULT_SCHEDULER: Omit<Required<SchedulerModuleDef>, "clustering" | "disabledBehavior" | "maxHeldJobs"> & {
   clustering?: SchedulerModuleDef["clustering"];
+  disabledBehavior?: SchedulerModuleDef["disabledBehavior"];
+  maxHeldJobs?: SchedulerModuleDef["maxHeldJobs"];
 } = {
   module: "scheduler",
   tickInterval: 1000,
@@ -36,7 +40,10 @@ const DEFAULT_SCHEDULER: Omit<Required<SchedulerModuleDef>, "clustering"> & {
   lagMonitor: { maxLagMs: 5000, sampleIntervalMs: 1000 },
 };
 
-const DEFAULT_QUEUE: Required<QueueModuleDef> = {
+const DEFAULT_QUEUE: Omit<Required<QueueModuleDef>, "disabledBehavior" | "maxHeldJobs"> & {
+  disabledBehavior?: QueueModuleDef["disabledBehavior"];
+  maxHeldJobs?: QueueModuleDef["maxHeldJobs"];
+} = {
   module: "queue",
   concurrency: 5,
   heartbeatMs: 5000,

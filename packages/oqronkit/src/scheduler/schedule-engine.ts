@@ -71,6 +71,11 @@ export class ScheduleEngine implements IOqronModule {
        * @default "hold"
        */
       disabledBehavior?: DisabledBehavior;
+      /**
+       * Maximum held jobs per definition when disabledBehavior is "hold".
+       * @default 100
+       */
+      maxHeldJobs?: number;
     },
     private readonly container?: OqronContainer,
   ) {
@@ -446,6 +451,7 @@ export class ScheduleEngine implements IOqronModule {
             moduleName: def.name,
             scheduleId: def.name,
             status: "paused",
+            pausedReason: "disabled-hold",
             data: def.payload,
             opts: {},
             attemptMade: 0,
@@ -460,6 +466,31 @@ export class ScheduleEngine implements IOqronModule {
             steps: [],
             createdAt: now,
           });
+
+          // Prune excess held jobs for this definition (FIFO — oldest removed first)
+          const maxHeld = this.config?.maxHeldJobs ?? 100;
+          const allJobs = await this.di.storage.list<any>("jobs");
+          const heldJobs = allJobs
+            .filter((j: any) => j.moduleName === def.name && j.status === "paused" && j.pausedReason === "disabled-hold")
+            .sort((a: any, b: any) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+          if (heldJobs.length > maxHeld) {
+            const toRemove = heldJobs.slice(0, heldJobs.length - maxHeld);
+            for (const old of toRemove) {
+              await this.di.storage.delete("jobs", old.id);
+            }
+          }
+
+          // Advance nextRunAt so this schedule doesn't re-fire on the very next tick
+          const heldNextRun = this.computeNextRun(def, now);
+          if (heldNextRun) {
+            const existing = (await this.di.storage.get<any>("schedules", def.name)) || {};
+            await this.di.storage.save("schedules", def.name, {
+              ...existing,
+              nextRunAt: heldNextRun,
+              lastRunAt: now,
+            });
+          }
+
           this.logger.info("Schedule fire held — instance is disabled", { name: def.name, holdId });
           continue;
         }

@@ -34,8 +34,14 @@ export type JobStatus =
   | "completed" // Finished successfully
   | "failed" // Finished with error (retries exhausted)
   | "delayed" // Waiting for a specific timestamp or retry delay
-  | "paused" // Manually stopped
+  | "paused" // Manually stopped or held by disabled behavior
   | "stalled"; // Worker lost heartbeat — will be reclaimed
+
+/**
+ * Machine-readable reason a job entered the "paused" state.
+ * Used by the dashboard to differentiate hold-by-disabled vs manual pause.
+ */
+export type PausedReason = "manual" | "disabled-hold";
 
 // ── KeepJobs ────────────────────────────────────────────────────────────────
 
@@ -267,6 +273,13 @@ export interface OqronJob<T = any, R = any> {
 
   /** Project namespace */
   project?: string;
+
+  /**
+   * Machine-readable reason why this job is in "paused" status.
+   * - `"manual"` — paused by admin/API
+   * - `"disabled-hold"` — held because the module instance was disabled
+   */
+  pausedReason?: PausedReason;
 
   // ── Enhanced Execution Telemetry ──────────────────────────────────────
 

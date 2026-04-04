@@ -73,6 +73,7 @@ export type {
   KeepJobs,
   OqronJob,
   OqronJobOptions,
+  PausedReason,
   RemoveOnConfig,
   SystemStats,
 } from "./types/job.types.js";

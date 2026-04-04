@@ -40,6 +40,7 @@ export type {
   MissedFirePolicy,
   OqronLoggerConfig,
   OverlapPolicy,
+  PausedReason,
   RetryConfig,
   ScheduleDefinition,
   ScheduleHooks,
