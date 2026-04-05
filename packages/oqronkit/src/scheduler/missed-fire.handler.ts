@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
+import _cronParser from "cron-parser";
 import type { CronDefinition, Logger } from "../engine/index.js";
-import { cronParser } from "./cron-compat.js";
+
+const cronParser = (_cronParser as any).default ?? _cronParser;
 
 export class MissedFireHandler {
   constructor(private readonly logger: Logger) {}

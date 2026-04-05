@@ -1,4 +1,8 @@
-import { cronParser } from "./cron-compat.js";
+// cron-parser is a CJS module. When bundled for ESM by tsup,
+// the actual exports land on `.default`. This helper handles both paths.
+import _cronParser from "cron-parser";
+
+const cronParser = (_cronParser as any).default ?? _cronParser;
 
 export function getNextRunDate(
   expression: string,

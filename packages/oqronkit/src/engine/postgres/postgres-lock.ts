@@ -3,10 +3,6 @@ import type { ILockAdapter } from "../types/engine.js";
 /**
  * PostgreSQL distributed lock adapter using advisory locks and a locks table.
  *
- * **Clock-Safety:** All time comparisons use server-side `NOW()` to prevent
- * clock-skew vulnerabilities in multi-node deployments. Never uses client-side
- * `Date.now()` for lock expiry logic.
- *
  * Table (auto-created):
  *   {prefix}_locks (
  *     key       TEXT PRIMARY KEY,
@@ -49,24 +45,22 @@ export class PostgresLock implements ILockAdapter {
 
   /**
    * Attempts to acquire a lock. Returns true if acquired, false if already held.
-   * Uses INSERT ... ON CONFLICT with server-side NOW() to atomically check and acquire.
-   *
-   * Clock-safe: all time comparisons happen on the PostgreSQL server.
+   * Uses INSERT ... ON CONFLICT to atomically check and acquire.
    */
   async acquire(key: string, ownerId: string, ttlMs: number): Promise<boolean> {
     await this.ensureTable();
+    const expiresAt = new Date(Date.now() + ttlMs).toISOString();
+    const now = new Date().toISOString();
 
-    // Use server-side NOW() for both the new expiry and the "is expired?" check.
-    // $3 is the TTL in milliseconds — converted to an interval server-side.
+    // Attempt to insert or take over an expired lock
     const result = await this.pool.query(
       `INSERT INTO ${this.tableName} (key, owner_id, expires_at)
-       VALUES ($1, $2, NOW() + ($3 || ' milliseconds')::interval)
+       VALUES ($1, $2, $3::timestamptz)
        ON CONFLICT (key) DO UPDATE
-       SET owner_id = $2, expires_at = NOW() + ($3 || ' milliseconds')::interval
-       WHERE ${this.tableName}.expires_at < NOW()
-          OR ${this.tableName}.owner_id = $2
+       SET owner_id = $2, expires_at = $3::timestamptz
+       WHERE ${this.tableName}.expires_at < $4::timestamptz
        RETURNING key`,
-      [key, ownerId, ttlMs],
+      [key, ownerId, expiresAt, now],
     );
 
     return result.rowCount > 0;
@@ -74,16 +68,16 @@ export class PostgresLock implements ILockAdapter {
 
   /**
    * Renews a lock only if the caller is the current owner.
-   * Clock-safe: expiry computed on the PostgreSQL server.
    */
   async renew(key: string, ownerId: string, ttlMs: number): Promise<boolean> {
     await this.ensureTable();
+    const expiresAt = new Date(Date.now() + ttlMs).toISOString();
 
     const result = await this.pool.query(
       `UPDATE ${this.tableName}
-       SET expires_at = NOW() + ($1 || ' milliseconds')::interval
+       SET expires_at = $1::timestamptz
        WHERE key = $2 AND owner_id = $3`,
-      [ttlMs, key, ownerId],
+      [expiresAt, key, ownerId],
     );
 
     return result.rowCount > 0;
@@ -102,15 +96,15 @@ export class PostgresLock implements ILockAdapter {
 
   /**
    * Checks if a specific owner holds the lock (and it hasn't expired).
-   * Clock-safe: expiry check uses server-side NOW().
    */
   async isOwner(key: string, ownerId: string): Promise<boolean> {
     await this.ensureTable();
+    const now = new Date().toISOString();
 
     const result = await this.pool.query(
       `SELECT 1 FROM ${this.tableName}
-       WHERE key = $1 AND owner_id = $2 AND expires_at > NOW()`,
-      [key, ownerId],
+       WHERE key = $1 AND owner_id = $2 AND expires_at > $3::timestamptz`,
+      [key, ownerId, now],
     );
 
     return result.rows.length > 0;

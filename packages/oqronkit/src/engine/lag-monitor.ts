@@ -46,7 +46,6 @@ export class LagMonitor {
 
       this.lastTickMs = now;
     }, this.sampleIntervalMs);
-    this.timer.unref();
   }
 
   public stop(): void {

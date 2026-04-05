@@ -10,16 +10,11 @@ import type { CronDefinition } from "../engine/index.js";
  */
 const GLOBAL_KEY = "__oqronkit_pending_crons__" as const;
 
-type GlobalRegistry = typeof globalThis & {
-  __oqronkit_pending_crons__?: CronDefinition[];
-};
-
 function _getPending(): CronDefinition[] {
-  const g = globalThis as GlobalRegistry;
-  if (!g[GLOBAL_KEY]) {
-    g[GLOBAL_KEY] = [];
+  if (!(globalThis as any)[GLOBAL_KEY]) {
+    (globalThis as any)[GLOBAL_KEY] = [];
   }
-  return g[GLOBAL_KEY];
+  return (globalThis as any)[GLOBAL_KEY];
 }
 
 /** @internal Called by cron() to auto-register a definition */

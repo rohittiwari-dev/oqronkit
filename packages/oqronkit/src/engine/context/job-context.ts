@@ -7,7 +7,6 @@ export interface BaseJobContextOptions {
   environment?: string;
   project?: string;
   onProgress?: (percent: number, label?: string) => void;
-  onLog?: (level: string, message: string) => void;
 }
 
 export class JobContext {
@@ -21,32 +20,11 @@ export class JobContext {
 
   constructor(opts: BaseJobContextOptions) {
     this.id = opts.id;
-    this._onProgress = opts.onProgress;
+    this.log = opts.logger;
     this.signal = opts.signal;
     this.environment = opts.environment;
     this.project = opts.project;
-    
-    // Wrap logger to intercept logs
-    const originalLogger = opts.logger;
-    const interceptor = (level: string) => (message: string, meta?: any) => {
-      (originalLogger as any)[level](message, meta);
-      if (opts.onLog) {
-        opts.onLog(level, message);
-      }
-    };
-
-    if (opts.onLog) {
-      this.log = {
-        ...originalLogger,
-        debug: interceptor("debug"),
-        info: interceptor("info"),
-        warn: interceptor("warn"),
-        error: interceptor("error"),
-        child: originalLogger.child.bind(originalLogger), // we don't intercept children for now
-      } as unknown as Logger;
-    } else {
-      this.log = originalLogger;
-    }
+    this._onProgress = opts.onProgress;
 
     // Bind methods
     this.progress = this.progress.bind(this);

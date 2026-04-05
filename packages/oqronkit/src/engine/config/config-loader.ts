@@ -28,7 +28,7 @@ export async function loadConfig(
       typeof rawConfig === "object" &&
       "default" in rawConfig
     ) {
-      rawConfig = (rawConfig as Record<string, unknown>).default;
+      rawConfig = (rawConfig as any).default;
     }
   } catch (err) {
     throw new Error(

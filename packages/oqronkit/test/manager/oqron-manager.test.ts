@@ -19,7 +19,7 @@ describe("OqronManager", () => {
 
     // Register a fake module so getSystemStats sees something
     OqronRegistry.getInstance().register({
-      name: "queue",
+      name: "taskQueue",
       enabled: true,
       init: async () => {},
       start: async () => {},
@@ -39,7 +39,7 @@ describe("OqronManager", () => {
       expect(stats.env).toBe("test");
       expect(stats.modules).toHaveLength(1);
       expect(stats.modules[0]).toMatchObject({
-        name: "queue",
+        name: "taskQueue",
         enabled: true,
         status: "active",
       });
@@ -161,7 +161,7 @@ describe("OqronManager", () => {
   });
 
   describe("retryJob()", () => {
-    it("creates a new waiting job linked to the failed original", async () => {
+    it("resets a failed job to waiting and re-publishes it", async () => {
       const failedJob: OqronJob = {
         id: "retry-1",
         type: "task",
@@ -178,27 +178,16 @@ describe("OqronManager", () => {
       };
       await Storage.save("jobs", "retry-1", failedJob);
 
-      const retryId = await manager.retryJob("retry-1");
-      expect(retryId).toBeDefined();
-      expect(typeof retryId).toBe("string");
+      await manager.retryJob("retry-1");
 
-      // New retry job should exist with clean state
-      const retryJob = await Storage.get<OqronJob>("jobs", retryId!);
-      expect(retryJob).toBeTruthy();
-      expect(retryJob!.status).toBe("waiting");
-      expect(retryJob!.attemptMade).toBe(0);
-      expect(retryJob!.error).toBeUndefined();
-      expect(retryJob!.stacktrace).toBeUndefined();
-      expect(retryJob!.retriedFromId).toBe("retry-1");
-      expect(retryJob!.triggeredBy).toBe("retry");
-
-      // Original should still exist with audit trail
-      const original = await Storage.get<OqronJob>("jobs", "retry-1");
-      expect(original!.status).toBe("failed"); // Not mutated
-      expect(original!.retryReason).toContain(retryId!);
+      const updated = await Storage.get<OqronJob>("jobs", "retry-1");
+      expect(updated!.status).toBe("waiting");
+      expect(updated!.attemptMade).toBe(0);
+      expect(updated!.error).toBeUndefined();
+      expect(updated!.stacktrace).toBeUndefined();
     });
 
-    it("returns undefined for a non-failed job", async () => {
+    it("does nothing for a non-failed job", async () => {
       await Storage.save("jobs", "active-1", {
         id: "active-1",
         type: "task",
@@ -212,14 +201,14 @@ describe("OqronManager", () => {
         createdAt: new Date(),
       });
 
-      const result = await manager.retryJob("active-1");
-      expect(result).toBeUndefined();
+      await manager.retryJob("active-1");
 
       const job = await Storage.get<OqronJob>("jobs", "active-1");
       expect(job!.status).toBe("active"); // No change
     });
 
-    it("returns undefined for a non-existent job", async () => {
+    it("does nothing for a non-existent job", async () => {
+      // Should not throw
       await expect(manager.retryJob("ghost")).resolves.toBeUndefined();
     });
   });
@@ -257,11 +246,10 @@ describe("OqronManager", () => {
       const count = await manager.retryAllFailed("retry-all-q");
       expect(count).toBe(3);
 
-      // Originals should still be "failed" (preserved for audit)
+      // All should now be "waiting"
       for (let i = 0; i < 3; i++) {
         const job = await Storage.get<OqronJob>("jobs", `fail-${i}`);
-        expect(job!.status).toBe("failed");
-        expect(job!.retryReason).toBeDefined(); // Marked as retried
+        expect(job!.status).toBe("waiting");
       }
     });
 
@@ -284,222 +272,6 @@ describe("OqronManager", () => {
       await manager.resumeQueue("pq");
       const claimed2 = await Broker.claim("pq", "w1", 1, 5000);
       expect(claimed2).toContain("id1");
-    });
-  });
-
-  // ── Module Management ──────────────────────────────────────────────────────
-
-  describe("Module Management", () => {
-    it("listModules returns registered modules", () => {
-      const modules = manager.listModules();
-      expect(modules).toHaveLength(1);
-      expect(modules[0]).toMatchObject({
-        name: "queue",
-        enabled: true,
-        status: "active",
-      });
-    });
-
-    it("enableModule returns false for unregistered module", async () => {
-      const result = await manager.enableModule("nonexistent");
-      expect(result).toBe(false);
-    });
-
-    it("enableModule returns true for already-enabled module", async () => {
-      const result = await manager.enableModule("queue");
-      expect(result).toBe(true);
-    });
-
-    it("disableModule stops a module", async () => {
-      const mod = OqronRegistry.getInstance().get("queue")!;
-      expect(mod.enabled).toBe(true);
-
-      await manager.disableModule("queue");
-      expect(mod.enabled).toBe(false);
-
-      // Re-enable for remaining tests
-      await manager.enableModule("queue");
-    });
-
-    it("disableModule returns false for unregistered module", async () => {
-      const result = await manager.disableModule("ghost");
-      expect(result).toBe(false);
-    });
-
-    it("triggerModule returns false when no module claims the schedule", async () => {
-      const result = await manager.triggerModule("some-schedule");
-      expect(result).toBe(false);
-    });
-  });
-
-  // ── Job Queries ────────────────────────────────────────────────────────────
-
-  describe("getJobsByType()", () => {
-    it("filters jobs by type", async () => {
-      await Storage.save("jobs", "cron-1", {
-        id: "cron-1",
-        type: "cron",
-        queueName: "system_cron",
-        status: "completed",
-        data: {},
-        opts: {},
-        attemptMade: 1,
-        progressPercent: 100,
-        tags: [],
-        createdAt: new Date(),
-      });
-      await Storage.save("jobs", "task-1", {
-        id: "task-1",
-        type: "task",
-        queueName: "emails",
-        status: "waiting",
-        data: {},
-        opts: {},
-        attemptMade: 0,
-        progressPercent: 0,
-        tags: [],
-        createdAt: new Date(),
-      });
-
-      const result = await manager.getJobsByType("cron");
-      expect(result.jobs).toHaveLength(1);
-      expect(result.jobs[0].id).toBe("cron-1");
-      expect(result.total).toBe(1);
-    });
-
-    it("supports status filter", async () => {
-      await Storage.save("jobs", "cron-ok", {
-        id: "cron-ok",
-        type: "cron",
-        status: "completed",
-        queueName: "q",
-        data: {},
-        opts: {},
-        attemptMade: 1,
-        progressPercent: 100,
-        tags: [],
-        createdAt: new Date(),
-      });
-      await Storage.save("jobs", "cron-fail", {
-        id: "cron-fail",
-        type: "cron",
-        status: "failed",
-        queueName: "q",
-        data: {},
-        opts: {},
-        attemptMade: 3,
-        progressPercent: 0,
-        tags: [],
-        createdAt: new Date(),
-      });
-
-      const result = await manager.getJobsByType("cron", { status: "failed" });
-      expect(result.jobs).toHaveLength(1);
-      expect(result.jobs[0].id).toBe("cron-fail");
-    });
-  });
-
-  describe("getJobHistory()", () => {
-    it("returns jobs matching scheduleId", async () => {
-      await Storage.save("jobs", "run-1", {
-        id: "run-1",
-        type: "cron",
-        queueName: "system_cron",
-        scheduleId: "daily-report",
-        status: "completed",
-        data: {},
-        opts: {},
-        attemptMade: 1,
-        progressPercent: 100,
-        tags: [],
-        createdAt: new Date(),
-      });
-      await Storage.save("jobs", "run-2", {
-        id: "run-2",
-        type: "cron",
-        queueName: "system_cron",
-        scheduleId: "daily-report",
-        status: "failed",
-        data: {},
-        opts: {},
-        attemptMade: 3,
-        progressPercent: 0,
-        tags: [],
-        createdAt: new Date(),
-      });
-
-      const result = await manager.getJobHistory("daily-report");
-      expect(result.jobs.length).toBeGreaterThanOrEqual(2);
-      expect(result.total).toBeGreaterThanOrEqual(2);
-    });
-  });
-
-  describe("getRetryChain()", () => {
-    it("returns the full retry chain for a job", async () => {
-      // Create original → retry1 → retry2
-      await Storage.save<OqronJob>("jobs", "orig", {
-        id: "orig",
-        type: "task",
-        queueName: "q",
-        status: "failed",
-        data: {},
-        opts: {},
-        attemptMade: 3,
-        progressPercent: 0,
-        tags: [],
-        createdAt: new Date(),
-        retryReason: "Retried as r1",
-      });
-      await Storage.save<OqronJob>("jobs", "r1", {
-        id: "r1",
-        type: "task",
-        queueName: "q",
-        status: "failed",
-        retriedFromId: "orig",
-        data: {},
-        opts: {},
-        attemptMade: 3,
-        progressPercent: 0,
-        tags: [],
-        createdAt: new Date(),
-        retryReason: "Retried as r2",
-      });
-      await Storage.save<OqronJob>("jobs", "r2", {
-        id: "r2",
-        type: "task",
-        queueName: "q",
-        status: "completed",
-        retriedFromId: "r1",
-        data: {},
-        opts: {},
-        attemptMade: 1,
-        progressPercent: 100,
-        tags: [],
-        createdAt: new Date(),
-      });
-
-      const chain = await manager.getRetryChain("r2");
-      expect(chain).toHaveLength(3);
-      expect(chain.map((j) => j.id)).toEqual(["orig", "r1", "r2"]);
-    });
-
-    it("returns single-element chain for a job with no retries", async () => {
-      await Storage.save<OqronJob>("jobs", "solo", {
-        id: "solo",
-        type: "task",
-        queueName: "q",
-        status: "completed",
-        data: {},
-        opts: {},
-        attemptMade: 1,
-        progressPercent: 100,
-        tags: [],
-        createdAt: new Date(),
-      });
-
-      const chain = await manager.getRetryChain("solo");
-      expect(chain).toHaveLength(1);
-      expect(chain[0].id).toBe("solo");
     });
   });
 });

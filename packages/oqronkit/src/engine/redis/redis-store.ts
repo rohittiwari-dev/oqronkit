@@ -36,9 +36,10 @@ export class RedisStore implements IStorageEngine {
       return v;
     });
 
-    const record = data as Record<string, unknown>;
-    const createdAt = record.createdAt;
-    const ts = createdAt instanceof Date ? createdAt.getTime() : Date.now();
+    const ts =
+      (data as any).createdAt instanceof Date
+        ? (data as any).createdAt.getTime()
+        : Date.now();
 
     const pipeline = this.redis.multi();
     pipeline.set(key, json);
@@ -85,7 +86,7 @@ export class RedisStore implements IStorageEngine {
           try {
             entities.push(this.deserialize(res) as T);
           } catch {
-            // Skip corrupted records — should be rare, indicates data corruption
+            // Skip corrupted records
           }
         }
       }

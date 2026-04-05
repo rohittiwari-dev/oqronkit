@@ -41,9 +41,8 @@ export { OqronRegistry } from "./registry.js";
 // ── Types ────────────────────────────────────────────────────────────────────
 export type {
   ClusteringConfig,
-  DisabledBehavior,
   OqronConfig,
-  OqronStorageMode,
+  WorkerDefaults,
 } from "./types/config.types.js";
 export type {
   CronDefinition,
@@ -64,16 +63,11 @@ export type {
 export type {
   FlowJobNode,
   JobFilter,
-  JobLogEntry,
   JobStatus,
-  JobStepEntry,
-  JobTimelineEntry,
-  JobTriggerSource,
   JobType,
   KeepJobs,
   OqronJob,
   OqronJobOptions,
-  PausedReason,
   RemoveOnConfig,
   SystemStats,
 } from "./types/job.types.js";

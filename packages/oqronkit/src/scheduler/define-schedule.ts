@@ -8,7 +8,6 @@ import type {
   ScheduleRecurring,
   ScheduleRunAfter,
 } from "../engine/index.js";
-import type { DisabledBehavior } from "../engine/types/config.types.js";
 import { _registerSchedule } from "./registry-schedule.js";
 
 type EnqueueOptions<TPayload> = {
@@ -54,12 +53,6 @@ export type DefineScheduleOptions<TPayload> = {
   retries?: RetryConfig;
   maxConcurrent?: number;
   status?: "active" | "paused";
-  /**
-   * Behavior when this schedule fires while disabled/paused.
-   * Overrides the module-level setting.
-   * @default "hold"
-   */
-  disabledBehavior?: DisabledBehavior;
 };
 
 // Global reference that the engine will attach at boot time
@@ -101,7 +94,6 @@ export const schedule = <TPayload = unknown>(
     retries: options.retries,
     maxConcurrent: options.maxConcurrent,
     status: options.status,
-    disabledBehavior: options.disabledBehavior,
   };
 
   _registerSchedule(def as ScheduleDefinition<unknown>);

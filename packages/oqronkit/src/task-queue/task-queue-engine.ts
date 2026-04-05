@@ -9,20 +9,16 @@ import type { OqronJob } from "../engine/types/job.types.js";
 import { calculateBackoff } from "../engine/utils/backoffs.js";
 import { DependencyResolver } from "../engine/utils/dependency-resolver.js";
 import { pruneAfterCompletion } from "../engine/utils/job-retention.js";
-import type { QueueModuleDef } from "../modules.js";
-import { getRegisteredQueues } from "./registry.js";
-import type { QueueConfig, QueueJobContext } from "./types.js";
+import { getRegisteredTaskQueues } from "./registry.js";
+import type { TaskJobContext, TaskQueueConfig } from "./types.js";
 
-export class QueueEngine implements IOqronModule {
-  public readonly name = "queue";
-  public enabled = true;
+export class TaskQueueEngine implements IOqronModule {
+  public readonly name = "taskQueue";
+  public readonly enabled = true;
   private running = false;
   private timers: NodeJS.Timeout[] = [];
   private workerIdStr = randomUUID();
-  /** All active job promises — used for drain during shutdown */
   private activeJobs = new Map<string, Promise<void>>();
-  /** Per-queue active job tracking — ensures concurrency is isolated per queue */
-  private activeJobsByQueue = new Map<string, Set<string>>();
   /** Active heartbeat workers keyed by job ID — for crash-safe lock renewal */
   private heartbeats = new Map<string, HeartbeatWorker>();
   /** AbortControllers keyed by job ID — for mid-execution cancellation */
@@ -33,7 +29,6 @@ export class QueueEngine implements IOqronModule {
   constructor(
     private config: OqronConfig,
     private logger: Logger,
-    private queueConfig?: QueueModuleDef,
     private container?: OqronContainer,
   ) {}
 
@@ -42,21 +37,29 @@ export class QueueEngine implements IOqronModule {
   }
 
   async init(): Promise<void> {
-    const qs = getRegisteredQueues();
-    this.logger.info(`Initialized QueueEngine covering ${qs.length} endpoints`);
+    const modules = this.config.modules || [];
+    if (!modules.includes("taskQueue")) return;
+
+    const qs = getRegisteredTaskQueues();
+    this.logger.info(
+      `Initialized monolithic TaskQueue engine covering ${qs.length} endpoints`,
+    );
   }
 
   async start(): Promise<void> {
+    const modules = this.config.modules || [];
+    if (!modules.includes("taskQueue")) return;
+
     if (this.running) return;
     this.running = true;
 
-    const qs = getRegisteredQueues();
+    const qs = getRegisteredTaskQueues();
     for (const q of qs) {
       this.startPolling(q);
     }
 
     // Start stall detector — checks for jobs whose heartbeat locks have expired
-    const stalledInterval = this.queueConfig?.stalledInterval ?? 30000;
+    const stalledInterval = this.config.taskQueue?.stalledInterval ?? 30000;
 
     this.stallDetector = new StallDetector(
       this.di.lock,
@@ -66,64 +69,33 @@ export class QueueEngine implements IOqronModule {
     this.stallDetector.start(
       () =>
         Array.from(this.heartbeats.entries()).map(([jobId, _hb]) => ({
-          key: `queue:job:${jobId}`,
+          key: `taskqueue:job:${jobId}`,
           ownerId: this.workerIdStr,
         })),
       (key: string) => {
         // Extract jobId from lock key
-        const jobId = key.replace("queue:job:", "");
+        const jobId = key.replace("taskqueue:job:", "");
         this.logger.warn(
-          `Stall detected for Queue job ${jobId} — nacking back to broker`,
+          `Stall detected for TaskQueue job ${jobId} — nacking back to broker`,
         );
         this.heartbeats.get(jobId)?.stop();
         this.heartbeats.delete(jobId);
         // Find the queue name for nack
         const queueName = qs.find((_q) => this.activeJobs.has(jobId))?.name;
         if (queueName) {
-          // Increment stalledCount and update telemetry before returning to broker
-          this.di.storage.get<any>("jobs", jobId).then(async job => {
-            if (job) {
-              job.stalledCount = (job.stalledCount ?? 0) + 1;
-              if (!job.timeline) job.timeline = [];
-              job.timeline.push({
-                ts: new Date(),
-                from: job.status,
-                to: "stalled",
-                reason: `Worker lock expired. Re-enqueuing.`
-              });
-              job.status = "stalled";
-              try {
-                await this.di.storage.save("jobs", jobId, job);
-              } catch (e) {
-                this.logger.error("Failed to commit stall telemetry", { jobId, error: String(e) });
-              }
-            }
-          }).finally(() => {
-            void this.di.broker.nack(queueName, jobId);
-          });
+          void this.di.broker.nack(queueName, jobId);
         }
       },
     );
   }
 
   async triggerManual(id: string): Promise<boolean> {
-    const q = getRegisteredQueues().find((q) => q.name === id);
+    const q = getRegisteredTaskQueues().find((q) => q.name === id);
     if (q) {
       await this.poll(q);
       return true;
     }
     return false;
-  }
-
-  async enable(): Promise<void> {
-    this.enabled = true;
-    if (!this.running) {
-      await this.start();
-    }
-  }
-
-  async disable(): Promise<void> {
-    this.enabled = false;
   }
 
   /**
@@ -189,45 +161,41 @@ export class QueueEngine implements IOqronModule {
     const allActive = Array.from(this.activeJobs.values());
     if (allActive.length > 0) {
       this.logger.info(
-        `QueueEngine draining ${allActive.length} active jobs...`,
+        `TaskQueueEngine draining ${allActive.length} active jobs...`,
       );
-      const timeout = this.queueConfig?.shutdownTimeout ?? 25000;
+      const timeout = this.config.taskQueue?.shutdownTimeout ?? 25000;
       await Promise.race([
         Promise.allSettled(allActive),
-        new Promise((r) => {
-          const h = setTimeout(r, timeout);
-          h.unref();
-        }),
+        new Promise((r) => setTimeout(r, timeout)),
       ]);
     }
   }
 
-  private startPolling(q: QueueConfig) {
-    const heartbeatMs = q.heartbeatMs ?? this.queueConfig?.heartbeatMs ?? 5000;
+  private startPolling(q: TaskQueueConfig) {
+    const heartbeatMs =
+      q.heartbeatMs ?? this.config.taskQueue?.heartbeatMs ?? 5000;
     const t = setInterval(() => {
       this.poll(q).catch((e) =>
-        this.logger.error(`Queue poller crashed for ${q.name}`, e),
+        this.logger.error(`TaskQueue poller crashed for ${q.name}`, e),
       );
     }, heartbeatMs);
-    t.unref();
     this.timers.push(t);
     setTimeout(() => this.poll(q), 0);
   }
 
-  private async poll(q: QueueConfig): Promise<void> {
-    if (!this.running || !this.enabled) return;
+  private async poll(q: TaskQueueConfig): Promise<void> {
+    if (!this.running) return;
 
-    const concurrency = q.concurrency ?? this.queueConfig?.concurrency ?? 5;
-    const lockTtlMs = q.lockTtlMs ?? this.queueConfig?.lockTtlMs ?? 30000;
+    const concurrency =
+      q.concurrency ?? this.config.taskQueue?.concurrency ?? 5;
+    const lockTtlMs = q.lockTtlMs ?? this.config.taskQueue?.lockTtlMs ?? 30000;
 
-    // Per-queue concurrency: count only active jobs for THIS queue, not all queues
-    const activeForQueue = this.activeJobsByQueue.get(q.name)?.size ?? 0;
-    const freeSlots = concurrency - activeForQueue;
+    const freeSlots = concurrency - this.activeJobs.size;
     if (freeSlots <= 0) return;
 
     // 1. Claim IDs from Broker with ordering strategy
     const strategy: BrokerStrategy =
-      q.strategy ?? this.queueConfig?.strategy ?? "fifo";
+      q.strategy ?? this.config.taskQueue?.strategy ?? "fifo";
     const jobIds = await this.di.broker.claim(
       q.name,
       this.workerIdStr,
@@ -259,36 +227,31 @@ export class QueueEngine implements IOqronModule {
         continue;
       }
 
-      // Track in per-queue active set
-      if (!this.activeJobsByQueue.has(q.name)) {
-        this.activeJobsByQueue.set(q.name, new Set());
-      }
-      this.activeJobsByQueue.get(q.name)!.add(id);
-
       const p = this.executeJob(job, q).finally(() => {
         this.activeJobs.delete(id);
-        this.activeJobsByQueue.get(q.name)?.delete(id);
       });
       this.activeJobs.set(id, p);
     }
   }
 
-  private async executeJob(job: OqronJob, q: QueueConfig): Promise<void> {
+  private async executeJob(job: OqronJob, q: TaskQueueConfig): Promise<void> {
     let internalDiscarded = false;
-    const lockTtlMs = q.lockTtlMs ?? this.queueConfig?.lockTtlMs ?? 30000;
-    const heartbeatMs = q.heartbeatMs ?? this.queueConfig?.heartbeatMs ?? 5000;
+    const lockTtlMs = q.lockTtlMs ?? this.config.taskQueue?.lockTtlMs ?? 30000;
+    const heartbeatMs =
+      q.heartbeatMs ?? this.config.taskQueue?.heartbeatMs ?? 5000;
     const useGuaranteed = q.guaranteedWorker !== false;
 
     // Resolve retry config: per-queue → global → default
-    const maxRetries = q.retries?.max ?? this.queueConfig?.retries?.max ?? 0;
+    const maxRetries =
+      q.retries?.max ?? this.config.taskQueue?.retries?.max ?? 0;
     const retryStrategy =
       q.retries?.strategy ??
-      this.queueConfig?.retries?.strategy ??
+      this.config.taskQueue?.retries?.strategy ??
       "exponential";
     const baseDelay =
-      q.retries?.baseDelay ?? this.queueConfig?.retries?.baseDelay ?? 2000;
+      q.retries?.baseDelay ?? this.config.taskQueue?.retries?.baseDelay ?? 2000;
     const maxDelay =
-      q.retries?.maxDelay ?? this.queueConfig?.retries?.maxDelay ?? 60000;
+      q.retries?.maxDelay ?? this.config.taskQueue?.retries?.maxDelay ?? 60000;
 
     // Per-job attempts override takes highest priority
     const effectiveMaxRetries = job.opts?.attempts
@@ -298,7 +261,7 @@ export class QueueEngine implements IOqronModule {
     // ── Start HeartbeatWorker for crash-safe lock renewal ─────────────────
     let heartbeat: HeartbeatWorker | null = null;
     if (useGuaranteed) {
-      const lockKey = `queue:job:${job.id}`;
+      const lockKey = `taskqueue:job:${job.id}`;
       heartbeat = new HeartbeatWorker(
         this.di.lock,
         this.logger,
@@ -321,36 +284,21 @@ export class QueueEngine implements IOqronModule {
     const abortController = new AbortController();
     this.abortControllers.set(job.id, abortController);
 
-    const ctx: QueueJobContext<any> = {
+    const ctx: TaskJobContext<any> = {
       id: job.id,
       data: job.data,
       signal: abortController.signal,
-      queueName: job.queueName,
-      moduleName: job.moduleName ?? q.name,
-      environment: job.environment ?? this.config.environment ?? "default",
-      project: job.project ?? this.config.project ?? "default",
       progress: async (percent, label) => {
         job.progressPercent = percent;
         job.progressLabel = label;
-        if (!job.timeline) job.timeline = [];
-        job.timeline.push({
-          ts: new Date(),
-          from: "active",
-          to: "active",
-          reason: `Progress: ${percent}% ${label || ""}`,
-        });
         await this.di.storage.save("jobs", job.id, job);
         OqronEventBus.emit("job:progress", job.queueName, job.id, percent);
       },
       log: (level, msg) => {
         const method = this.logger[level] || this.logger.info;
-        method.call(this.logger, `[Queue:${q.name}] ${msg}`, {
+        method.call(this.logger, `[TaskJob:${q.name}] ${msg}`, {
           jobId: job.id,
         });
-        if (!job.logs) job.logs = [];
-        job.logs.push({ level, msg, ts: new Date() });
-        // Best effort async save for logs without blocking execution
-        this.di.storage.save("jobs", job.id, job).catch(() => {});
       },
       discard: () => {
         internalDiscarded = true;
@@ -358,19 +306,10 @@ export class QueueEngine implements IOqronModule {
     };
 
     // Update state to active
-    const oldStatus = job.status;
     job.status = "active";
     job.workerId = this.workerIdStr;
     job.startedAt = new Date();
-    job.processedOn = new Date();
     job.attemptMade = (job.attemptMade ?? 0) + 1;
-    if (!job.timeline) job.timeline = [];
-    job.timeline.push({
-      ts: job.startedAt,
-      from: oldStatus,
-      to: "active",
-      reason: `Worker ${this.workerIdStr} claimed job`,
-    });
     await this.di.storage.save("jobs", job.id, job);
 
     OqronEventBus.emit("job:start", job.queueName, job.id, q.name);
@@ -380,27 +319,7 @@ export class QueueEngine implements IOqronModule {
     let result: any;
 
     try {
-      let timeoutHandle: any;
-      const executePromise = q.handler(ctx);
-
-      if (typeof q.timeout === "number") {
-        const timeoutPromise = new Promise((_, reject) => {
-          timeoutHandle = setTimeout(() => {
-            abortController.abort(); // Signal cancellation to the handler
-            const err = new Error(`Job exceeded timeout of ${q.timeout}ms`);
-            err.name = "TimeoutError";
-            reject(err);
-          }, q.timeout);
-        });
-
-        result = await Promise.race([executePromise, timeoutPromise]);
-      } else {
-        result = await executePromise;
-      }
-
-      if (timeoutHandle) {
-        clearTimeout(timeoutHandle);
-      }
+      result = await q.handler(ctx);
 
       if (internalDiscarded) {
         throw new Error("Job discarded by handler");
@@ -422,7 +341,7 @@ export class QueueEngine implements IOqronModule {
 
       // If cancelled, don't retry
       if (abortController.signal.aborted) {
-        this.logger.info(`Queue job ${job.id} was cancelled`);
+        this.logger.info(`TaskQueue job ${job.id} was cancelled`);
       }
       // Check if we should retry via nack (broker-level, crash-safe)
       else if (!internalDiscarded && job.attemptMade <= effectiveMaxRetries) {
@@ -432,7 +351,7 @@ export class QueueEngine implements IOqronModule {
         };
         const delay = calculateBackoff(backoffOpts, job.attemptMade, maxDelay);
 
-        this.logger.warn("Queue job failed, re-queuing for retry...", {
+        this.logger.warn("TaskQueue job failed, re-queuing for retry...", {
           name: q.name,
           jobId: job.id,
           attempt: job.attemptMade,
@@ -461,7 +380,7 @@ export class QueueEngine implements IOqronModule {
       }
 
       // All retries exhausted
-      this.logger.error("Queue job failed permanently", {
+      this.logger.error("TaskQueue job failed permanently", {
         name: q.name,
         jobId: job.id,
         attempts: job.attemptMade,
@@ -490,19 +409,6 @@ export class QueueEngine implements IOqronModule {
       job.progressLabel = "Completed";
     }
 
-    // Compute duration
-    if (job.startedAt) {
-      job.durationMs = finishedAt.getTime() - new Date(job.startedAt).getTime();
-    }
-
-    if (!job.timeline) job.timeline = [];
-    job.timeline.push({
-      ts: finishedAt,
-      from: "active",
-      to: status,
-      reason: status === "failed" ? error : "Finished successfully",
-    });
-
     await this.di.storage.save("jobs", job.id, job);
     await this.di.broker.ack(q.name, job.id);
 
@@ -520,30 +426,26 @@ export class QueueEngine implements IOqronModule {
       OqronEventBus.emit("job:success", job.queueName, job.id);
 
       if (q.hooks?.onSuccess) {
-        void Promise.resolve()
-          .then(() => q.hooks!.onSuccess!(job as OqronJob, result))
-          .catch((e) =>
-            this.logger.error("onSuccess hook failed", { err: String(e) }),
-          );
+        void Promise.resolve().then(() =>
+          q.hooks!.onSuccess!(job as any, result),
+        );
       }
     } else {
       const errorObject = new Error(error ?? "Unknown error");
       OqronEventBus.emit("job:fail", job.queueName, job.id, errorObject);
 
       if (q.hooks?.onFail) {
-        void Promise.resolve()
-          .then(() => q.hooks!.onFail!(job as OqronJob, errorObject))
-          .catch((e) =>
-            this.logger.error("onFail hook failed", { err: String(e) }),
-          );
+        void Promise.resolve().then(() =>
+          q.hooks!.onFail!(job as any, errorObject),
+        );
       }
 
       // DLQ: invoke dead letter hook if enabled and retries exhausted
       const dlqEnabled =
-        q.deadLetter?.enabled ?? this.queueConfig?.deadLetter?.enabled;
+        q.deadLetter?.enabled ?? this.config.taskQueue?.deadLetter?.enabled;
       if (dlqEnabled && q.deadLetter?.onDead) {
         void Promise.resolve().then(() =>
-          q.deadLetter!.onDead!(job as OqronJob).catch((e) =>
+          q.deadLetter!.onDead!(job as any).catch((e) =>
             this.logger.error("DLQ handler failed", { err: String(e) }),
           ),
         );
@@ -563,8 +465,8 @@ export class QueueEngine implements IOqronModule {
         status === "completed" ? q.removeOnComplete : q.removeOnFail,
       globalRemoveConfig:
         status === "completed"
-          ? this.queueConfig?.removeOnComplete
-          : this.queueConfig?.removeOnFail,
+          ? this.config.taskQueue?.removeOnComplete
+          : this.config.taskQueue?.removeOnFail,
       filterKey: "queueName",
       filterValue: q.name,
     });

@@ -56,13 +56,6 @@ export class MemoryBroker implements IBrokerEngine {
 
     const now = Date.now();
 
-    // 0. Evict expired locks to prevent memory leaks from crashed workers
-    for (const [cid, lock] of this.activeLocks.entries()) {
-      if (lock.expiresAt < now) {
-        this.activeLocks.delete(cid);
-      }
-    }
-
     // 1. Promote due delayed items
     const delayed = this.delayed.get(brokerName) || [];
     const due = delayed.filter((d) => d.runAt <= now);
@@ -122,19 +115,10 @@ export class MemoryBroker implements IBrokerEngine {
     lockTtlMs: number,
   ): Promise<void> {
     const lock = this.activeLocks.get(id);
-    const now = Date.now();
-
-    // Explicit expiration check: if lock naturally expired, delete it and reject extension
-    if (lock && lock.expiresAt < now) {
-      this.activeLocks.delete(id);
-    }
-
-    const currentLock = this.activeLocks.get(id);
-    if (!currentLock || currentLock.consumerId !== consumerId) {
+    if (!lock || lock.consumerId !== consumerId) {
       throw new Error(`Lock lost or stolen for entity ${id}`);
     }
-
-    currentLock.expiresAt = now + lockTtlMs;
+    lock.expiresAt = Date.now() + lockTtlMs;
   }
 
   async ack(_brokerName: string, id: string): Promise<void> {

@@ -116,13 +116,9 @@ export async function handleTrigger(
 
 // ── Admin Handlers ─────────────────────────────────────────────────────────
 
-let _manager: OqronManager | null = null;
 function getManager(): OqronManager | null {
   if (!_config) return null;
-  if (!_manager) {
-    _manager = OqronManager.from(_config);
-  }
-  return _manager;
+  return OqronManager.from(_config);
 }
 
 export async function handleAdminSystem(
@@ -188,56 +184,6 @@ export async function handleAdminQueueAction(
   };
 }
 
-export async function handleAdminModule(
-  req: MonitorRequest,
-): Promise<MonitorResponse> {
-  const mgr = getManager();
-  if (!mgr)
-    return {
-      status: 503,
-      body: { ok: false, error: "Manager not initialized" },
-    };
-  const { name, action } = req.params;
-
-  if (action === "enable") {
-    const success = await mgr.enableModule(name);
-    return { status: success ? 200 : 404, body: { ok: success } };
-  }
-  if (action === "disable") {
-    const success = await mgr.disableModule(name);
-    return { status: success ? 200 : 404, body: { ok: success } };
-  }
-  return {
-    status: 400,
-    body: { ok: false, error: `Unknown action: ${action}` },
-  };
-}
-
-export async function handleAdminInstance(
-  req: MonitorRequest,
-): Promise<MonitorResponse> {
-  const mgr = getManager();
-  if (!mgr)
-    return {
-      status: 503,
-      body: { ok: false, error: "Manager not initialized" },
-    };
-  const { type, name, action } = req.params;
-
-  if (action === "enable") {
-    const success = await mgr.enableInstance(type as any, name);
-    return { status: success ? 200 : 404, body: { ok: success } };
-  }
-  if (action === "disable") {
-    const success = await mgr.disableInstance(type as any, name);
-    return { status: success ? 200 : 404, body: { ok: success } };
-  }
-  return {
-    status: 400,
-    body: { ok: false, error: `Unknown action: ${action}` },
-  };
-}
-
 export async function handleAdminJob(
   req: MonitorRequest,
 ): Promise<MonitorResponse> {
@@ -256,13 +202,8 @@ export async function handleAdminJob(
     return { status: 200, body: { ok: true, job } };
   }
   if (action === "retry") {
-    const retryId = await mgr.retryJob(id);
-    if (!retryId)
-      return {
-        status: 400,
-        body: { ok: false, error: "Job not found or not in failed state" },
-      };
-    return { status: 200, body: { ok: true, retryId } };
+    await mgr.retryJob(id);
+    return { status: 200, body: { ok: true } };
   }
   if (req.method === "DELETE") {
     await mgr.cancelJob(id);
@@ -308,33 +249,6 @@ export async function dispatch(req: MonitorRequest): Promise<MonitorResponse> {
       action: queueActionMatch[2],
     };
     return handleAdminQueueAction(req);
-  }
-
-  // POST /admin/modules/:name/(enable|disable)
-  const moduleActionMatch = path.match(
-    /^\/admin\/modules\/([^/]+)\/(enable|disable)$/,
-  );
-  if (moduleActionMatch && method === "POST") {
-    req.params = {
-      ...req.params,
-      name: moduleActionMatch[1],
-      action: moduleActionMatch[2],
-    };
-    return handleAdminModule(req);
-  }
-
-  // POST /admin/instances/:type/:name/(enable|disable)
-  const instanceActionMatch = path.match(
-    /^\/admin\/instances\/([^/]+)\/([^/]+)\/(enable|disable)$/,
-  );
-  if (instanceActionMatch && method === "POST") {
-    req.params = {
-      ...req.params,
-      type: instanceActionMatch[1],
-      name: instanceActionMatch[2],
-      action: instanceActionMatch[3],
-    };
-    return handleAdminInstance(req);
   }
 
   // GET  /admin/jobs/:id

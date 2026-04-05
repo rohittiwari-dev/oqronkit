@@ -14,7 +14,7 @@ import { Storage } from "../core.js";
 import type { KeepJobs, RemoveOnConfig } from "../types/job.types.js";
 
 export interface PruneOptions {
-  /** Storage namespace: "jobs" (unified) */
+  /** Storage namespace: "jobs", "cron_history", "schedule_history" */
   namespace: string;
 
   /** The ID of the job that just completed/failed (used for immediate removal) */

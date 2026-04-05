@@ -1,8 +1,8 @@
 import { describe, expect, it, beforeEach, afterEach, vi } from "vitest";
-import { OqronKit, queue } from "../../src/index.js";
+import { OqronKit, taskQueue } from "../../src/index.js";
 import { OqronEventBus, OqronRegistry } from "../../src/engine/index.js";
 
-describe("Server-Dependent module: Queue", () => {
+describe("Server-Dependent module: Task Queue", () => {
   beforeEach(async () => {
     vi.useFakeTimers();
   });
@@ -16,7 +16,7 @@ describe("Server-Dependent module: Queue", () => {
   it("should process jobs synchronously in a monolithic loop", async () => {
     let fired = false;
 
-    const myQueue = queue<{ msg: string }, string>({
+    const myQueue = taskQueue<{ msg: string }, string>({
       name: "msg-queue-1",
       handler: async (job) => {
         fired = true;
@@ -25,12 +25,12 @@ describe("Server-Dependent module: Queue", () => {
       },
     });
 
-    // Re-init so the registry catches the dynamic queue instantiation
+    // Re-init so the registry catches the dynamic taskQueue instantiation
     await OqronKit.init({
       config: {
         environment: "test",
         project: "test-proj",
-        modules: ["queue"],
+        modules: ["taskQueue"],
       },
     });
 
@@ -47,7 +47,7 @@ describe("Server-Dependent module: Queue", () => {
     let active = 0;
     let maxFound = 0;
 
-    const myQueue = queue({
+    const myQueue = taskQueue({
       name: "concurrent-cap",
       concurrency: 2, // strictly 2 maximum at once
       handler: async () => {
@@ -62,7 +62,7 @@ describe("Server-Dependent module: Queue", () => {
       config: {
         environment: "test",
         project: "test-proj",
-        modules: ["queue"],
+        modules: ["taskQueue"],
       },
     });
 
@@ -82,7 +82,7 @@ describe("Server-Dependent module: Queue", () => {
     const successSpy = vi.fn();
     OqronEventBus.on("job:success", successSpy);
 
-    const q = queue({
+    const q = taskQueue({
       name: "event-q",
       handler: async () => "result payload",
     });
@@ -91,7 +91,7 @@ describe("Server-Dependent module: Queue", () => {
       config: {
         environment: "test",
         project: "test-proj",
-        modules: ["queue"],
+        modules: ["taskQueue"],
       },
     });
 

@@ -1,8 +1,4 @@
-import type {
-  IBrokerEngine,
-  ILockAdapter,
-  IStorageEngine,
-} from "../types/engine.js";
+import type { IBrokerEngine, IStorageEngine } from "../types/engine.js";
 import type { OqronJob } from "../types/job.types.js";
 
 /**
@@ -102,45 +98,20 @@ export class DependencyResolver {
   /**
    * Register a child job's dependency on parent jobs.
    * Adds the childId to each parent's childrenIds array.
-   *
-   * Uses a distributed lock per parent to prevent the read-modify-write
-   * race condition where two concurrent workers could overwrite each
-   * other's children arrays.
    */
   static async registerDependencies(
     storage: IStorageEngine,
     childId: string,
     dependsOn: string[],
-    lock?: ILockAdapter,
   ): Promise<void> {
-    const lockOwnerId = `dep-resolver-${childId}`;
-
     for (const parentId of dependsOn) {
-      const lockKey = `dep:parent:${parentId}`;
-      let lockAcquired = false;
-
-      // Acquire a short-lived lock to serialize access to parent's childrenIds
-      if (lock) {
-        for (let attempt = 0; attempt < 3; attempt++) {
-          lockAcquired = await lock.acquire(lockKey, lockOwnerId, 5_000);
-          if (lockAcquired) break;
-          await new Promise((r) => setTimeout(r, 50 * (attempt + 1)));
+      const parent = await storage.get<OqronJob>("jobs", parentId);
+      if (parent) {
+        parent.childrenIds = parent.childrenIds ?? [];
+        if (!parent.childrenIds.includes(childId)) {
+          parent.childrenIds.push(childId);
         }
-      }
-
-      try {
-        const parent = await storage.get<OqronJob>("jobs", parentId);
-        if (parent) {
-          parent.childrenIds = parent.childrenIds ?? [];
-          if (!parent.childrenIds.includes(childId)) {
-            parent.childrenIds.push(childId);
-          }
-          await storage.save("jobs", parentId, parent);
-        }
-      } finally {
-        if (lock && lockAcquired) {
-          await lock.release(lockKey, lockOwnerId).catch(() => {});
-        }
+        await storage.save("jobs", parentId, parent);
       }
     }
   }

@@ -1,15 +1,12 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import {
-  initEngine,
-  stopEngine,
-  Storage,
-} from "../../src/engine/core.js";
+import { initEngine, stopEngine, Storage, Broker } from "../../src/engine/core.js";
+import { OqronContainer } from "../../src/engine/container.js";
 import { OqronRegistry } from "../../src/engine/registry.js";
 import { OqronEventBus } from "../../src/engine/events/event-bus.js";
-import { QueueEngine } from "../../src/queue/queue-engine.js";
+import { TaskQueueEngine } from "../../src/task-queue/task-queue-engine.js";
+import { WorkerEngine } from "../../src/queue/worker-engine.js";
 import type { OqronConfig } from "../../src/engine/types/config.types.js";
 import type { OqronJob } from "../../src/engine/types/job.types.js";
-import { queueModule } from "../../src/modules.js";
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -25,19 +22,14 @@ function createLogger() {
   } as any;
 }
 
-const queueConf = queueModule({ concurrency: 1, heartbeatMs: 100 });
-
 const config: OqronConfig = {
   project: "test",
   environment: "test",
-  modules: [queueConf],
+  modules: ["taskQueue"],
+  taskQueue: { concurrency: 1, heartbeatMs: 100 },
 };
 
-function makeJob(
-  id: string,
-  queueName: string,
-  status: string = "active",
-): OqronJob {
+function makeJob(id: string, queueName: string, status: string = "active"): OqronJob {
   return {
     id,
     type: "task",
@@ -56,15 +48,15 @@ function makeJob(
 
 // ── Tests ───────────────────────────────────────────────────────────────────
 
-describe("QueueEngine — cancelActiveJob()", () => {
-  let engine: QueueEngine;
+describe("TaskQueueEngine — cancelActiveJob()", () => {
+  let engine: TaskQueueEngine;
   let logger: any;
 
   beforeEach(async () => {
     await initEngine({ project: "test", environment: "test" });
     OqronRegistry.getInstance()._reset();
     logger = createLogger();
-    engine = new QueueEngine(config, logger, queueConf);
+    engine = new TaskQueueEngine(config, logger);
   });
 
   afterEach(async () => {
@@ -79,6 +71,10 @@ describe("QueueEngine — cancelActiveJob()", () => {
   });
 
   it("signal.aborted is false by default in handler context", async () => {
+    let capturedSignal: AbortSignal | null = null;
+
+    // We'll manually simulate by accessing the engine's internal methods
+    // Instead, test the signal on the context interface level
     const controller = new AbortController();
     expect(controller.signal.aborted).toBe(false);
 
@@ -100,6 +96,32 @@ describe("QueueEngine — cancelActiveJob()", () => {
   });
 });
 
+describe("WorkerEngine — cancelActiveJob()", () => {
+  let engine: WorkerEngine;
+  let logger: any;
+
+  beforeEach(async () => {
+    await initEngine({ project: "test", environment: "test" });
+    OqronRegistry.getInstance()._reset();
+    logger = createLogger();
+    engine = new WorkerEngine(
+      { ...config, modules: ["worker"], worker: { concurrency: 1, heartbeatMs: 100 } },
+      logger,
+    );
+  });
+
+  afterEach(async () => {
+    await engine.stop();
+    await stopEngine();
+    OqronEventBus.removeAllListeners();
+  });
+
+  it("returns false when jobId is not being actively executed", async () => {
+    const result = await engine.cancelActiveJob("nonexistent-job");
+    expect(result).toBe(false);
+  });
+});
+
 describe("OqronManager — cancelJob() with active jobs", () => {
   beforeEach(async () => {
     await initEngine({ project: "test", environment: "test" });
@@ -112,9 +134,7 @@ describe("OqronManager — cancelJob() with active jobs", () => {
   });
 
   it("deletes non-active jobs directly from storage", async () => {
-    const { OqronManager } = await import(
-      "../../src/manager/oqron-manager.js"
-    );
+    const { OqronManager } = await import("../../src/manager/oqron-manager.js");
     const mgr = OqronManager.from({ project: "test", environment: "test" });
 
     const job = makeJob("j-waiting", "q", "waiting");
@@ -126,9 +146,7 @@ describe("OqronManager — cancelJob() with active jobs", () => {
   });
 
   it("delegates to engine.cancelActiveJob for active jobs", async () => {
-    const { OqronManager } = await import(
-      "../../src/manager/oqron-manager.js"
-    );
+    const { OqronManager } = await import("../../src/manager/oqron-manager.js");
     const mgr = OqronManager.from({ project: "test", environment: "test" });
 
     // Register a mock module with cancelActiveJob
@@ -151,9 +169,7 @@ describe("OqronManager — cancelJob() with active jobs", () => {
   });
 
   it("falls back to storage delete if no engine claims the active job", async () => {
-    const { OqronManager } = await import(
-      "../../src/manager/oqron-manager.js"
-    );
+    const { OqronManager } = await import("../../src/manager/oqron-manager.js");
     const mgr = OqronManager.from({ project: "test", environment: "test" });
 
     // Register a module that doesn't recognize the job
@@ -178,9 +194,7 @@ describe("OqronManager — cancelJob() with active jobs", () => {
   });
 
   it("cancelJob on nonexistent job doesn't throw", async () => {
-    const { OqronManager } = await import(
-      "../../src/manager/oqron-manager.js"
-    );
+    const { OqronManager } = await import("../../src/manager/oqron-manager.js");
     const mgr = OqronManager.from({ project: "test", environment: "test" });
 
     await expect(mgr.cancelJob("ghost")).resolves.toBeUndefined();
