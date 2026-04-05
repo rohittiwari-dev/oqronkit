@@ -59,7 +59,7 @@ export async function deliverWebhook(
     };
   } catch (error: any) {
     const durationMs = Math.round(performance.now() - start);
-    
+
     // Check if it's an abort error
     if (error.name === "AbortError") {
       throw new Error(`Webhook delivery timeout after ${timeoutMs}ms`);

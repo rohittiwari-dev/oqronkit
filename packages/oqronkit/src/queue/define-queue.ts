@@ -34,20 +34,28 @@ export function queue<T = any, R = any>(
       const jobId = opts?.jobId ?? randomUUID();
       const hasDeps = opts?.dependsOn && opts.dependsOn.length > 0;
 
-      const instanceState = await di.storage.get<{enabled: boolean}>("queue_instances", config.name);
+      const instanceState = await di.storage.get<{ enabled: boolean }>(
+        "queue_instances",
+        config.name,
+      );
       const isInstanceEnabled = instanceState ? instanceState.enabled : true;
 
       // Resolve disabledBehavior: per-queue → module-level → "hold" default
-      const moduleConfig = di.config?.modules?.find?.((m: any) => m.module === "queue") as any;
-      const behavior = config.disabledBehavior ?? moduleConfig?.disabledBehavior ?? "hold";
+      const moduleConfig = di.config?.modules?.find?.(
+        (m: any) => m.module === "queue",
+      ) as any;
+      const behavior =
+        config.disabledBehavior ?? moduleConfig?.disabledBehavior ?? "hold";
 
       if (!isInstanceEnabled && behavior === "reject") {
-         throw new Error(`Queue ${config.name} is disabled and configured to reject new jobs`);
+        throw new Error(
+          `Queue ${config.name} is disabled and configured to reject new jobs`,
+        );
       }
 
       if (!isInstanceEnabled && behavior === "skip") {
-         // Silently drop
-         return { id: jobId, status: "completed" } as any; // Mock response
+        // Silently drop
+        return { id: jobId, status: "completed" } as any; // Mock response
       }
 
       const job: OqronJob = {
@@ -55,14 +63,18 @@ export function queue<T = any, R = any>(
         type: "task",
         queueName: config.name,
         moduleName: config.name,
-        status: !isInstanceEnabled && behavior === "hold" 
-          ? "paused" 
-          : hasDeps
-            ? "waiting-children"
-            : opts?.delay
-              ? "delayed"
-              : "waiting",
-        pausedReason: !isInstanceEnabled && behavior === "hold" ? "disabled-hold" : undefined,
+        status:
+          !isInstanceEnabled && behavior === "hold"
+            ? "paused"
+            : hasDeps
+              ? "waiting-children"
+              : opts?.delay
+                ? "delayed"
+                : "waiting",
+        pausedReason:
+          !isInstanceEnabled && behavior === "hold"
+            ? "disabled-hold"
+            : undefined,
         data,
         opts: opts ?? {},
         attemptMade: 0,
@@ -87,13 +99,20 @@ export function queue<T = any, R = any>(
       // 1.5 Handle pruning for held jobs
       if (!isInstanceEnabled && behavior === "hold") {
         const maxHeld = moduleConfig?.maxHeldJobs ?? 100;
-        const heldJobs = await di.storage.list<any>("jobs", {
-          moduleName: config.name,
-          status: "paused",
-          pausedReason: "disabled-hold",
-        }, { limit: 100_000 });
-        
-        heldJobs.sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+        const heldJobs = await di.storage.list<any>(
+          "jobs",
+          {
+            moduleName: config.name,
+            status: "paused",
+            pausedReason: "disabled-hold",
+          },
+          { limit: 100_000 },
+        );
+
+        heldJobs.sort(
+          (a, b) =>
+            new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+        );
 
         if (heldJobs.length > maxHeld) {
           const toRemove = heldJobs.slice(0, heldJobs.length - maxHeld);

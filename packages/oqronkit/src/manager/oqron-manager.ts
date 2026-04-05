@@ -148,7 +148,7 @@ export class OqronManager {
    * Enable a specific registered instance (e.g., a specific queue or cron definition).
    */
   async enableInstance(type: JobType, name: string): Promise<boolean> {
-    if (type === "task" || type === "queue" as any) {
+    if (type === "task" || type === ("queue" as any)) {
       await Storage.save("queue_instances", name, { enabled: true });
       return true;
     }
@@ -167,7 +167,7 @@ export class OqronManager {
    * Disable a specific registered instance (e.g., a specific queue or cron definition).
    */
   async disableInstance(type: JobType, name: string): Promise<boolean> {
-    if (type === "task" || type === "queue" as any) {
+    if (type === "task" || type === ("queue" as any)) {
       await Storage.save("queue_instances", name, { enabled: false });
       return true;
     }

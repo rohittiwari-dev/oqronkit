@@ -25,7 +25,7 @@ export class JobContext {
     this.signal = opts.signal;
     this.environment = opts.environment;
     this.project = opts.project;
-    
+
     // Wrap logger to intercept logs
     const originalLogger = opts.logger;
     const interceptor = (level: string) => (message: string, meta?: any) => {

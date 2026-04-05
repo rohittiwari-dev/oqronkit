@@ -213,8 +213,9 @@ export const OqronKit = {
     // --- Boot modules from normalized definitions ---
     const cronConf = getModuleConfig<CronModuleDef>(_config.modules, "cron");
     if (cronConf) {
-      const { SchedulerModule, _drainPending } =
-        await import("./scheduler/index.js");
+      const { SchedulerModule, _drainPending } = await import(
+        "./scheduler/index.js"
+      );
       const schedules = _drainPending();
       for (const s of schedules)
         s.tags = [...new Set([...(s.tags ?? []), ..._config.tags])];
@@ -233,8 +234,9 @@ export const OqronKit = {
       "scheduler",
     );
     if (schedulerConf) {
-      const { ScheduleEngine, _drainPendingSchedules } =
-        await import("./scheduler/index.js");
+      const { ScheduleEngine, _drainPendingSchedules } = await import(
+        "./scheduler/index.js"
+      );
       const schedules = _drainPendingSchedules();
       for (const s of schedules)
         s.tags = [...new Set([...(s.tags ?? []), ..._config.tags])];

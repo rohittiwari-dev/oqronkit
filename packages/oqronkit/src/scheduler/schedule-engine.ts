@@ -200,27 +200,33 @@ export class ScheduleEngine implements IOqronModule {
               key,
               runId: id,
             });
-            this.di.storage.get<any>("jobs", id).then(async dbJob => {
-              if (dbJob) {
-                dbJob.stalledCount = (dbJob.stalledCount ?? 0) + 1;
-                if (!dbJob.timeline) dbJob.timeline = [];
-                dbJob.timeline.push({
-                   ts: new Date(),
-                   from: dbJob.status,
-                   to: "stalled",
-                   reason: "Worker lock expired. Job aborted."
-                });
-                dbJob.status = "stalled";
-                try {
-                  await this.di.storage.save("jobs", id, dbJob);
-                } catch (e) {
-                  this.logger.error("Failed to commit stall telemetry for schedule", { runId: id, error: String(e) });
+            this.di.storage
+              .get<any>("jobs", id)
+              .then(async (dbJob) => {
+                if (dbJob) {
+                  dbJob.stalledCount = (dbJob.stalledCount ?? 0) + 1;
+                  if (!dbJob.timeline) dbJob.timeline = [];
+                  dbJob.timeline.push({
+                    ts: new Date(),
+                    from: dbJob.status,
+                    to: "stalled",
+                    reason: "Worker lock expired. Job aborted.",
+                  });
+                  dbJob.status = "stalled";
+                  try {
+                    await this.di.storage.save("jobs", id, dbJob);
+                  } catch (e) {
+                    this.logger.error(
+                      "Failed to commit stall telemetry for schedule",
+                      { runId: id, error: String(e) },
+                    );
+                  }
                 }
-              }
-            }).finally(() => {
-               job.abort?.abort();
-               this.activeJobs.delete(id);
-            });
+              })
+              .finally(() => {
+                job.abort?.abort();
+                this.activeJobs.delete(id);
+              });
           }
         }
       },
@@ -427,13 +433,15 @@ export class ScheduleEngine implements IOqronModule {
 
         // ── Disabled behavior enforcement ──────────────────────────────────
         if (record.paused) {
-          const behavior = def.disabledBehavior ?? this.config?.disabledBehavior ?? "hold";
+          const behavior =
+            def.disabledBehavior ?? this.config?.disabledBehavior ?? "hold";
 
-          // ALL disabled behaviors must advance the nextRunAt, otherwise we infinite-loop 
+          // ALL disabled behaviors must advance the nextRunAt, otherwise we infinite-loop
           // every tick since the record stays in the past.
           const nextRun = this.computeNextRun(def, now);
           if (nextRun) {
-            const existing = (await this.di.storage.get<any>("schedules", def.name)) || {};
+            const existing =
+              (await this.di.storage.get<any>("schedules", def.name)) || {};
             await this.di.storage.save("schedules", def.name, {
               ...existing,
               nextRunAt: nextRun,
@@ -450,7 +458,14 @@ export class ScheduleEngine implements IOqronModule {
               name: def.name,
               behavior: "reject",
             });
-            OqronEventBus.emit("job:fail", "system_schedule", record.name, new Error(`Schedule ${def.name} is disabled and configured to reject fires`));
+            OqronEventBus.emit(
+              "job:fail",
+              "system_schedule",
+              record.name,
+              new Error(
+                `Schedule ${def.name} is disabled and configured to reject fires`,
+              ),
+            );
             continue;
           }
 
@@ -473,21 +488,41 @@ export class ScheduleEngine implements IOqronModule {
             project: this.project ?? "default",
             queuedAt: now,
             triggeredBy: "schedule",
-            logs: [{ level: "warn", msg: `Schedule ${def.name} fired while disabled — job held`, ts: now }],
-            timeline: [{ ts: now, from: "waiting", to: "paused", reason: "Instance disabled — hold" }],
+            logs: [
+              {
+                level: "warn",
+                msg: `Schedule ${def.name} fired while disabled — job held`,
+                ts: now,
+              },
+            ],
+            timeline: [
+              {
+                ts: now,
+                from: "waiting",
+                to: "paused",
+                reason: "Instance disabled — hold",
+              },
+            ],
             steps: [],
             createdAt: now,
           });
 
           // Prune excess held jobs for this definition (FIFO — oldest removed first)
           const maxHeld = this.config?.maxHeldJobs ?? 100;
-          const heldJobs = await this.di.storage.list<any>("jobs", {
-            moduleName: def.name,
-            status: "paused",
-            pausedReason: "disabled-hold",
-          }, { limit: 100_000 });
-          
-          heldJobs.sort((a: any, b: any) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime());
+          const heldJobs = await this.di.storage.list<any>(
+            "jobs",
+            {
+              moduleName: def.name,
+              status: "paused",
+              pausedReason: "disabled-hold",
+            },
+            { limit: 100_000 },
+          );
+
+          heldJobs.sort(
+            (a: any, b: any) =>
+              new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+          );
 
           if (heldJobs.length > maxHeld) {
             const toRemove = heldJobs.slice(0, heldJobs.length - maxHeld);
@@ -496,7 +531,10 @@ export class ScheduleEngine implements IOqronModule {
             }
           }
 
-          this.logger.info("Schedule fire held — instance is disabled", { name: def.name, holdId });
+          this.logger.info("Schedule fire held — instance is disabled", {
+            name: def.name,
+            holdId,
+          });
           continue;
         }
 
@@ -648,12 +686,14 @@ export class ScheduleEngine implements IOqronModule {
       queuedAt: startedAt,
       triggeredBy: "schedule",
       logs: [],
-      timeline: [{
-        ts: startedAt,
-        from: "waiting",
-        to: "running",
-        reason: `Schedule ${def.name} fired`,
-      }],
+      timeline: [
+        {
+          ts: startedAt,
+          from: "waiting",
+          to: "running",
+          reason: `Schedule ${def.name} fired`,
+        },
+      ],
       steps: [],
       startedAt,
     });
@@ -662,7 +702,12 @@ export class ScheduleEngine implements IOqronModule {
     entry.promise = Promise.resolve().then(async () => {
       // Local accumulator — guarantees no log entries are lost to async races
       const localLogs: Array<{ level: string; msg: string; ts: Date }> = [];
-      const localTimeline: Array<{ ts: Date; from: string; to: string; reason: string }> = [];
+      const localTimeline: Array<{
+        ts: Date;
+        from: string;
+        to: string;
+        reason: string;
+      }> = [];
 
       const ctx = new ScheduleContext({
         id: runId,
@@ -700,7 +745,9 @@ export class ScheduleEngine implements IOqronModule {
         },
         onLog: (level, msg) => {
           // Synchronous push — no async race, no lost logs
-          (this.logger as any)[level]?.(`[Schedule:${def.name}] ${msg}`, { runId });
+          (this.logger as any)[level]?.(`[Schedule:${def.name}] ${msg}`, {
+            runId,
+          });
           localLogs.push({ level, msg, ts: new Date() });
         },
       });
@@ -781,18 +828,24 @@ export class ScheduleEngine implements IOqronModule {
       }
 
       const finishedAt = new Date();
-      const existingJob = await this.di.storage.get<any>("jobs", runId) ?? {};
+      const existingJob = (await this.di.storage.get<any>("jobs", runId)) ?? {};
 
       // Push the final completion event into local accumulator
       localTimeline.push({
         ts: finishedAt,
         from: "running",
         to: status,
-        reason: status === "failed" ? (error ?? "Unknown error") : "Finished successfully",
+        reason:
+          status === "failed"
+            ? (error ?? "Unknown error")
+            : "Finished successfully",
       });
 
       // Merge: initial timeline from DB + all locally accumulated entries
-      const mergedTimeline = [...(existingJob.timeline || []), ...localTimeline];
+      const mergedTimeline = [
+        ...(existingJob.timeline || []),
+        ...localTimeline,
+      ];
       // Merge: initial logs from DB + all locally accumulated entries
       const mergedLogs = [...(existingJob.logs || []), ...localLogs];
 

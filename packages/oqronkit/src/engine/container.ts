@@ -32,7 +32,10 @@ const makeIsolatedBroker = (
   resume: (ns) => base.resume(`${prefix}:${ns}`),
 });
 
-const makeIsolatedLock = (base: ILockAdapter, prefix: string): ILockAdapter => ({
+const makeIsolatedLock = (
+  base: ILockAdapter,
+  prefix: string,
+): ILockAdapter => ({
   acquire: (key, owner, ttl) => base.acquire(`${prefix}:${key}`, owner, ttl),
   renew: (key, owner, ttl) => base.renew(`${prefix}:${key}`, owner, ttl),
   release: (key, owner) => base.release(`${prefix}:${key}`, owner),

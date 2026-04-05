@@ -70,7 +70,7 @@ export class ScheduleContext<TPayload = unknown>
       if (typeof fn === "function") {
         fn.call(this.logger, message, meta);
       }
-      
+
       if (this._onLog) {
         this._onLog(level, message);
       }

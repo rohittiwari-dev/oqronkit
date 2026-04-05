@@ -1,4 +1,7 @@
-import type { ClusteringConfig, DisabledBehavior } from "./engine/types/config.types.js";
+import type {
+  ClusteringConfig,
+  DisabledBehavior,
+} from "./engine/types/config.types.js";
 import type { BrokerStrategy } from "./engine/types/engine.js";
 import type { RemoveOnConfig } from "./engine/types/job.types.js";
 
@@ -130,6 +133,15 @@ export interface WebhookModuleConfig {
   heartbeatMs?: number;
   /** Lock TTL in ms for crash recovery. @default 30000 */
   lockTtlMs?: number;
+  /** Default HTTP request timeout in ms. @default 30000 */
+  timeout?: number;
+  /** Default retry configuration for all webhooks */
+  retries?: {
+    max?: number;
+    strategy?: "fixed" | "exponential";
+    baseDelay?: number;
+    maxDelay?: number;
+  };
   /** Graceful shutdown drain timeout in ms. @default 25000 */
   shutdownTimeout?: number;
   /** Max stalled job retries before marking as permanently failed. @default 1 */
@@ -157,7 +169,9 @@ export interface WebhookModuleConfig {
 // ── Discriminated Union (resolved module definitions) ───────────────────────
 
 export type CronModuleDef = { module: "cron" } & CronModuleConfig;
-export type SchedulerModuleDef = { module: "scheduler" } & SchedulerModuleConfig;
+export type SchedulerModuleDef = {
+  module: "scheduler";
+} & SchedulerModuleConfig;
 export type QueueModuleDef = { module: "queue" } & QueueModuleConfig;
 export type WebhookModuleDef = { module: "webhook" } & WebhookModuleConfig;
 

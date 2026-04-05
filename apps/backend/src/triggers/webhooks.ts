@@ -15,26 +15,34 @@ export const platformWebhooks = webhook({
     baseDelay: 2000,
   },
 
-  endpoints: [
-    {
-      name: "AcmeCorp Integration",
-      url: "https://api.acme.com/v1/webhooks/receive",
-      // Subscribes to all order events using glob matching
-      events: ["order.**", "user.signup"],
-      security: {
-        signingAlgorithm: "sha256",
-        signingSecret: process.env.ACME_WEBHOOK_SECRET || "fallback-secret",
-        signingHeader: "x-acme-signature",
+  security() {
+    return {
+      signingSecret: "asdasdasd",
+    };
+  },
+
+  async endpoints() {
+    return [
+      {
+        name: "AcmeCorp Integration",
+        url: "https://api.acme.com/v1/webhooks/receive",
+        // Subscribes to all order events using glob matching
+        events: ["order.**", "user.signup"],
+        security: {
+          signingAlgorithm: "sha256",
+          signingSecret: process.env.ACME_WEBHOOK_SECRET || "fallback-secret",
+          signingHeader: "x-acme-signature",
+        },
       },
-    },
-    {
-      name: "Internal Analytics Stream",
-      url: "https://data.internal.svc/ingest",
-      // Matches a single segment wildcard
-      events: ["user.*.activated", "system.health"],
-      // endpoints can also omit security if they are purely internal
-    },
-  ],
+      {
+        name: "Internal Analytics Stream",
+        url: "https://data.internal.svc/ingest",
+        // Matches a single segment wildcard
+        events: ["user.*.activated", "system.health"],
+        // endpoints can also omit security if they are purely internal
+      },
+    ];
+  },
 });
 
 // Example Event Firings:

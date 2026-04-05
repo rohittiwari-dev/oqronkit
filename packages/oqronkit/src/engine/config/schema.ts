@@ -9,7 +9,10 @@ import type {
 
 // ── Resolved Module Config Defaults ─────────────────────────────────────────
 
-const DEFAULT_CRON: Omit<Required<CronModuleDef>, "clustering" | "disabledBehavior" | "maxHeldJobs"> & {
+const DEFAULT_CRON: Omit<
+  Required<CronModuleDef>,
+  "clustering" | "disabledBehavior" | "maxHeldJobs"
+> & {
   clustering?: CronModuleDef["clustering"];
   disabledBehavior?: CronModuleDef["disabledBehavior"];
   maxHeldJobs?: CronModuleDef["maxHeldJobs"];
@@ -26,7 +29,10 @@ const DEFAULT_CRON: Omit<Required<CronModuleDef>, "clustering" | "disabledBehavi
   lagMonitor: { maxLagMs: 5000, sampleIntervalMs: 1000 },
 };
 
-const DEFAULT_SCHEDULER: Omit<Required<SchedulerModuleDef>, "clustering" | "disabledBehavior" | "maxHeldJobs"> & {
+const DEFAULT_SCHEDULER: Omit<
+  Required<SchedulerModuleDef>,
+  "clustering" | "disabledBehavior" | "maxHeldJobs"
+> & {
   clustering?: SchedulerModuleDef["clustering"];
   disabledBehavior?: SchedulerModuleDef["disabledBehavior"];
   maxHeldJobs?: SchedulerModuleDef["maxHeldJobs"];
@@ -41,7 +47,10 @@ const DEFAULT_SCHEDULER: Omit<Required<SchedulerModuleDef>, "clustering" | "disa
   lagMonitor: { maxLagMs: 5000, sampleIntervalMs: 1000 },
 };
 
-const DEFAULT_QUEUE: Omit<Required<QueueModuleDef>, "disabledBehavior" | "maxHeldJobs"> & {
+const DEFAULT_QUEUE: Omit<
+  Required<QueueModuleDef>,
+  "disabledBehavior" | "maxHeldJobs"
+> & {
   disabledBehavior?: QueueModuleDef["disabledBehavior"];
   maxHeldJobs?: QueueModuleDef["maxHeldJobs"];
 } = {
@@ -64,14 +73,14 @@ const DEFAULT_QUEUE: Omit<Required<QueueModuleDef>, "disabledBehavior" | "maxHel
   stalledInterval: 30000,
 };
 
-const DEFAULT_WEBHOOK: Omit<Required<WebhookModuleDef>, "disabledBehavior" | "maxHeldJobs" | "signFunction" | "endpoints" | "security" | "method" | "headers"> & {
+const DEFAULT_WEBHOOK: Omit<
+  Required<WebhookModuleDef>,
+  "disabledBehavior" | "maxHeldJobs" | "removeOnComplete" | "removeOnFail"
+> & {
   disabledBehavior?: WebhookModuleDef["disabledBehavior"];
   maxHeldJobs?: WebhookModuleDef["maxHeldJobs"];
-  signFunction?: WebhookModuleDef["signFunction"];
-  endpoints?: WebhookModuleDef["endpoints"];
-  security?: WebhookModuleDef["security"];
-  method?: WebhookModuleDef["method"];
-  headers?: WebhookModuleDef["headers"];
+  removeOnComplete?: WebhookModuleDef["removeOnComplete"];
+  removeOnFail?: WebhookModuleDef["removeOnFail"];
 } = {
   module: "webhook",
   concurrency: 5,
@@ -87,6 +96,8 @@ const DEFAULT_WEBHOOK: Omit<Required<WebhookModuleDef>, "disabledBehavior" | "ma
   shutdownTimeout: 25000,
   stalledInterval: 30000,
   timeout: 30000,
+  removeOnComplete: false,
+  removeOnFail: false,
 };
 
 /**
@@ -107,7 +118,6 @@ export function applyModuleDefaults(def: OqronModuleDef): OqronModuleDef {
       return def;
   }
 }
-
 
 function applyCronDefaults(def: CronModuleDef): CronModuleDef {
   return {
@@ -215,7 +225,6 @@ export const OqronConfigSchema = z.object({
     })
     .default({}),
 
-  // Observability (alpha-5 port)
   observability: z
     .object({
       maxJobLogs: z.number().default(200),

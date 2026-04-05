@@ -81,26 +81,32 @@ export class QueueEngine implements IOqronModule {
         const queueName = qs.find((_q) => this.activeJobs.has(jobId))?.name;
         if (queueName) {
           // Increment stalledCount and update telemetry before returning to broker
-          this.di.storage.get<any>("jobs", jobId).then(async job => {
-            if (job) {
-              job.stalledCount = (job.stalledCount ?? 0) + 1;
-              if (!job.timeline) job.timeline = [];
-              job.timeline.push({
-                ts: new Date(),
-                from: job.status,
-                to: "stalled",
-                reason: `Worker lock expired. Re-enqueuing.`
-              });
-              job.status = "stalled";
-              try {
-                await this.di.storage.save("jobs", jobId, job);
-              } catch (e) {
-                this.logger.error("Failed to commit stall telemetry", { jobId, error: String(e) });
+          this.di.storage
+            .get<any>("jobs", jobId)
+            .then(async (job) => {
+              if (job) {
+                job.stalledCount = (job.stalledCount ?? 0) + 1;
+                if (!job.timeline) job.timeline = [];
+                job.timeline.push({
+                  ts: new Date(),
+                  from: job.status,
+                  to: "stalled",
+                  reason: `Worker lock expired. Re-enqueuing.`,
+                });
+                job.status = "stalled";
+                try {
+                  await this.di.storage.save("jobs", jobId, job);
+                } catch (e) {
+                  this.logger.error("Failed to commit stall telemetry", {
+                    jobId,
+                    error: String(e),
+                  });
+                }
               }
-            }
-          }).finally(() => {
-            void this.di.broker.nack(queueName, jobId);
-          });
+            })
+            .finally(() => {
+              void this.di.broker.nack(queueName, jobId);
+            });
         }
       },
     );
