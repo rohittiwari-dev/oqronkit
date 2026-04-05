@@ -1,0 +1,118 @@
+import type { DisabledBehavior } from "../engine/types/config.types.js";
+import type { BrokerStrategy } from "../engine/types/engine.js";
+import type { OqronJob, OqronJobOptions } from "../engine/types/job.types.js";
+
+export interface QueueJobContext<T = any> {
+  /** The internal idempotency key or generated UUID of the job */
+  id: string;
+
+  /** The typed payload provided during tracking */
+  data: T;
+
+  /**
+   * AbortSignal — fired when the job is cancelled mid-execution.
+   * Handlers should check `ctx.signal.aborted` periodically for long-running work.
+   */
+  signal: AbortSignal;
+
+  /** Update the progression of the job, propagated to events */
+  progress: (percent: number, label?: string) => Promise<void>;
+
+  /** Log execution telemetry */
+  log: (level: "info" | "warn" | "error", message: string) => void;
+
+  /** Mark the job as permanently failed without triggering backoff retries */
+  discard: () => void;
+
+  /** The queue this job belongs to */
+  queueName: string;
+
+  /** The module definition name that created this job */
+  moduleName: string;
+
+  /** The environment context (isolation boundary) */
+  environment: string;
+
+  /** The project context (isolation boundary) */
+  project: string;
+}
+
+export interface QueueConfig<T = any, R = any> {
+  /** The unified identifier for this specific task pipeline */
+  name: string;
+
+  /** Provide lock-guarantees for crash recovery. Defaults to true. */
+  guaranteedWorker?: boolean;
+
+  /** Internal heartbeat polling. Overrides global config. */
+  heartbeatMs?: number;
+
+  /** Lock TTL in the adapter. Overrides global config. */
+  lockTtlMs?: number;
+
+  /** Parallel execution limit. Overrides global config. */
+  concurrency?: number;
+
+  /** Job ordering strategy. Overrides global config. @default "fifo" */
+  strategy?: BrokerStrategy;
+
+  /** Native worker retry logic. Deep-merged with global config. */
+  retries?: {
+    max?: number;
+    strategy?: "fixed" | "exponential";
+    baseDelay?: number;
+    maxDelay?: number;
+  };
+
+  /** DLQ hooks */
+  deadLetter?: {
+    enabled?: boolean;
+    onDead?: (job: OqronJob<T, R>) => Promise<void>;
+  };
+
+  /**
+   * Behavior when a job is added to this queue but the queue is disabled.
+   * - "hold": Accept the job, place it in "paused" status (default)
+   * - "skip": Silently drop the job without enqueueing
+   * - "reject": Throw an error explicitly rejecting the enqueue attempt
+   */
+  disabledBehavior?: DisabledBehavior;
+
+  /**
+   * Auto-remove completed jobs after processing.
+   * Overrides global config. See OqronJobOptions.removeOnComplete.
+   */
+  removeOnComplete?: import("../engine/types/job.types.js").RemoveOnConfig;
+
+  /**
+   * Auto-remove failed jobs after all retries exhausted.
+   * Overrides global config. See OqronJobOptions.removeOnFail.
+   */
+  removeOnFail?: import("../engine/types/job.types.js").RemoveOnConfig;
+
+  /** Natively execute direct local callbacks when the monolithic processor succeeds or fails */
+  hooks?: {
+    onSuccess?: (job: OqronJob<T, R>, result: R) => Promise<void> | void;
+    onFail?: (job: OqronJob<T, R>, error: Error) => Promise<void> | void;
+  };
+
+  /**
+   * Execution timeout in milliseconds.
+   * If the handler does not fulfill within this time, it is aborted and fails.
+   */
+  timeout?: number;
+
+  /**
+   * The monolithic processing function.
+   * Required for queue definitions.
+   */
+  handler: (job: QueueJobContext<T>) => Promise<R>;
+}
+
+export interface IQueue<T = any, R = any> {
+  name: string;
+  /**
+   * Pushes a new payload onto the queue.
+   */
+  add(data: T, opts?: OqronJobOptions): Promise<OqronJob<T, R>>;
+}

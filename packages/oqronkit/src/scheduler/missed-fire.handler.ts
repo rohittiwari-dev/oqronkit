@@ -1,14 +1,9 @@
 import { randomUUID } from "node:crypto";
-import _cronParser from "cron-parser";
-import type { CronDefinition, IOqronAdapter, Logger } from "../core/index.js";
-
-const cronParser = (_cronParser as any).default ?? _cronParser;
+import type { CronDefinition, Logger } from "../engine/index.js";
+import { cronParser } from "./cron-compat.js";
 
 export class MissedFireHandler {
-  constructor(
-    private readonly logger: Logger,
-    readonly _db: IOqronAdapter,
-  ) {}
+  constructor(private readonly logger: Logger) {}
 
   async checkMissed(
     def: CronDefinition,
@@ -21,17 +16,14 @@ export class MissedFireHandler {
       let missed = false;
 
       if (def.expression) {
-        // Find what the PREVIOUS scheduled run should have been
         const opts = { currentDate: now, tz: def.timezone };
         const prevRun = cronParser
           .parseExpression(def.expression, opts)
           .prev()
           .toDate();
 
-        // If the prev schedule is after lastRunAt, we missed it
         missed = prevRun > lastRunAt;
       } else if (def.intervalMs) {
-        // For interval schedules: check if more than intervalMs has passed since last run
         const elapsed = now.getTime() - lastRunAt.getTime();
         missed = elapsed > def.intervalMs;
       }
@@ -42,7 +34,6 @@ export class MissedFireHandler {
           policy: def.missedFire,
         });
 
-        // Trigger user hook regardless of policy
         if (def.hooks?.onMissedFire) {
           try {
             const ctx = {
@@ -74,7 +65,7 @@ export class MissedFireHandler {
         }
       }
     } catch {
-      // Ignore parse errors (validated on startup anyway)
+      // Ignore parse errors
     }
 
     return false;

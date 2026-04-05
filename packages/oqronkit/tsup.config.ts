@@ -4,6 +4,7 @@ export default defineConfig([
   {
     entry: ["src/index.ts"],
     format: ["cjs", "esm"],
+    cjsInterop: true,
     dts: true,
     clean: true,
     sourcemap: true,
@@ -14,28 +15,6 @@ export default defineConfig([
       "find-up",
       "voltlog-io",
       "zod",
-      "rrule",
-    ],
-    outDir: "dist",
-    target: "node18",
-    shims: true,
-    treeshake: true,
-  },
-  // Isolated sub-module exports
-  {
-    entry: {
-      cron: "src/cron.ts",
-      scheduler: "src/scheduler/index.ts",
-    },
-    format: ["cjs", "esm"],
-    dts: true,
-    clean: true,
-    sourcemap: true,
-    external: [
-      "eventemitter3",
-      "zod",
-      "cron-parser",
-      "better-sqlite3",
       "rrule",
     ],
     outDir: "dist",

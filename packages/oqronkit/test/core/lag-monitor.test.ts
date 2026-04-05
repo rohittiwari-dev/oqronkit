@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { LagMonitor } from "../../src/core/lag-monitor.js";
+import { LagMonitor } from "../../src/engine/lag-monitor.js";
 
 describe("LagMonitor", () => {
   it("starts without tripping circuit", () => {

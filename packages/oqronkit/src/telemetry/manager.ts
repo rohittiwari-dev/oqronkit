@@ -1,4 +1,4 @@
-import { OqronEventBus } from "../core/events/event-bus.js";
+import { OqronEventBus } from "../engine/events/event-bus.js";
 
 /**
  * TelemetryManager — Prometheus-compatible metrics collector for OqronKit.
@@ -11,68 +11,102 @@ import { OqronEventBus } from "../core/events/event-bus.js";
  * All metrics are collected passively via EventBus — no manual calls needed.
  */
 export class TelemetryManager {
+  private static _instance: TelemetryManager | null = null;
+
+  static getInstance(): TelemetryManager {
+    if (!TelemetryManager._instance) {
+      TelemetryManager._instance = new TelemetryManager();
+    }
+    return TelemetryManager._instance;
+  }
+
   // ── Counters ────────────────────────────────────────────────────
   private jobsStartedTotal = new Map<string, number>();
   private jobsCompletedTotal = new Map<string, number>();
   private jobsFailedTotal = new Map<string, number>();
   private jobsActiveGauge = new Map<string, number>();
-  private jobDurationsMs: Array<{ schedule: string; duration: number }> = [];
+  private jobDurationsMs: Array<{
+    schedule: string;
+    duration: number;
+    ts: number;
+  }> = [];
 
   // Track start times so we can compute duration on completion
   private jobStartTimes = new Map<string, { ts: number; schedule: string }>();
 
   private started = false;
 
+  // Bound listener references for proper cleanup (only remove our own)
+  private _onStart = this._handleStart.bind(this);
+  private _onSuccess = this._handleSuccess.bind(this);
+  private _onFail = this._handleFail.bind(this);
+
   /** Start listening for events from the internal OqronKit EventBus */
   start(): void {
     if (this.started) return;
     this.started = true;
 
-    OqronEventBus.on("job:start", (jobId: string, schedule: string) => {
-      this.increment(this.jobsStartedTotal, schedule);
-      this.increment(this.jobsActiveGauge, schedule);
-      this.jobStartTimes.set(jobId, { ts: Date.now(), schedule });
-    });
+    OqronEventBus.on("job:start", this._onStart);
+    OqronEventBus.on("job:success", this._onSuccess);
+    OqronEventBus.on("job:fail", this._onFail);
+  }
 
-    OqronEventBus.on("job:success", (jobId: string) => {
-      const entry = this.jobStartTimes.get(jobId);
-      const schedule = entry?.schedule ?? "_unknown";
+  private _handleStart(
+    queueName: string,
+    jobId: string,
+    schedule?: string,
+  ): void {
+    const topic = schedule || queueName || "_unknown";
+    this.increment(this.jobsStartedTotal, topic);
+    this.increment(this.jobsActiveGauge, topic);
+    this.jobStartTimes.set(jobId, { ts: Date.now(), schedule: topic });
+  }
 
-      this.increment(this.jobsCompletedTotal, schedule);
-      this.decrement(this.jobsActiveGauge, schedule);
+  private _handleSuccess(_queueName: string, jobId: string): void {
+    const entry = this.jobStartTimes.get(jobId);
+    const schedule = entry?.schedule ?? "_unknown";
 
-      // Record duration if we have a start time
-      if (entry) {
-        const duration = Date.now() - entry.ts;
-        this.jobDurationsMs.push({ schedule, duration });
-        this.jobStartTimes.delete(jobId);
+    this.increment(this.jobsCompletedTotal, schedule);
+    this.decrement(this.jobsActiveGauge, schedule);
 
-        // Cap duration samples to prevent memory leak
-        if (this.jobDurationsMs.length > 10_000) {
-          this.jobDurationsMs = this.jobDurationsMs.slice(-5_000);
+    if (entry) {
+      const now = Date.now();
+      const duration = now - entry.ts;
+      this.jobDurationsMs.push({ schedule, duration, ts: now });
+      this.jobStartTimes.delete(jobId);
+
+      if (this.jobDurationsMs.length > 2000) {
+        const cutoff = now - 5 * 60 * 1000;
+        this.jobDurationsMs = this.jobDurationsMs.filter((d) => d.ts > cutoff);
+        if (this.jobDurationsMs.length > 2000) {
+          this.jobDurationsMs = this.jobDurationsMs.slice(-2000);
         }
       }
-    });
+    }
+  }
 
-    OqronEventBus.on("job:fail", (jobId: string, _error: Error) => {
-      const entry = this.jobStartTimes.get(jobId);
-      const schedule = entry?.schedule ?? "_unknown";
+  private _handleFail(_queueName: string, jobId: string, _error: Error): void {
+    const entry = this.jobStartTimes.get(jobId);
+    const schedule = entry?.schedule ?? "_unknown";
 
-      this.increment(this.jobsFailedTotal, schedule);
-      this.decrement(this.jobsActiveGauge, schedule);
+    this.increment(this.jobsFailedTotal, schedule);
+    this.decrement(this.jobsActiveGauge, schedule);
 
-      if (entry) {
-        const duration = Date.now() - entry.ts;
-        this.jobDurationsMs.push({ schedule, duration });
-        this.jobStartTimes.delete(jobId);
-      }
-    });
+    if (entry) {
+      const now = Date.now();
+      const duration = now - entry.ts;
+      this.jobDurationsMs.push({ schedule, duration, ts: now });
+      this.jobStartTimes.delete(jobId);
+    }
   }
 
   /** Stop listening and reset all counters */
   stop(): void {
     this.started = false;
-    OqronEventBus.removeAllListeners();
+    // Remove only OUR listeners — not all listeners on the shared bus
+    OqronEventBus.off("job:start", this._onStart);
+    OqronEventBus.off("job:success", this._onSuccess);
+    OqronEventBus.off("job:fail", this._onFail);
     this.jobsStartedTotal.clear();
     this.jobsCompletedTotal.clear();
     this.jobsFailedTotal.clear();
@@ -137,7 +171,9 @@ export class TelemetryManager {
 
     // ── Duration summary (p50, p95, p99) ──
     if (this.jobDurationsMs.length > 0) {
-      const schedules = new Set(this.jobDurationsMs.map((d) => d.schedule));
+      const cutoff = Date.now() - 5 * 60 * 1000;
+      const recentDurations = this.jobDurationsMs.filter((d) => d.ts > cutoff);
+      const schedules = new Set(recentDurations.map((d) => d.schedule));
 
       lines.push("");
       lines.push(
@@ -146,7 +182,7 @@ export class TelemetryManager {
       lines.push("# TYPE oqronkit_job_duration_ms summary");
 
       for (const sched of schedules) {
-        const durations = this.jobDurationsMs
+        const durations = recentDurations
           .filter((d) => d.schedule === sched)
           .map((d) => d.duration)
           .sort((a, b) => a - b);

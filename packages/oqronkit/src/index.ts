@@ -1,77 +1,91 @@
-import fs from "node:fs/promises";
-import path from "node:path";
+import { access, readdir } from "node:fs/promises";
+import * as path from "node:path";
 import { pathToFileURL } from "node:url";
+import { initEngine, Storage, stopEngine } from "./engine/core.js";
 import {
   createLogger,
-  type ILockAdapter,
-  type IOqronAdapter,
   type Logger,
   loadConfig,
   type OqronConfig,
   OqronRegistry,
   reconfigureConfig,
   type ValidatedConfig,
-} from "./core/index.js";
+} from "./engine/index.js";
 import {
-  MemoryOqronAdapter,
-  NamespacedOqronAdapter,
-  PostgresAdapter,
-  RedisAdapter,
-  SqliteAdapter,
-} from "./db/index.js";
-import {
-  DbLockAdapter,
-  MemoryLockAdapter,
-  NamespacedLockAdapter,
-  PostgresLockAdapter,
-  RedisLockAdapter,
-} from "./lock/index.js";
-import { expressRouter } from "./server/express.js";
-import { fastifyPlugin } from "./server/fastify.js";
+  type CronModuleDef,
+  getModuleConfig,
+  type QueueModuleDef,
+  type SchedulerModuleDef,
+  type WebhookModuleDef,
+} from "./modules.js";
+import { expressRouter as _expressRouter } from "./server/express.js";
+import { fastifyPlugin as _fastifyPlugin } from "./server/fastify.js";
 import { TelemetryManager } from "./telemetry/index.js";
 
 let _config: ValidatedConfig | null = null;
-let _db: IOqronAdapter | null = null;
-let _lock: ILockAdapter | null = null;
 let _logger: Logger | null = null;
-let _telemetry: TelemetryManager | null = null;
 
 export type {
+  ClusteringConfig,
   CronDefinition,
   CronHooks,
+  DisabledBehavior,
   EveryConfig,
   ICronContext,
-  ILockAdapter,
-  IOqronAdapter,
   IScheduleContext,
+  JobLogEntry,
   JobRecord,
+  JobTimelineEntry,
+  JobTriggerSource,
   Logger,
   MissedFirePolicy,
   OqronLoggerConfig,
   OverlapPolicy,
+  PausedReason,
   RetryConfig,
   ScheduleDefinition,
   ScheduleHooks,
   ScheduleRecurring,
   ScheduleRunAfter,
-} from "./core/index.js";
+} from "./engine/index.js";
 // ── Re-exports: single source of truth for ALL user-facing APIs ─────────────
 export {
-  createDbAdapter,
-  createLockAdapter,
   createLogger,
+  DependencyResolver,
   defineConfig,
+  OqronContainer,
   OqronEventBus,
-} from "./core/index.js";
-export { PostgresAdapter, RedisAdapter, SqliteAdapter } from "./db/index.js";
-export { Queue } from "./distributed/queue.js";
-export { Worker } from "./distributed/worker.js";
+} from "./engine/index.js";
+export { ShardedLeaderElection } from "./engine/lock/index.js";
 export {
-  DbLockAdapter,
-  MemoryLockAdapter,
-  PostgresLockAdapter,
-  RedisLockAdapter,
-} from "./lock/index.js";
+  type JobHistoryResult,
+  type ModuleInfo,
+  OqronManager,
+  type QueueInfoResult,
+  type QueueMetrics,
+} from "./manager/oqron-manager.js";
+// ── Module factories ────────────────────────────────────────────────────────
+export {
+  type CronModuleConfig,
+  type CronModuleDef,
+  cronModule,
+  getModuleConfig,
+  normalizeModules,
+  type OqronModuleDef,
+  type OqronModuleInput,
+  type OqronModuleName,
+  type QueueModuleConfig,
+  type QueueModuleDef,
+  queueModule,
+  type SchedulerModuleConfig,
+  type SchedulerModuleDef,
+  scheduleModule,
+  type WebhookModuleConfig,
+  type WebhookModuleDef,
+  webhookModule,
+} from "./modules.js";
+export { queue } from "./queue/define-queue.js";
+export type { IQueue, QueueConfig, QueueJobContext } from "./queue/types.js";
 export {
   cron,
   type DefineCronOptions,
@@ -79,18 +93,94 @@ export {
   type ScheduleInstance,
   schedule,
 } from "./scheduler/index.js";
-export { taskQueue } from "./task-queue/define-task-queue.js";
-export type {
-  ITaskQueue,
-  TaskJobContext,
-  TaskQueueConfig,
-} from "./task-queue/types.js";
+export {
+  type IWebhookDispatcher,
+  type WebhookConfig,
+  type WebhookDeliveryPayload,
+  type WebhookDeliveryResult,
+  type WebhookEndpoint,
+  type WebhookEndpointsInput,
+  type WebhookMethod,
+  type WebhookRetryConfig,
+  type WebhookSecurity,
+  type WebhookSecurityInput,
+  webhook,
+} from "./webhook/index.js";
+
+// ── Trigger Auto-Discovery ──────────────────────────────────────────────────
+
+/** Well-known directories checked when `triggers` is not set */
+const TRIGGER_PROBE_PATHS = ["src/triggers", "triggers", "src/jobs", "jobs"];
+
+/** Recursively import all .ts/.js files in a directory */
+async function scanDir(dir: string): Promise<number> {
+  let count = 0;
+  const entries = await readdir(dir, { withFileTypes: true });
+  for (const entry of entries) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      count += await scanDir(full);
+    } else if (entry.isFile() && /\.(js|ts|mjs|cjs)$/.test(entry.name)) {
+      await import(pathToFileURL(full).toString());
+      count++;
+      ``;
+    }
+  }
+  return count;
+}
+
+async function discoverTriggers(
+  config: ValidatedConfig,
+  cwd: string,
+  logger: Logger,
+): Promise<void> {
+  // Explicitly disabled
+  if (config.triggers === false) return;
+
+  // Explicit path provided
+  if (typeof config.triggers === "string") {
+    const resolved = path.resolve(cwd, config.triggers);
+    try {
+      await access(resolved);
+      const count = await scanDir(resolved);
+      logger.info(`Loaded ${count} trigger file(s) from ${config.triggers}`);
+    } catch {
+      logger.warn(
+        `Triggers directory "${config.triggers}" not found at ${resolved}. ` +
+          `Ensure trigger files are imported manually before OqronKit.init().`,
+      );
+    }
+    return;
+  }
+
+  // Auto-detect: probe common directories
+  for (const probe of TRIGGER_PROBE_PATHS) {
+    const resolved = path.resolve(cwd, probe);
+    try {
+      await access(resolved);
+      const count = await scanDir(resolved);
+      logger.info(`Auto-discovered ${count} trigger file(s) from ${probe}/`);
+      return;
+    } catch {
+      // Not found — try next
+    }
+  }
+
+  // Nothing found — warn with guidance
+  logger.warn(
+    "No triggers directory found. OqronKit checked: " +
+      TRIGGER_PROBE_PATHS.join(", ") +
+      ". To fix: (1) create a triggers/ directory, (2) set config.triggers to an explicit path, " +
+      "or (3) import job files manually before OqronKit.init(). " +
+      "Set triggers: false to silence this warning.",
+  );
+}
 
 export const OqronKit = {
   /**
-   * Initialize OqronKit: loads config, auto-discovers jobs, and boots modules.
+   * Initialize OqronKit: loads config and boots modules.
    *
-   * @param opts.cwd - Working directory for config file lookup and jobsDir resolution
+   * @param opts.cwd - Working directory for config file lookup
    * @param opts.config - Explicit config object (skips loadConfig)
    */
   async init(opts?: { cwd?: string; config?: OqronConfig }): Promise<void> {
@@ -104,165 +194,8 @@ export const OqronKit = {
 
     _logger.info(`Starting OqronKit in "${_config.environment}" environment`);
 
-    // --- Infrastructure Resolution ---
-    if (!_config.db) {
-      const msg =
-        "No 'db' adapter configured. Falling back to ephemeral 'MemoryOqronAdapter'. [WARNING: Data will not persist across restarts]";
-      if (_config.environment === "production") {
-        _logger.fatal(`STERN WARNING: ${msg}`);
-      } else {
-        _logger.warn(msg);
-      }
-      _db = new MemoryOqronAdapter();
-    } else if ("adapter" in _config.db) {
-      const { adapter, url } = _config.db;
-      if (adapter === "sqlite") {
-        try {
-          _db = new SqliteAdapter(url ?? "oqron.sqlite");
-        } catch (err: any) {
-          if (
-            err.code === "ERR_MODULE_NOT_FOUND" ||
-            err.code === "MODULE_NOT_FOUND" ||
-            err.message?.includes("better-sqlite3")
-          ) {
-            throw new Error(
-              "[OqronKit] SQLite adapter requires the 'better-sqlite3' package. Install it: npm install better-sqlite3",
-            );
-          }
-          throw err;
-        }
-      } else if (adapter === "postgres") {
-        if (!url) {
-          throw new Error(
-            "[OqronKit] PostgreSQL adapter requires a 'url' (connection string). Example: postgresql://user:pass@host:5432/db",
-          );
-        }
-        // Dynamically import pg to keep it as a peer dependency
-        try {
-          // Dynamic import with variable to bypass TS module resolution for optional peer dep
-          const pgModule = "pg";
-          const pg = await (import(
-            /* webpackIgnore: true */ pgModule
-          ) as Promise<any>);
-          const Pool = pg.default?.Pool ?? pg.Pool;
-          const pool = new Pool({ connectionString: url });
-          _db = new PostgresAdapter(pool);
-          await (_db as PostgresAdapter).migrate();
-          _logger.info("PostgreSQL adapter initialized successfully");
-        } catch (err: any) {
-          if (
-            err.code === "ERR_MODULE_NOT_FOUND" ||
-            err.code === "MODULE_NOT_FOUND"
-          ) {
-            throw new Error(
-              "[OqronKit] PostgreSQL adapter requires the 'pg' package. Install it: npm install pg",
-            );
-          }
-          throw err;
-        }
-      } else if (adapter === "memory") {
-        const msg =
-          "Using ephemeral 'memory' database adapter. [WARNING: Data will not persist across restarts]";
-        if (_config.environment === "production") {
-          _logger.fatal(`STERN WARNING: ${msg}`);
-        } else {
-          _logger.warn(msg);
-        }
-        _db = new MemoryOqronAdapter();
-      } else if (adapter === "redis") {
-        if (!url) {
-          throw new Error(
-            "[OqronKit] Redis adapter requires a 'url' (connection string). Example: redis://localhost:6379",
-          );
-        }
-        try {
-          const ioredisModule = "ioredis";
-          const ioredis = await (import(
-            /* webpackIgnore: true */ ioredisModule
-          ) as Promise<any>);
-          const RedisClient = ioredis.default ?? ioredis;
-          const client = new RedisClient(url);
-          _db = new RedisAdapter(client);
-          _logger.info("Redis adapter initialized successfully");
-        } catch (err: any) {
-          if (
-            err.code === "ERR_MODULE_NOT_FOUND" ||
-            err.code === "MODULE_NOT_FOUND"
-          ) {
-            throw new Error(
-              "[OqronKit] Redis adapter requires the 'ioredis' package. Install it: npm install ioredis",
-            );
-          }
-          throw err;
-        }
-      } else {
-        throw new Error(
-          `[OqronKit] Database adapter '${adapter}' not yet bundled. Please pass a custom IOqronAdapter instance.`,
-        );
-      }
-    } else {
-      _db = _config.db as IOqronAdapter;
-    }
-
-    if (!_config.lock) {
-      _logger.warn(
-        "No 'lock' adapter configured. Falling back to ephemeral 'MemoryLockAdapter'.",
-      );
-      _lock = new MemoryLockAdapter();
-    } else if ("adapter" in _config.lock) {
-      const { adapter, url, ttl } = _config.lock;
-      if (adapter === "db") {
-        // Share the same DB if possible
-        if (_db instanceof SqliteAdapter) {
-          _lock = new DbLockAdapter((_db as any).db, ttl);
-        } else if (_db instanceof PostgresAdapter) {
-          _lock = new PostgresLockAdapter((_db as any).pool, ttl);
-        } else {
-          _lock = new DbLockAdapter(url ?? "oqron.sqlite", ttl);
-        }
-      } else if (adapter === "memory") {
-        _lock = new MemoryLockAdapter();
-      } else if (adapter === "redis") {
-        const lockUrl =
-          url ??
-          (_config.db &&
-          "adapter" in _config.db &&
-          _config.db.adapter === "redis"
-            ? _config.db.url
-            : undefined);
-        if (!lockUrl) {
-          throw new Error(
-            "[OqronKit] Redis lock adapter requires a 'url'. Example: redis://localhost:6379",
-          );
-        }
-        try {
-          const ioredisModule = "ioredis";
-          const ioredis = await (import(
-            /* webpackIgnore: true */ ioredisModule
-          ) as Promise<any>);
-          const RedisClient = ioredis.default ?? ioredis;
-          const client = new RedisClient(lockUrl);
-          _lock = new RedisLockAdapter(client, ttl);
-          _logger.info("Redis lock adapter initialized successfully");
-        } catch (err: any) {
-          if (
-            err.code === "ERR_MODULE_NOT_FOUND" ||
-            err.code === "MODULE_NOT_FOUND"
-          ) {
-            throw new Error(
-              "[OqronKit] Redis lock adapter requires the 'ioredis' package. Install it: npm install ioredis",
-            );
-          }
-          throw err;
-        }
-      } else {
-        throw new Error(
-          `[OqronKit] Lock adapter '${adapter}' not yet bundled. Please pass a custom ILockAdapter instance.`,
-        );
-      }
-    } else {
-      _lock = _config.lock as ILockAdapter;
-    }
+    // --- Boot Engine ---
+    await initEngine(_config);
 
     // --- Shutdown hooks ---
     if (_config.shutdown.enabled) {
@@ -274,272 +207,153 @@ export const OqronKit = {
       }
     }
 
-    // --- Boot modules ---
-    if (_config.modules.includes("cron")) {
-      const { SchedulerModule, _drainPending } = await import(
-        "./scheduler/index.js"
-      );
+    // --- Auto-discover trigger/job definitions ---
+    await discoverTriggers(_config, cwd, _logger);
 
-      // Auto-discover jobs if directory is configured
-      if (_config.jobsDir) {
-        const jobsPath = path.resolve(cwd, _config.jobsDir);
-        _logger.debug(`Scanning jobsDir: ${jobsPath}`);
-
-        try {
-          async function scan(dir: string) {
-            try {
-              const entries = await fs.readdir(dir, { withFileTypes: true });
-              for (const entry of entries) {
-                const fullPath = path.join(dir, entry.name);
-                if (entry.isDirectory()) {
-                  await scan(fullPath);
-                } else if (
-                  entry.isFile() &&
-                  /\.(js|ts|mjs|cjs)$/.test(entry.name) &&
-                  !entry.name.endsWith(".d.ts")
-                ) {
-                  _logger?.debug(`Auto-importing job file: ${entry.name}`);
-                  // Dynamically import to trigger cron() side-effects
-                  await import(pathToFileURL(fullPath).toString());
-                }
-              }
-            } catch (err) {
-              if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
-            }
-          }
-
-          await scan(jobsPath);
-        } catch (err) {
-          _logger.warn(`Failed to scan jobsDir: ${_config.jobsDir}`, {
-            error: String(err),
-          });
-        }
-      }
-
-      // Collect all auto-registered definitions
+    // --- Boot modules from normalized definitions ---
+    const cronConf = getModuleConfig<CronModuleDef>(_config.modules, "cron");
+    if (cronConf) {
+      const { SchedulerModule, _drainPending } =
+        await import("./scheduler/index.js");
       const schedules = _drainPending();
-
-      // Inject global config tags onto all cron jobs natively
-      for (const s of schedules) {
+      for (const s of schedules)
         s.tags = [...new Set([...(s.tags ?? []), ..._config.tags])];
-      }
-
-      const nsDb = new NamespacedOqronAdapter(
-        _db!,
-        _config.project,
-        _config.environment,
-      );
-      const nsLock = new NamespacedLockAdapter(
-        _lock!,
-        _config.project,
-        _config.environment,
-      );
-
       const scheduler = new SchedulerModule(
         schedules,
-        nsDb,
-        nsLock,
         _logger!,
         _config.environment,
         _config.project,
-        { ..._config.cron, shutdownTimeout: _config.shutdown.timeout },
+        cronConf,
       );
       OqronRegistry.getInstance().register(scheduler);
     }
 
-    if (_config.modules.includes("scheduler")) {
-      const { ScheduleEngine, _drainPendingSchedules } = await import(
-        "./scheduler/index.js"
-      );
-
-      // The file scan happens above during 'cron' if both are enabled.
-      // If ONLY 'scheduler' is enabled, we need to do the file scan here.
-      if (!_config.modules.includes("cron") && _config.jobsDir) {
-        _logger.warn(
-          "jobsDir scanning currently bound to cron module block. Consider enabling 'cron' module or creating global scanner.",
-        );
-      }
-
-      // Collect all auto-registered definitions
+    const schedulerConf = getModuleConfig<SchedulerModuleDef>(
+      _config.modules,
+      "scheduler",
+    );
+    if (schedulerConf) {
+      const { ScheduleEngine, _drainPendingSchedules } =
+        await import("./scheduler/index.js");
       const schedules = _drainPendingSchedules();
-
-      // Inject global config tags onto all schedule jobs natively
-      for (const s of schedules) {
+      for (const s of schedules)
         s.tags = [...new Set([...(s.tags ?? []), ..._config.tags])];
-      }
-
-      const nsDb = new NamespacedOqronAdapter(
-        _db!,
-        _config.project,
-        _config.environment,
-      );
-      const nsLock = new NamespacedLockAdapter(
-        _lock!,
-        _config.project,
-        _config.environment,
-      );
-
-      const engine = new ScheduleEngine(
+      const scheduleEngine = new ScheduleEngine(
         schedules,
-        nsDb,
-        nsLock,
         _logger!,
         _config.environment,
         _config.project,
-        { ..._config.scheduler, shutdownTimeout: _config.shutdown.timeout },
+        schedulerConf,
       );
+      OqronRegistry.getInstance().register(scheduleEngine);
+    }
+
+    const queueConf = getModuleConfig<QueueModuleDef>(_config.modules, "queue");
+    if (queueConf) {
+      const { QueueEngine } = await import("./queue/queue-engine.js");
+      const engine = new QueueEngine(_config, _logger!, queueConf);
       OqronRegistry.getInstance().register(engine);
     }
 
-    if (_config.modules.includes("taskQueue")) {
-      const { TaskQueueEngine } = await import(
-        "./task-queue/task-queue-engine.js"
-      );
-      const engine = new TaskQueueEngine(_config, _logger!);
+    const webhookConf = getModuleConfig<WebhookModuleDef>(
+      _config.modules,
+      "webhook",
+    );
+    if (webhookConf) {
+      const { WebhookEngine } = await import("./webhook/webhook-engine.js");
+      const engine = new WebhookEngine(_config, _logger!, webhookConf);
       OqronRegistry.getInstance().register(engine);
     }
 
-    if (_config.modules.includes("worker")) {
-      const { WorkerEngine } = await import("./distributed/worker-engine.js");
-      const engine = new WorkerEngine(_config, _logger!);
-      OqronRegistry.getInstance().register(engine);
-    }
-
-    // --- Boot all registered modules ---
     const registry = OqronRegistry.getInstance();
-    const modules = registry.getAll();
-
-    for (const mod of modules) {
-      if (mod.enabled) {
-        _logger.debug(`init() → ${mod.name}`);
-        await mod.init();
-      }
+    for (const mod of registry.getAll()) {
+      if (mod.enabled) await mod.init();
     }
-    for (const mod of modules) {
-      if (mod.enabled) {
-        _logger.info(`start() → ${mod.name}`);
-        await mod.start();
-      }
+    for (const mod of registry.getAll()) {
+      if (mod.enabled) await mod.start();
     }
 
     _logger.info("OqronKit ready ✓");
-
-    // Wire server handlers to the registry so /jobs/:id can trigger schedules
     const { configureHandlers } = await import("./server/handlers.js");
-    configureHandlers(registry);
+    configureHandlers(registry, _config);
+
+    // Start TelemetryManager — collects throughput, latency, memory from EventBus
+    TelemetryManager.getInstance().start();
   },
 
-  /** Gracefully stop all modules */
   async stop(): Promise<void> {
     const log =
       _logger ??
       createLogger({ enabled: true, level: "info" }, { module: "oqronkit" });
     log.info("Stopping OqronKit…");
-
     const timeoutMs = _config?.shutdown.timeout ?? 30000;
     const registry = OqronRegistry.getInstance();
-
     const stopPromise = Promise.all(
       registry
         .getAll()
         .filter((m) => m.enabled)
         .map((m) => m.stop()),
     );
-
     const timeoutPromise = new Promise((_, reject) =>
-      setTimeout(
-        () =>
-          reject(new Error(`Graceful shutdown timed out after ${timeoutMs}ms`)),
-        timeoutMs,
-      ),
+      setTimeout(() => reject(new Error("Timeout")), timeoutMs),
     );
-
     try {
       await Promise.race([stopPromise, timeoutPromise]);
+      await stopEngine();
       log.info("OqronKit stopped.");
     } catch (err) {
-      log.error("Error during stop or shutdown timeout", {
-        error: String(err),
-      });
+      log.error("Error during stop", { error: String(err) });
     }
   },
 
-  /** Get the current validated config */
   getConfig(): ValidatedConfig {
-    if (!_config)
-      throw new Error(
-        "[OqronKit] Not initialized yet. Call OqronKit.init() first.",
-      );
+    if (!_config) throw new Error("Not initialized");
     return _config;
   },
 
-  /** Get the database adapter (available after init()) */
-  getDb(): IOqronAdapter {
-    if (!_db) throw new Error("[OqronKit] Not initialized yet.");
-    return _db;
-  },
-
-  /** Get the lock adapter (available after init()) */
-  getLock(): ILockAdapter {
-    if (!_lock) throw new Error("[OqronKit] Not initialized yet.");
-    return _lock;
-  },
-
-  /** Pause a schedule from natively executing */
   async pause(scheduleId: string): Promise<void> {
-    if (!_db) throw new Error("[OqronKit] Not initialized yet.");
-    if (_config?.project && _config?.environment) {
-      await new NamespacedOqronAdapter(
-        _db,
-        _config.project,
-        _config.environment,
-      ).pauseSchedule(scheduleId);
-    } else {
-      await _db.pauseSchedule(scheduleId);
-    }
+    const s = await Storage.get<{ paused?: boolean }>("schedules", scheduleId);
+    if (s) await Storage.save("schedules", scheduleId, { ...s, paused: true });
   },
 
-  /** Resume a previously paused schedule */
   async resume(scheduleId: string): Promise<void> {
-    if (!_db) throw new Error("[OqronKit] Not initialized yet.");
-    if (_config?.project && _config?.environment) {
-      await new NamespacedOqronAdapter(
-        _db,
-        _config.project,
-        _config.environment,
-      ).resumeSchedule(scheduleId);
-    } else {
-      await _db.resumeSchedule(scheduleId);
-    }
+    const s = await Storage.get<{ paused?: boolean }>("schedules", scheduleId);
+    if (s) await Storage.save("schedules", scheduleId, { ...s, paused: false });
   },
 
-  /** Get the Express router for monitoring */
+  /**
+   * Returns a sealed configuration object for the OqronUI dashboard package.
+   * Used as: `app.use("/oqron", OqronUI.register(OqronKit.ui()))`
+   */
+  ui(): {
+    apiBasePath: string;
+    auth?: { username?: string; password?: string };
+    retention?: { runs?: string; events?: string; metrics?: string };
+    project: string;
+    environment: string;
+    modules: string[];
+  } {
+    if (!_config) throw new Error("OqronKit.ui() called before init()");
+    return {
+      apiBasePath: "/api/oqron",
+      auth: _config.ui?.auth,
+      retention: _config.ui?.retention,
+      project: _config.project ?? "unnamed",
+      environment: _config.environment ?? "development",
+      modules: (_config.modules ?? []).map((m) => m.module),
+    };
+  },
+
   expressRouter() {
-    return expressRouter();
+    return _expressRouter();
   },
-
-  /** Get the Fastify plugin for monitoring */
   fastifyPlugin(fastify: any, opts: any, done: () => void) {
-    return fastifyPlugin(fastify, opts, done);
+    return _fastifyPlugin(fastify, opts, done);
   },
-
-  /** Get Prometheus-formatted metrics text */
   getMetrics(): string {
-    if (!_telemetry) {
-      _telemetry = new TelemetryManager();
-      _telemetry.start();
-    }
-    return _telemetry.serialize();
+    return TelemetryManager.getInstance().serialize();
   },
-
-  /** Get the telemetry manager instance (for engine-level recording) */
   getTelemetry(): TelemetryManager {
-    if (!_telemetry) {
-      _telemetry = new TelemetryManager();
-      _telemetry.start();
-    }
-    return _telemetry;
+    return TelemetryManager.getInstance();
   },
 };
-
-export default OqronKit;

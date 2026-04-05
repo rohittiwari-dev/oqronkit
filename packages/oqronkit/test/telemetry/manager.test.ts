@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { OqronEventBus } from "../../src/core/events/event-bus.js";
+import { OqronEventBus } from "../../src/engine/events/event-bus.js";
 import { TelemetryManager } from "../../src/telemetry/manager.js";
 
 describe("TelemetryManager", () => {
@@ -15,7 +15,7 @@ describe("TelemetryManager", () => {
   });
 
   it("tracks job:start events", () => {
-    OqronEventBus.emit("job:start", "run-1", "my-cron");
+    OqronEventBus.emit("job:start", "system_schedule", "run-1", "my-cron");
 
     const output = telemetry.serialize();
     expect(output).toContain("oqronkit_jobs_started_total");
@@ -23,28 +23,28 @@ describe("TelemetryManager", () => {
   });
 
   it("tracks job:success events", () => {
-    OqronEventBus.emit("job:start", "run-1", "my-cron");
-    OqronEventBus.emit("job:success", "run-1");
+    OqronEventBus.emit("job:start", "system_schedule", "run-1", "my-cron");
+    OqronEventBus.emit("job:success", "system_schedule", "run-1");
 
     const output = telemetry.serialize();
     expect(output).toContain("oqronkit_jobs_completed_total");
   });
 
   it("tracks job:fail events", () => {
-    OqronEventBus.emit("job:start", "run-1", "my-cron");
-    OqronEventBus.emit("job:fail", "run-1", new Error("boom"));
+    OqronEventBus.emit("job:start", "system_schedule", "run-1", "my-cron");
+    OqronEventBus.emit("job:fail", "system_schedule", "run-1", new Error("boom"));
 
     const output = telemetry.serialize();
     expect(output).toContain("oqronkit_jobs_failed_total");
   });
 
   it("tracks active gauge (increments on start, decrements on success)", () => {
-    OqronEventBus.emit("job:start", "run-1", "my-cron");
+    OqronEventBus.emit("job:start", "system_schedule", "run-1", "my-cron");
 
     const before = telemetry.serialize();
     expect(before).toContain("oqronkit_jobs_active");
 
-    OqronEventBus.emit("job:success", "run-1");
+    OqronEventBus.emit("job:success", "system_schedule", "run-1");
 
     const after = telemetry.serialize();
     // Active gauge should not show 0 entries (filtered out)
@@ -53,12 +53,12 @@ describe("TelemetryManager", () => {
   });
 
   it("records duration on completion", async () => {
-    OqronEventBus.emit("job:start", "run-1", "duration-test");
+    OqronEventBus.emit("job:start", "system_schedule", "run-1", "duration-test");
 
     // Small delay to create measurable duration
     await new Promise((r) => setTimeout(r, 10));
 
-    OqronEventBus.emit("job:success", "run-1");
+    OqronEventBus.emit("job:success", "system_schedule", "run-1");
 
     const output = telemetry.serialize();
     expect(output).toContain("oqronkit_job_duration_ms");
@@ -66,8 +66,8 @@ describe("TelemetryManager", () => {
   });
 
   it("serialize() returns valid Prometheus format", () => {
-    OqronEventBus.emit("job:start", "run-1", "format-test");
-    OqronEventBus.emit("job:success", "run-1");
+    OqronEventBus.emit("job:start", "system_schedule", "run-1", "format-test");
+    OqronEventBus.emit("job:success", "system_schedule", "run-1");
 
     const output = telemetry.serialize();
     expect(output).toContain("# HELP");
@@ -77,7 +77,7 @@ describe("TelemetryManager", () => {
   });
 
   it("stop() clears all metrics", () => {
-    OqronEventBus.emit("job:start", "run-1", "clear-test");
+    OqronEventBus.emit("job:start", "system_schedule", "run-1", "clear-test");
     telemetry.stop();
 
     // Re-start to check serialization is empty

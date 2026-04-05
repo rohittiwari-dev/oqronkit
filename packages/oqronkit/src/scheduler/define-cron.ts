@@ -1,4 +1,3 @@
-import _cronParser from "cron-parser";
 import type {
   CronDefinition,
   CronHooks,
@@ -7,9 +6,9 @@ import type {
   MissedFirePolicy,
   OverlapPolicy,
   RetryConfig,
-} from "../core/index.js";
-
-const cronParser = (_cronParser as any).default ?? _cronParser;
+} from "../engine/index.js";
+import type { DisabledBehavior } from "../engine/types/config.types.js";
+import { cronParser } from "./cron-compat.js";
 
 import { _registerCron } from "./registry.js";
 
@@ -28,11 +27,21 @@ export type DefineCronOptions = CronScheduleConfig & {
   lockTtlMs?: number;
   timeout?: number;
   tags?: string[];
+  /** Override global history rolling. `true` = infinite, `false` = none, `number` = max retained jobs. */
+  keepHistory?: boolean | number;
+  /** Keep specific bounded history length for failed jobs */
+  keepFailedHistory?: boolean | number;
   handler: (ctx: ICronContext) => Promise<unknown>;
   hooks?: CronHooks;
   retries?: RetryConfig;
   maxConcurrent?: number;
   status?: "active" | "paused";
+  /**
+   * Behavior when this cron fires while disabled/paused.
+   * Overrides the module-level setting.
+   * @default "hold"
+   */
+  disabledBehavior?: DisabledBehavior;
 };
 
 // ── Helpers ─────────────────────────────────────────────────────────────────────
@@ -96,11 +105,14 @@ export const cron = (options: DefineCronOptions): CronDefinition => {
     lockTtlMs: options.lockTtlMs,
     timeout: options.timeout,
     tags: options.tags ?? [],
+    keepHistory: options.keepHistory,
+    keepFailedHistory: options.keepFailedHistory,
     handler: options.handler,
     hooks: options.hooks,
     retries: options.retries,
     maxConcurrent: options.maxConcurrent,
     status: options.status,
+    disabledBehavior: options.disabledBehavior,
   };
 
   // Auto-register: no need for manual array wiring

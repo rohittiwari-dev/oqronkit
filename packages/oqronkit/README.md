@@ -1,127 +1,177 @@
 # OqronKit
 
-![Version](https://img.shields.io/npm/v/oqronkit?style=flat-square)
 ![License](https://img.shields.io/npm/l/oqronkit?style=flat-square)
 
-OqronKit is a high-performance, enterprise-ready cron and job scheduling framework for Node.js. Designed for extreme scaling, multi-tenancy, and distributed microservices architectures, it features seamless Global Locking, automated Leader Election, missed-fire recovery, and zero-configuration database persistence.
+**OqronKit** is a crash-safe, framework-agnostic background computation engine for Node.js. 
 
-Stop struggling with broken internal intervals. Scale confidently across a single monolith or a distributed 50-node cluster using SQLite, Redis, or Memory natively.
+It cleanly replaces your cron scheduler, job queue, retry engine, webhook dispatcher, dead-letter queue, and distributed locking infrastructure. Deploy it as a single-server monolith for simple applications, and scale it seamlessly as a globally distributed microservice architecture when your traffic grows—without changing your code.
 
-## 🌟 Key Features
+---
 
-- **Multi-Tenant Isolation**: Safely run `staging` and `production` environments off the exact same database without collision.
-- **Global Distributed Locks**: Automatically prevents duplicate processing across clusters natively—you will never accidentally bill a user twice!
-- **Leader Election**: Dynamically promotes a master node to handle system polling intervals natively.
-- **Missed-Fire Recovery**: Automatic detection and recovery strategies (`run_now`, `skip`, or `discard`) when the server goes offline during a schedule.
-- **Fully Declarative (`oqron.config.ts`)**: Define a single TS configuration file natively without writing massive infrastructure boots.
-- **Stall Detection**: Natively monitors and revokes jobs if an executing worker crashes silently or hangs indefinitely.
-- **File-based Auto-Routing**: Magically discovers and registers jobs simply by dropping `.ts` files into your `./jobs` directory!
+## 🌟 Features
+
+- **4 Core Modules**: Queue, Webhooks, Cron, and Schedule.
+- **Microservice Ready**: Pluggable storage architecture. Runs entirely in-memory for development, or use **PostgreSQL / Redis** for distributed, horizontally scaled production environments.
+- **Crash-Safe**: Heartbeat locks, Stall Detection, and automatic job recovery if a process dies unexpectedly.
+- **Enterprise Webhooks**: Secure outbound dispatching with deep-glob event matchers (`user.*.created`), SHA-256/512 HMAC signatures, and fan-out distribution.
+- **Job Dependencies (DAG)**: Build complex node graphs (`dependsOn`). Control execution flow with `cascade-fail` or strict `block` failure policies.
+- **Dynamic Pausing**: Use `disabledBehavior` to intelligently `"hold"`, `"skip"`, or `"reject"` job pipelines when modules are temporarily disabled.
+- **Strict Environment Isolation**: Tag tasks with `project` and `environment` names to completely prevent catastrophic test-vs-production execution bleed.
+
+---
 
 ## 📦 Installation
 
 ```bash
 npm install oqronkit
-# or
-yarn add oqronkit
-# or
-bun add oqronkit
 ```
 
-*Note: OqronKit bundles standard SQLite and Memory adapters internally. No additional database ORMs are required.*
+*Optional Storage Adapters:*
+```bash
+npm install pg       # For PostgreSQL storage & locking
+npm install ioredis  # For Redis storage & locking
+```
+
+---
 
 ## 🚀 Quick Start
 
-### 1. Configuration (`oqron.config.ts`)
-Create a single definition file at the root of your application to magically boot the entire underlying layer:
+### 1. Initialize the Engine
+
+Configure and boot OqronKit when your application starts.
 
 ```typescript
-import { defineConfig } from "oqronkit";
+import { defineConfig, OqronKit } from "oqronkit";
 
 export default defineConfig({
-  project: "my-saas-platform",
-  environment: process.env.NODE_ENV || "development",
-  modules: ["cron", "scheduler"], // Enable standard Crons & dynamic Timed Schedules
-  jobsDir: "./src/jobs",          // OqronKit automatically finds jobs here
+  project: "my-saas-core",
+  environment: process.env.NODE_ENV ?? "development",
+  
+  // Choose your storage backend ('default' = in-memory)
+  mode: "default", 
+  
+  // Enable the specific modules you intend to use
+  modules: ["cron", "scheduler", "queue", "webhook"],
+  
+  // Auto-discovers and registers jobs in this directory
+  triggers: "./src/jobs", 
+});
+
+await OqronKit.init();
+console.log("OqronKit is ready!");
+```
+
+---
+
+### 2. Queue (Background Jobs)
+
+A monolithic developer experience that automatically distributes workloads across cluster nodes. Job definitions and handlers live side-by-side.
+
+```typescript
+import { queue } from "oqronkit";
+
+export const emailQueue = queue<{ to: string; template: string }>({
+  name: "email-delivery",
+  concurrency: 5,
+  retries: { max: 3, strategy: "exponential", baseDelay: 2000 },
+  
+  handler: async (ctx) => {
+    // Check for graceful shutdown signals natively
+    if (ctx.signal.aborted) return;
+    
+    await mailer.send(ctx.data.to, ctx.data.template);
+    return { delivered: true };
+  },
+});
+
+// Enqueue jobs from your API routes:
+await emailQueue.add({ to: "user@example.com", template: "welcome" });
+```
+
+---
+
+### 3. Webhooks (Event Dispatching)
+
+Securely dispatch outbound payloads to partners or internal 3rd party APIs with automatic retry policies.
+
+```typescript
+import { webhook } from "oqronkit";
+
+export const billingWebhook = webhook({
+  name: "billing-dispatch",
+  concurrency: 10,
+  endpoints: [
+    {
+      url: "https://api.partner.com/webhooks",
+      events: ["user.billing.**"], // Matches billing.paid, billing.refunded.etc
+      security: {
+        signingSecret: process.env.WEBHOOK_SECRET,
+        signingAlgorithm: "sha256",
+        signingHeader: "x-partner-signature"
+      }
+    }
+  ],
+});
+
+// Broadcast the event. OqronKit will match the pattern, sign the payload, 
+// and reliably dispatch it over the network in the background.
+await billingWebhook.fire("user.billing.payment_succeeded", {
+  userId: "usr_123", amount: 50.00
 });
 ```
 
-### 2. Define a Job (`src/jobs/emails.ts`)
-Declare a job logic structure. OqronKit strongly enforces execution wrappers to track success, failure, and execution limits!
+---
+
+### 4. Cron (Recurring Tasks)
+
+Easily configure robust background sweeps that overlap gracefully.
 
 ```typescript
 import { cron } from "oqronkit";
 
-export const dailyDigest = cron({
-  name: "daily-digest",
-  expression: "0 8 * * *", // Runs every day at 08:00 AM
-  timezone: "UTC",
-  overlap: "skip",         // If it's still sending yesterday's batch, skip today's run
+export const nightlySweep = cron({
+  name: "db-cleanup",
+  expression: "0 0 * * *", // Midnight UTC
+  overlap: "skip",         // Prevents stampeding
+  disabledBehavior: "skip",// Safely bypass if disabled via dashboard
+  
   handler: async (ctx) => {
-    ctx.logger.info("Gathering active users...", { 
-      env: ctx.environment 
-    });
-    
-    // Simulate complex DB queries natively
-    await new Promise((r) => setTimeout(r, 1000));
-    
-    return { users_processed: 50 };
-  }
-});
-```
-
-### 3. Initialize Server
-Simply inject `OqronKit.init()` natively into your backend bootstrapping logic!
-
-```typescript
-import { OqronKit } from "oqronkit";
-
-async function boot() {
-  await OqronKit.init(); 
-  console.log("Enterprise Task Scheduling armed.");
-}
-boot();
-```
-
----
-
-## 🎛 Advanced Usage
-
-### Dynamic Specific-Time Scheduling
-Unlike generic Crons, `scheduler` natively handles firing dynamic "one-off" events inside user logic boundaries, explicitly persisting to the DB out of the box!
-
-```typescript
-import { schedule } from "oqronkit";
-
-// 1. Define the handler type structure
-export const subscriptionHandler = schedule<{ userId: string }>({
-  name: "cancel-subscription-job",
-  keepHistory: true, // Keep an internal audit trail within the DB
-  handler: async (ctx) => {
-    const { userId } = ctx.payload;
-    console.log(`Cancelled user ${userId} natively!`);
-  }
-});
-
-// 2. Trigger the job dynamically in your Express routes natively
-await subscriptionHandler({ userId: "u_abc123" }, { 
-  runAfter: { days: 3 } 
+    const deleted = await db.cleanAbandonedCarts();
+    return { deleted };
+  },
 });
 ```
 
 ---
 
-## 🏗 Architecture & Internal Isolation
+### Job Dependencies (DAG)
 
-By default, the `OqronAdapter` prefixes all Database identities mapping directly based on the config file context:
-`${project}:${environment}:${job_name}`
+Build complex execution pipelines where steps wait for their parents to complete.
 
-This guarantees you can utilize the exact same Redis clusters, the same SQLite tables (`oqron_schedules`), and the identical physical database server for both your staging development servers and production monoliths flawlessly! The leader elections are mathematically isolated using the same prefix architecture natively.
+```typescript
+// Add the parent job
+const extractJob = await extractQueue.add({ source: "aws-s3" });
+
+// Add the child job, telling it to wait for the parent
+const transformJob = await transformQueue.add(
+  { target: "warehouse" },
+  { 
+      dependsOn: [extractJob.id],
+      parentFailurePolicy: "cascade-fail" // Fail if extraction fails
+  }
+);
+```
+
+---
 
 ## 🤝 Contributing
-Issues and Pull Requests are welcome to natively expand support for PostgreSQL via `SKIP LOCKED` extensions and deeper Redis locks.
 
-1. Fork the Project
-2. Create your Feature Branch
-3. Commit your Changes natively.
-4. Push to the Branch natively.
-5. Open a Pull Request!
+1. Fork the project
+2. Create your feature branch (`git checkout -b feat/my-feature`)
+3. Write module tests inside `test/<module>/` to match new features.
+4. Ensure `bunx vitest run` passes across all testing vectors natively.
+5. Open a Pull Request
+
+## 📜 License
+
+[MIT](./LICENSE)

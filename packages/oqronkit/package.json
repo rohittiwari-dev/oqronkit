@@ -1,6 +1,6 @@
 {
   "name": "oqronkit",
-  "version": "0.0.1-alpha.2",
+  "version": "0.0.1-alpha.5",
   "description": "Crash-safe, non-blocking, modular job processing framework for Node.js",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
@@ -11,26 +11,23 @@
   },
   "exports": {
     ".": {
-      "types":   "./dist/index.d.ts",
-      "import":  "./dist/index.mjs",
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.mjs",
       "require": "./dist/index.js"
     },
-    "./cron": {
-      "types":   "./dist/cron.d.ts",
-      "import":  "./dist/cron.mjs",
-      "require": "./dist/cron.js"
-    },
-    "./scheduler": {
-      "types":   "./dist/scheduler.d.ts",
-      "import":  "./dist/scheduler.mjs",
-      "require": "./dist/scheduler.js"
+    "./modules": {
+      "types": "./dist/modules.d.ts",
+      "import": "./dist/modules.mjs",
+      "require": "./dist/modules.js"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
-    "build":         "tsup && tsc --emitDeclarationOnly --outDir dist",
-    "test":          "vitest run",
-    "test:watch":    "vitest",
+    "build": "tsup && tsc --emitDeclarationOnly --outDir dist",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "prepublishOnly": "bun run build"
   },
@@ -43,22 +40,19 @@
     "zod": "^3.22.4"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.13",
+    "@types/ioredis": "^5.0.0",
     "@types/node": "^22.15.3",
+    "@types/pg": "^8.20.0",
     "@vitest/coverage-v8": "^3.0.0",
-    "tsup":                "^8.5.1",
-    "typescript":          "^5.7.3",
-    "vitest":              "^3.0.0"
+    "tsup": "^8.5.1",
+    "typescript": "^5.7.3",
+    "vitest": "^3.0.0"
   },
   "peerDependencies": {
-    "better-sqlite3": ">=9.0.0",
-    "ioredis": ">=5.0.0",
-    "pg": ">=8.0.0"
+    "ioredis": "^5.10.1",
+    "pg": "^8.14.0"
   },
   "peerDependenciesMeta": {
-    "better-sqlite3": {
-      "optional": true
-    },
     "ioredis": {
       "optional": true
     },
@@ -66,5 +60,7 @@
       "optional": true
     }
   },
-  "engines": { "node": ">=18.0.0" }
+  "engines": {
+    "node": ">=18.0.0"
+  }
 }

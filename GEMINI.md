@@ -9,11 +9,11 @@ Whenever you are invoked via the CLI or IDE to assist with this repository, you 
 
 ## 📚 1. Knowledge Base & External Artifact Links
 
-You must maintain a perfectly robust understanding of exactly how modern distributed systems function. To guide your implementation, an exhaustive `implementation_plan.md` has been artifacts-generated alongside reference LLM-dumps from leading industry tools. 
+You must maintain a perfectly robust understanding of exactly how modern distributed systems function. To guide your implementation, an exhaustive `C:\Users\Rohit\.gemini\antigravity\brain\2ea01659-985e-4471-a45d-5f1f8c909cb2` has all the artifacts and knowledge and research gathering we have done so far. 
 
 If you are confused about how a module should operate, you are **required** to look at:
 1. **The Core Implementation Plan:** Outlines the exact API specifications for all 12 modules we are building.
-2. **BullMQ / Celery Patterns:** You must deeply understand concurrency groups, sandboxing, Parent-Child DAGs (Flows), and debounce deduplication.
+2. **Industrygrade / Celery Patterns:** You must deeply understand concurrency groups, sandboxing, Parent-Child DAGs (Flows), and debounce deduplication.
 3. **Inngest Patterns:** You must understand Event-Driven orchestration, memory-buffering (`maxSize`/`maxWaitMs`), and stateful execution steps (`step.run`, `step.sleep`, `step.invoke`).
 
 ---
@@ -49,7 +49,7 @@ Whenever you generate code or implement an OqronKit module, you MUST adhere stri
 We are extending OqronKit into a massive, 12-module background computation engine. Review the `implementation_plan.md` artifact for detailed code specifications for each:
 
 1.  **Task Queue:** Unified, simple queue for monolithic setups where publisher and consumer live together.
-2.  **Distributed Worker:** Pure BullMQ-style decoupled architecture (`Queue` pushing, `Worker` polling).
+2.  **Distributed Worker:** Pure Industrygrade-style decoupled architecture (`Queue` pushing, `Worker` polling).
 3.  **Batch:** Accumulator buffering (`maxSize` or `maxWaitMs`).
 4.  **RateLimit:** Sliding-window distributed limits.
 5.  **Workflow (DAG):** Complex `FlowProducer`-style dependency grids.
@@ -86,3 +86,5 @@ When modifying or writing code, act as a Senior Platform Engineer. You are build
    - Ensure you honor environment isolation (`config.environment`), so a "production" worker does not accidentally claim "development" tasks.
 
 Use this document as your immutable source of truth and personality primer for all OqronKit modifications. Proceed with excellence.
+
+ **ALOWED RESOURCE** : `C:\Users\Rohit\.gemini\antigravity\brain\2ea01659-985e-4471-a45d-5f1f8c909cb2`
