@@ -4,6 +4,7 @@ import type {
   OqronModuleDef,
   QueueModuleDef,
   SchedulerModuleDef,
+  WebhookModuleDef,
 } from "../../modules.js";
 
 // ── Resolved Module Config Defaults ─────────────────────────────────────────
@@ -63,6 +64,31 @@ const DEFAULT_QUEUE: Omit<Required<QueueModuleDef>, "disabledBehavior" | "maxHel
   stalledInterval: 30000,
 };
 
+const DEFAULT_WEBHOOK: Omit<Required<WebhookModuleDef>, "disabledBehavior" | "maxHeldJobs" | "signFunction" | "endpoints" | "security" | "method" | "headers"> & {
+  disabledBehavior?: WebhookModuleDef["disabledBehavior"];
+  maxHeldJobs?: WebhookModuleDef["maxHeldJobs"];
+  signFunction?: WebhookModuleDef["signFunction"];
+  endpoints?: WebhookModuleDef["endpoints"];
+  security?: WebhookModuleDef["security"];
+  method?: WebhookModuleDef["method"];
+  headers?: WebhookModuleDef["headers"];
+} = {
+  module: "webhook",
+  concurrency: 5,
+  heartbeatMs: 5000,
+  lockTtlMs: 30000,
+  retries: {
+    max: 3,
+    strategy: "exponential",
+    baseDelay: 2000,
+    maxDelay: 60000,
+  },
+  maxStalledCount: 1,
+  shutdownTimeout: 25000,
+  stalledInterval: 30000,
+  timeout: 30000,
+};
+
 /**
  * Apply defaults to a normalized OqronModuleDef.
  * Deep-merges nested objects (lagMonitor, retries, deadLetter).
@@ -75,10 +101,13 @@ export function applyModuleDefaults(def: OqronModuleDef): OqronModuleDef {
       return applySchedulerDefaults(def);
     case "queue":
       return applyQueueDefaults(def);
+    case "webhook":
+      return applyWebhookDefaults(def as WebhookModuleDef);
     default:
       return def;
   }
 }
+
 
 function applyCronDefaults(def: CronModuleDef): CronModuleDef {
   return {
@@ -107,6 +136,15 @@ function applyQueueDefaults(def: QueueModuleDef): QueueModuleDef {
     module: "queue",
     retries: { ...DEFAULT_QUEUE.retries, ...(def.retries ?? {}) },
     deadLetter: { ...DEFAULT_QUEUE.deadLetter, ...(def.deadLetter ?? {}) },
+  };
+}
+
+function applyWebhookDefaults(def: WebhookModuleDef): WebhookModuleDef {
+  return {
+    ...DEFAULT_WEBHOOK,
+    ...def,
+    module: "webhook",
+    retries: { ...DEFAULT_WEBHOOK.retries, ...(def.retries ?? {}) },
   };
 }
 

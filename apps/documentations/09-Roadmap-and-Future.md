@@ -10,8 +10,8 @@ OqronKit v1.0 is a production-grade, enterprise-ready distributed processing eng
 |--------|--------|-------------|
 | **Cron** | ✅ Stable | Time-driven global sweeps with leader election |
 | **Schedule** | ✅ Stable | Data-driven parameterized tasks with RRULE support |
-| **TaskQueue** | ✅ Stable | Monolithic background processing with retry/DLQ/cancel |
-| **Queue/Worker** | ✅ Stable | Distributed producer-consumer with rate limiting |
+| **Queue** | ✅ Stable | Scalable background processing with retry/DLQ/cancel |
+| **Webhook** | ✅ Stable | Outbound webhook dispatch with secure payload signing |
 
 ### Infrastructure — Completed
 
@@ -20,7 +20,6 @@ OqronKit v1.0 is a production-grade, enterprise-ready distributed processing eng
 - ✅ **Job Cancellation** — `AbortController`-based mid-execution cancel via `ctx.signal`
 - ✅ **Job Dependencies (DAG)** — `dependsOn` parent IDs with configurable failure policy
 - ✅ **Cron Clustering** — Sharded multi-region leader election for geo-distributed scheduling
-- ✅ **Sandboxed Processors** — `worker_threads` isolation with resource limits for untrusted code
 - ✅ **Job Ordering Strategies** — FIFO, LIFO, and Priority across all brokers
 - ✅ **PostgreSQL Adapter** — `FOR UPDATE SKIP LOCKED` atomic claiming, JSONB+GIN storage, advisory locks
 - ✅ **Redis Adapter Suite** — Sorted sets, Lua scripts, Redlock
@@ -50,7 +49,7 @@ OqronKit v1.0 is a production-grade, enterprise-ready distributed processing eng
 
 ## 🚀 Next Phase: Enterprise Modules (v1.x)
 
-The v1.x release cycle will add 8 additional enterprise modules:
+The v1.x release cycle will add 7 additional enterprise modules:
 
 | Module | Purpose | Priority |
 |--------|---------|:--------:|
@@ -59,7 +58,6 @@ The v1.x release cycle will add 8 additional enterprise modules:
 | **Batch** | Accumulator buffering with `maxSize` / `maxWaitMs` triggers | 🟡 Medium |
 | **RateLimit** | Sliding-window distributed rate limiting | 🟡 Medium |
 | **Saga** | Distributed microservice transactions with compensation chains | 🟡 Medium |
-| **Webhook** | Outbound webhook dispatch with DLQ and cryptographic signing | 🟡 Medium |
 | **PubSub** | Durable topics and fan-out consumer groups | 🟡 Medium |
 | **Pipeline** | Streaming ETL with backpressure | 🟢 Low |
 

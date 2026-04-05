@@ -55,7 +55,6 @@ export const imageProcessingQueue = queue<ImageInput, ImageOutput>({
     strategy: "exponential",
     baseDelay: 3000,
   },
-
   hooks: {
     onSuccess: async (_job, result) => {
       console.log(

@@ -8,8 +8,8 @@ OqronKit organizes background work into four distinct modules, each purpose-buil
 |--------|------|-----------|----------|----------|
 | **`cron()`** | Time-driven | Automatic | Same process | Global sweeps, cleanup, metrics |
 | **`schedule()`** | Data-driven | API-triggered | Same process | User-specific delays, drip campaigns |
-| **`taskQueue()`** | Monolithic | `.add()` | Same process | Single-server background jobs |
-| **`Queue` + `Worker`** | Distributed | `Queue.add()` | Separate pods | Microservices, horizontal scaling |
+| **`queue()`** | Monolithic | `queue.add()` | Same process | Background jobs, heavy processing |
+| **`webhook()`** | Distributed | `webhook.fire()` | Network endpoints | Event fan-out, partner integrations |
 
 Each module shares the same underlying infrastructure (Storage, Broker, Lock) but exposes a different API surface optimized for its use case.
 
@@ -96,7 +96,7 @@ const storage = OqronContainer.get().storage;
 
 // Multi-instance (advanced — isolated adapters):
 const container = new OqronContainer(myStore, myBroker, myLock);
-const engine = new TaskQueueEngine(config, logger, container);
+const engine = new QueueEngine(config, logger, container);
 ```
 
 The existing `Storage`, `Broker`, `Lock` imports continue to work unchanged — they are Proxy objects that delegate to the global container.
@@ -132,7 +132,7 @@ When cancelled, the job is marked as `failed` with error `"Cancelled"`, the hear
 
 ## 7. Job Ordering Strategies
 
-Both `taskQueue()` and `Worker` support configurable ordering:
+The `queue()` module supports configurable ordering parameters:
 
 | Strategy | Behavior |
 |----------|----------|
@@ -142,10 +142,10 @@ Both `taskQueue()` and `Worker` support configurable ordering:
 
 ```typescript
 // Per-queue:
-taskQueue({ name: "urgent-tasks", strategy: "priority", handler: ... });
+queue({ name: "urgent-tasks", strategy: "priority", handler: ... });
 
-// Or globally:
-defineConfig({ taskQueue: { strategy: "lifo" } });
+// Or globally system-wide:
+defineConfig({ queue: { strategy: "lifo" } });
 ```
 
 ---
@@ -155,10 +155,10 @@ defineConfig({ taskQueue: { strategy: "lifo" } });
 Jobs can declare parent dependencies, forming a Directed Acyclic Graph (DAG). Children wait in a `"waiting-children"` status until all parents complete:
 
 ```typescript
-import { taskQueue } from "oqronkit";
+import { queue } from "oqronkit";
 
-const extractQueue = taskQueue({ name: "extract", handler: async (ctx) => { /* ... */ } });
-const transformQueue = taskQueue({ name: "transform", handler: async (ctx) => { /* ... */ } });
+const extractQueue = queue({ name: "extract", handler: async (ctx) => { /* ... */ } });
+const transformQueue = queue({ name: "transform", handler: async (ctx) => { /* ... */ } });
 
 // Parent jobs
 const extract1 = await extractQueue.add({ source: "users.csv" });
@@ -226,43 +226,21 @@ Each schedule name is deterministically hashed (MD5) to a shard index. A node on
 
 ---
 
-## 10. Sandboxed Processors
+## 10. Disabled Behavior Engine
 
-For processing untrusted or user-submitted code, OqronKit provides **worker_threads isolation** with enforced resource limits:
-
-```typescript
-import { Worker } from "oqronkit";
-
-const sandboxedWorker = new Worker(
-  "user-code-runner",
-  "./processors/user-script.js",     // Must be a file path for sandbox
-  {
-    sandbox: {
-      enabled: true,
-      timeout: 15_000,      // Force-kill after 15 seconds
-      maxMemoryMb: 256,     // Cap V8 heap at 256MB
-    },
-  }
-);
-```
-
-### How It Works
-
-1. The processor file is loaded in a **separate V8 isolate** (`worker_threads.Worker`)
-2. `resourceLimits.maxOldGenerationSizeMb` caps memory — exceeding it crashes the thread, not the host
-3. A `setTimeout` enforces execution deadlines — the thread is `terminate()`d on timeout
-4. Job data is deep-cloned via structured clone — no shared state with the main thread
-
-### Processor File Format
-
-The sandboxed file must export a default async function:
+All routine and event distributions can be fully paused while strictly defining exactly what to do with the inbound jobs using `disabledBehavior` flag (part of Cron, Schedule, Queue, and Webhooks definitions).
 
 ```typescript
-// ./processors/user-script.js
-import { parentPort, workerData } from "node:worker_threads";
-
-const job = workerData.job;
-const result = await processUserCode(job.data);
-parentPort?.postMessage(result);
+queue({
+    name: "heavy-report",
+    disabledBehavior: "hold", // "hold" | "skip" | "reject"
+    handler: async (ctx) => {}
+})
 ```
+
+| Behavior | Outcome When Module is Disabled | Best For |
+|---|---|---|
+| **`hold`** | Accepts jobs but leaves them safely in a `paused` state in the storage engine via `pausedReason`. Upon re-enabling, they continue seamlessly. Bounded natively by `maxHeldJobs`. | Order processing, billing retries, non-lossy transactions |
+| **`skip`** | Accepts the job and immediately resolves it as successful, effectively black-holing the data to save operational time. | Global cache purges, analytical syncing, tracking pixels |
+| **`reject`** | Instantly rejects pushing the job into the queue, throwing an explicit SDK Error upon calling `.add()` or firing the module. | Upstream feedback mechanisms to block user API limits |
 

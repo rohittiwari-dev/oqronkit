@@ -16,6 +16,7 @@ import {
   getModuleConfig,
   type QueueModuleDef,
   type SchedulerModuleDef,
+  type WebhookModuleDef,
 } from "./modules.js";
 import { expressRouter as _expressRouter } from "./server/express.js";
 import { fastifyPlugin as _fastifyPlugin } from "./server/fastify.js";
@@ -79,6 +80,9 @@ export {
   type SchedulerModuleConfig,
   type SchedulerModuleDef,
   scheduleModule,
+  type WebhookModuleConfig,
+  type WebhookModuleDef,
+  webhookModule,
 } from "./modules.js";
 export { queue } from "./queue/define-queue.js";
 export type { IQueue, QueueConfig, QueueJobContext } from "./queue/types.js";
@@ -89,6 +93,19 @@ export {
   type ScheduleInstance,
   schedule,
 } from "./scheduler/index.js";
+export {
+  type IWebhookDispatcher,
+  type WebhookConfig,
+  type WebhookDeliveryPayload,
+  type WebhookDeliveryResult,
+  type WebhookEndpoint,
+  type WebhookEndpointsInput,
+  type WebhookMethod,
+  type WebhookRetryConfig,
+  type WebhookSecurity,
+  type WebhookSecurityInput,
+  webhook,
+} from "./webhook/index.js";
 
 // ── Trigger Auto-Discovery ──────────────────────────────────────────────────
 
@@ -196,9 +213,8 @@ export const OqronKit = {
     // --- Boot modules from normalized definitions ---
     const cronConf = getModuleConfig<CronModuleDef>(_config.modules, "cron");
     if (cronConf) {
-      const { SchedulerModule, _drainPending } = await import(
-        "./scheduler/index.js"
-      );
+      const { SchedulerModule, _drainPending } =
+        await import("./scheduler/index.js");
       const schedules = _drainPending();
       for (const s of schedules)
         s.tags = [...new Set([...(s.tags ?? []), ..._config.tags])];
@@ -217,9 +233,8 @@ export const OqronKit = {
       "scheduler",
     );
     if (schedulerConf) {
-      const { ScheduleEngine, _drainPendingSchedules } = await import(
-        "./scheduler/index.js"
-      );
+      const { ScheduleEngine, _drainPendingSchedules } =
+        await import("./scheduler/index.js");
       const schedules = _drainPendingSchedules();
       for (const s of schedules)
         s.tags = [...new Set([...(s.tags ?? []), ..._config.tags])];
@@ -237,6 +252,16 @@ export const OqronKit = {
     if (queueConf) {
       const { QueueEngine } = await import("./queue/queue-engine.js");
       const engine = new QueueEngine(_config, _logger!, queueConf);
+      OqronRegistry.getInstance().register(engine);
+    }
+
+    const webhookConf = getModuleConfig<WebhookModuleDef>(
+      _config.modules,
+      "webhook",
+    );
+    if (webhookConf) {
+      const { WebhookEngine } = await import("./webhook/webhook-engine.js");
+      const engine = new WebhookEngine(_config, _logger!, webhookConf);
       OqronRegistry.getInstance().register(engine);
     }
 

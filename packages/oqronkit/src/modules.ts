@@ -123,18 +123,49 @@ export interface QueueModuleConfig {
   maxHeldJobs?: number;
 }
 
+export interface WebhookModuleConfig {
+  /** Maximum number of parallel Webhook jobs across all dispatchers. @default 10 */
+  concurrency?: number;
+  /** Polling heartbeat interval in ms. @default 5000 */
+  heartbeatMs?: number;
+  /** Lock TTL in ms for crash recovery. @default 30000 */
+  lockTtlMs?: number;
+  /** Graceful shutdown drain timeout in ms. @default 25000 */
+  shutdownTimeout?: number;
+  /** Max stalled job retries before marking as permanently failed. @default 1 */
+  maxStalledCount?: number;
+  /** Stalled check interval in ms. @default 30000 */
+  stalledInterval?: number;
+  /**
+   * Default behavior when a disabled webhook dispatcher receives a new event.
+   * Individual dispatcher definitions can override this.
+   * @default "hold"
+   */
+  disabledBehavior?: DisabledBehavior;
+  /**
+   * Maximum number of held jobs to keep per definition when disabledBehavior is "hold".
+   * Oldest held jobs are pruned when this limit is exceeded.
+   * @default 100
+   */
+  maxHeldJobs?: number;
+  /** Global default: auto-remove completed webhook deliveries. @default false */
+  removeOnComplete?: RemoveOnConfig;
+  /** Global default: auto-remove failed webhook deliveries. @default false */
+  removeOnFail?: RemoveOnConfig;
+}
+
 // ── Discriminated Union (resolved module definitions) ───────────────────────
 
 export type CronModuleDef = { module: "cron" } & CronModuleConfig;
-export type SchedulerModuleDef = {
-  module: "scheduler";
-} & SchedulerModuleConfig;
+export type SchedulerModuleDef = { module: "scheduler" } & SchedulerModuleConfig;
 export type QueueModuleDef = { module: "queue" } & QueueModuleConfig;
+export type WebhookModuleDef = { module: "webhook" } & WebhookModuleConfig;
 
 export type OqronModuleDef =
   | CronModuleDef
   | SchedulerModuleDef
-  | QueueModuleDef;
+  | QueueModuleDef
+  | WebhookModuleDef;
 
 // ── Flexible Input Type ─────────────────────────────────────────────────────
 // Users can pass any of these forms inside the `modules` array:
@@ -187,6 +218,17 @@ export function queueModule(config?: QueueModuleConfig): QueueModuleDef {
   return { module: "queue", ...config };
 }
 
+/**
+ * Create a Webhook module configuration.
+ *
+ * @example
+ * modules: [webhookModule]
+ * modules: [webhookModule({ concurrency: 20 })]
+ */
+export function webhookModule(config?: WebhookModuleConfig): WebhookModuleDef {
+  return { module: "webhook", ...config };
+}
+
 // ── Normalizer ──────────────────────────────────────────────────────────────
 // Converts all flexible input forms into a uniform OqronModuleDef[].
 
@@ -194,9 +236,9 @@ const STRING_TO_DEF: Record<OqronModuleName, () => OqronModuleDef> = {
   cron: () => ({ module: "cron" }),
   scheduler: () => ({ module: "scheduler" }),
   queue: () => ({ module: "queue" }),
+  webhook: () => ({ module: "webhook" }),
   workflow: () => ({ module: "queue" }), // placeholder until workflow module exists
   batch: () => ({ module: "queue" }), // placeholder
-  webhook: () => ({ module: "queue" }), // placeholder
   pipeline: () => ({ module: "queue" }), // placeholder
 };
 

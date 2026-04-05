@@ -1,34 +1,31 @@
-# Chapter 4: TaskQueue Module
+# Chapter 4: Queue Module
 
 ## Overview
 
-The `taskQueue()` factory creates a **monolithic** background task processor where the publisher and consumer live in the **same process**. You define the queue and handler together, then call `.add()` from anywhere in your app.
+The `queue()` factory creates a powerful, unified background task processor. OqronKit's `queue` offers a **monolithic Developer Experience (DX)** where the publisher and consumer are defined together, but it internally scales natively as a **distributed microservice** when multiple containers are deployed.
 
-This is the simplest way to add background processing to a Node.js application — no separate worker processes, no message broker configuration.
+You define the queue and handler together, then call `.add()` from anywhere in your app. Because of the backend adapter's strict row-level or distributed locking, no two processes will ever execute the same job, allowing perfect horizontal scaling without the cognitive overhead of managing separate worker and publisher codebases.
 
 ---
 
-## When to Use TaskQueue
+## When to Use `queue()`
 
-- **Single-server applications** or small deployments
-- **API-triggered background work** (image processing, email sending, PDF generation)
-- **Prototyping** — get background processing running in 5 minutes, migrate to distributed later
-- **Tasks that need tight coupling** with your main application (shared database connections, in-memory state)
-
-> **Note:** If you need to scale your worker processing across multiple servers independently from your API, use `Queue` + `Worker` instead. See [Chapter 6](./06-TaskQueue-vs-Queue-Worker.md) for a detailed comparison.
+- **Heavy Processing** (video encoding, PDF generation, bulk data imports)
+- **API-triggered background work** (sending emails post-registration)
+- **Seamless Scaling** — get background processing running in 5 minutes locally, and instantly scale processing simply by deploying more instances of your app behind a load balancer.
 
 ---
 
 ## API Reference
 
-### `taskQueue<T, R>(config)` → `ITaskQueue<T, R>`
+### `queue<T, R>(config)` → `IQueueDispatcher<T, R>`
 
-Creates and registers a task queue. Returns an object with `.add()` method.
+Creates and registers a task queue. Returns an object with an `.add()` method.
 
 ```typescript
-import { taskQueue } from "oqronkit";
+import { queue } from "oqronkit";
 
-const myQueue = taskQueue<InputType, OutputType>({
+const myQueue = queue<InputType, OutputType>({
   name: "my-task",
   handler: async (ctx) => {
     // Process ctx.data
@@ -42,11 +39,11 @@ const myQueue = taskQueue<InputType, OutputType>({
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
 | `name` | `string` | required | Unique queue identifier |
-| `handler` | `(ctx: TaskJobContext<T>) => Promise<R>` | required | The processing function |
-| `concurrency` | `number` | `5` | Parallel execution limit |
+| `handler` | `(ctx: JobContext<T>) => Promise<R>` | required | The processing function |
+| `concurrency` | `number` | `5` | Parallel execution limit per instance |
 | `strategy` | `"fifo" \| "lifo" \| "priority"` | `"fifo"` | Job ordering strategy |
-| `guaranteedWorker` | `boolean` | `true` | Enable heartbeat lock for crash safety |
 | `heartbeatMs` | `number` | `5000` | Heartbeat ping interval |
+| `disabledBehavior` | `"hold" \| "skip" \| "reject"` | `"hold"` | Action taken if module is globally disabled |
 | `lockTtlMs` | `number` | `30000` | Lock expiry for crash detection |
 | `retries.max` | `number` | `0` | Maximum retry attempts after first failure |
 | `retries.strategy` | `"fixed" \| "exponential"` | `"exponential"` | Backoff algorithm |
@@ -59,7 +56,7 @@ const myQueue = taskQueue<InputType, OutputType>({
 | `hooks.onSuccess` | `(job, result) => void` | — | Called after successful processing |
 | `hooks.onFail` | `(job, error) => void` | — | Called after failed processing |
 
-### `TaskJobContext<T>` — The Handler Context
+### `JobContext<T>` — The Handler Context
 
 Your handler receives a context object with these capabilities:
 
@@ -69,8 +66,8 @@ handler: async (ctx) => {
   ctx.data;                         // Typed input payload
   ctx.signal;                       // AbortSignal — check ctx.signal.aborted
   ctx.progress(50, "Halfway done"); // Update progress (0-100)
-  ctx.log("info", "Processing...");  // Structured logging
-  ctx.discard();                     // Permanently fail — skip all retries
+  ctx.log.info("Processing...");    // Structured logging via OqronLogger
+  ctx.discard();                    // Permanently fail — skip all retries
 }
 ```
 
@@ -106,7 +103,7 @@ await myQueue.add(
 ## Full Example: Image Processing Pipeline
 
 ```typescript
-import { taskQueue } from "oqronkit";
+import { queue } from "oqronkit";
 
 type ImageInput = {
   imageId: string;
@@ -119,10 +116,10 @@ type ImageOutput = {
   variants: Array<{ label: string; url: string; sizeKb: number }>;
 };
 
-export const imageQueue = taskQueue<ImageInput, ImageOutput>({
+export const imageQueue = queue<ImageInput, ImageOutput>({
   name: "image-processing",
   concurrency: 3,
-  guaranteedWorker: true,
+  disabledBehavior: "hold",
 
   retries: {
     max: 2,
@@ -149,6 +146,7 @@ export const imageQueue = taskQueue<ImageInput, ImageOutput>({
 
     const variants = [];
     for (let i = 0; i < sizes.length; i++) {
+      if (ctx.signal.aborted) return;
       const size = sizes[i];
       ctx.progress(20 + Math.floor((70 * (i + 1)) / sizes.length),
         `Resizing: ${size.label}`);

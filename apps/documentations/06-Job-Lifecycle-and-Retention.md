@@ -2,13 +2,13 @@
 
 ## Job States
 
-Every background operation in OqronKit — whether cron, schedule, taskQueue, or distributed worker — follows the same lifecycle state machine:
+Every background operation in OqronKit — whether cron, schedule, queue, or webhook — follows the same lifecycle state machine:
 
 ```
                     ┌──────────┐
                     │  waiting  │ ← Job created, ready for pickup
                     └─────┬────┘
-                          │ Worker claims
+                          │ Engine claims
                           ▼
                     ┌──────────┐
             ┌──────│  active   │──────┐
@@ -35,13 +35,13 @@ Every background operation in OqronKit — whether cron, schedule, taskQueue, or
 
 | State | Description |
 |-------|-------------|
-| `waiting` | Job is persisted and signaled to the broker, ready for a worker to claim |
-| `active` | A worker has claimed the job and is currently executing the handler |
+| `waiting` | Job is persisted and signaled to the broker, ready for the engine to claim |
+| `active` | The engine has claimed the job and is currently executing the handler |
 | `completed` | Handler returned successfully — `returnValue` is stored |
 | `failed` | All retry attempts exhausted — `error` and `stacktrace` are stored |
 | `delayed` | Waiting for a specific time: either initial delay or backoff between retries |
 | `paused` | Manually stopped (future feature) |
-| `stalled` | Worker lost heartbeat — the job will be reclaimed by the StallDetector |
+| `stalled` | Engine lost heartbeat — the job will be reclaimed by the StallDetector |
 
 ---
 
@@ -123,9 +123,8 @@ The `maxDelay` option caps exponential growth to prevent unreasonably long wait 
 Retry settings resolve from most-specific to least-specific:
 
 1. **Per-job** (`opts.attempts` + `opts.backoff` on `.add()`) — highest priority
-2. **Per-queue/worker** (`retries` on `taskQueue()` or `Worker` config)
-3. **Global config** (`config.taskQueue.retries` or `config.worker.retries`)
-4. **Engine defaults** (`max: 3, strategy: "exponential", baseDelay: 2000`)
+2. **Per-module** (`retries` on `queue()` or `webhook()` config)
+3. **Engine defaults** (`max: 3, strategy: "exponential", baseDelay: 2000`)
 
 ---
 
@@ -135,7 +134,7 @@ OqronKit uses **lazy pruning** — jobs are cleaned up when new completions/fail
 
 ### Configuration Options
 
-Retention is configured via `removeOnComplete` and `removeOnFail` (TaskQueue/Worker) or `keepHistory` and `keepFailedHistory` (Cron/Schedule):
+Retention is configured via `removeOnComplete` and `removeOnFail` (Queue/Webhook) or `keepHistory` and `keepFailedHistory` (Cron/Schedule):
 
 | Value | Behavior |
 |-------|----------|
@@ -156,19 +155,18 @@ await queue.add("task", data, {
   removeOnComplete: { count: 50 },    // This job specifically
 });
 
-// 2. Per-queue/worker (on definition)
-const q = taskQueue({
+// 2. Per-queue/webhook (on definition)
+const q = queue({
   name: "my-queue",
   removeOnComplete: { count: 500 },   // All jobs on this queue
   removeOnFail: { age: 86400 },
 });
 
-// 3. Global config (in defineConfig)
+// 3. Global modules array (in defineConfig)
 defineConfig({
-  taskQueue: {
-    removeOnComplete: false,           // Default for all task queues
-    removeOnFail: { count: 1000 },
-  },
+  modules: [
+    queueModule({ removeOnComplete: false, removeOnFail: { count: 1000 } })
+  ],
 });
 ```
 
@@ -198,7 +196,7 @@ cron({
 When all retries are exhausted and a job permanently fails, OqronKit can invoke a Dead Letter Queue hook. This is your last line of defense for handling unrecoverable failures:
 
 ```typescript
-taskQueue({
+queue({
   name: "payment-processing",
   retries: { max: 5, strategy: "exponential", baseDelay: 5000 },
 
@@ -220,4 +218,4 @@ taskQueue({
 });
 ```
 
-DLQ is available on both `taskQueue()` and `Worker` configurations.
+DLQ is available on both `queue()` and `webhook()` configurations.

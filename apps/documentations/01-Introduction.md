@@ -17,13 +17,14 @@ OqronKit is a **unified background computation engine** that replaces all of the
 - **Distributed Locks:** Even if two servers simultaneously try to execute the same job, OqronKit's lock adapter guarantees only ONE worker executes.
 - **Zero-Boilerplate:** Define `.ts` files in a `/jobs` folder — OqronKit discovers, maps, and executes them out-of-the-box.
 
-### Task Processing (TaskQueue + Queue/Worker)
-- **Monolithic Mode (`taskQueue`):** Publisher and consumer live in the same process. Perfect for single-server apps and API-triggered backgrounds tasks.
-- **Distributed Mode (`Queue` + `Worker`):** Publisher and consumer are completely decoupled across separate processes. Perfect for microservices and horizontal scaling.
+### Task Processing (Queue)
+- **Monolithic API (`queue`):** Publisher and consumer logic live in the exact same application domain. Perfectly suited for single-server API execution, yet instantly scales horizontally with full micro-service-like guarantees via distributed locks when deployed to a cluster.
+
+### Event Distribution (Webhooks)
+- **Enterprise Webhooks (`webhook`):** Natively dispatch your internal operations externally. Integrated deeply with event matching, automated HMAC signature hashing, and secure payload fan-out.
 
 ### Enterprise Features — Built In
 - Retry/backoff (fixed + exponential) with configurable delay caps
-- Job history with automatic lazy pruning
 - Dead letter queue hooks for failed jobs
 - Progress tracking and real-time event streaming
 - Crash-safe heartbeat workers with stall detection
@@ -31,7 +32,7 @@ OqronKit is a **unified background computation engine** that replaces all of the
 - Job ordering strategies: FIFO, LIFO, and Priority
 - **Job Dependencies (DAG)** — `dependsOn` parent IDs with configurable failure policy
 - **Cron Clustering** — Sharded multi-region leader election for geo-distributed scheduling
-- **Sandboxed Processors** — `worker_threads` isolation with resource limits for untrusted code
+- **Pausable Engine States** — `disabledBehavior` to naturally hold, skip, or reject un-runnable events via deep internal capping algorithms
 - DI Container (`OqronContainer`) for multi-instance and testability
 - Multi-tenant environment isolation
 - Typed input/output generics for full type safety
@@ -44,8 +45,8 @@ OqronKit is a **unified background computation engine** that replaces all of the
 ┌──────────────────────────────────────────────────────────────────┐
 │                        OqronKit Engine                           │
 ├──────────────┬──────────────┬──────────────┬────────────────────┤
-│   Cron       │   Schedule   │  TaskQueue   │  Queue + Worker    │
-│  (time)      │  (data)      │  (monolith)  │  (distributed)     │
+│   Cron       │   Schedule   │  Queue       │  Webhooks          │
+│  (time)      │  (data)      │  (monolith)  │  (distribution)    │
 ├──────────────┴──────────────┴──────────────┴────────────────────┤
 │                    Shared Infrastructure                         │
 │  ┌─────────┐ ┌──────────┐ ┌──────────┐ ┌────────────────────┐  │

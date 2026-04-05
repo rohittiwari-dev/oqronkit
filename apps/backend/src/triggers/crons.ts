@@ -46,6 +46,7 @@ export const dailyAnalyticsReport = cron({
   // Keep only the last 30 successful runs, keep ALL failures for debugging
   keepHistory: 30,
   keepFailedHistory: true,
+  guaranteedWorker: true,
 
   hooks: {
     beforeRun: async (ctx) => {

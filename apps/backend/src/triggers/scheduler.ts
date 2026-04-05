@@ -47,6 +47,7 @@ export const dataMigration = schedule({
     strategy: "exponential",
     baseDelay: 1000,
   },
+  guaranteedWorker: true,
 
   timeout: 120_000, // 2 minute maximum
 

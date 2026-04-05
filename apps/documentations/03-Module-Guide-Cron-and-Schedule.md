@@ -38,6 +38,7 @@ export const tokenPurger = cron({
   // ── Resilience ──────────────────────────────────────────────────
   retries: { max: 2, strategy: "exponential", baseDelay: 5000 },
   missedFire: "run-once",         // "skip" | "run-once" | "run-all"
+  disabledBehavior: "skip",       // "hold" | "skip" | "reject"
 
   // ── History ─────────────────────────────────────────────────────
   keepHistory: 50,                // Keep last 50 successful runs
@@ -70,6 +71,7 @@ export const tokenPurger = cron({
 | `rrule` | `string` | — | RFC 5545 RRULE for complex patterns |
 | `overlap` | `"skip" \| "run"` | `"skip"` | Behavior when previous execution is still running |
 | `missedFire` | `"skip" \| "run-once" \| "run-all"` | `"run-once"` | How to handle executions missed during downtime |
+| `disabledBehavior` | `"hold" \| "skip" \| "reject"` | `"hold"` | Action taken if module is globally disabled |
 | `timeout` | `number` | — | Maximum handler runtime in ms |
 | `retries` | `object` | — | `{ max, strategy, baseDelay }` |
 | `keepHistory` | `boolean \| number` | `true` | History retention: `true`=all, `false`=none, `50`=keep 50 |
@@ -98,6 +100,7 @@ export const abandonedCartEmail = schedule<{ userId: string; cartId: string }>({
 
   overlap: "run",       // Safe to run multiple user-specific instances
   retries: { max: 3, strategy: "exponential", baseDelay: 5000 },
+  disabledBehavior: "hold", // Prevent unbounded bloat using maxHeldJobs internally
   keepHistory: 30,
   keepFailedHistory: 50,
 

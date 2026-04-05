@@ -5,16 +5,19 @@
 
 - ## 0.0.1-alpha.5
 
-  ### New Features
+  ### New Features & Architecture Changes
 
-  - **Disabled Queue/Schedule Handling** — Added configurable `disabled` behavior for schedules and queues. Includes `maxHeldJobs` config and `disabledold` handling to efficiently prune the oldest held jobs when an instance is disabled.
-  - **Admin Module & Isolation** — Added admin module and instance handlers with improved isolation prefixing.
+  - **Unified Monolithic DX (Distributed Scale):** Deprecated the old decoupled `Worker` and `TaskQueue` concepts. Introduced the single `queue()` factory that defines publisher and consumer together. It gives a simple monolithic developer experience while effortlessly scaling out as a distributed processor natively across containers via locks.
+  - **Webhook Module:** Added complete implementation of the `webhook()` dispatch engine. Features deep-glob segment routing (`*`, `**`), rigorous HMAC SHA-256/512 signature verification, extensible signing pipelines, DLQ, and fan-out capability.
+  - **Standardized `disabledBehavior` Engine:** All modules (`cron`, `schedule`, `queue`, `webhook`) now natively support capping/handling offline states via `hold`, `skip`, or `reject` policies to intelligently cap unbounded task accumulations.
   - **Trigger Auto-Discovery** — Added trigger auto-discovery support with new configuration options. Removed unused trigger modules from the backend.
+  - **Admin Module & Isolation** — Added admin module and instance handlers with improved isolation prefixing.
 
   ### Fixes & Improvements
 
   - Refined `nextRun` calculation and optimized job pruning logic.
   - Enhanced robustness of memory lock/store handling and cron compatibility.
+  - Comprehensive documentation overhaul reflecting the 4 core modules array format and modernized factories.
   - General housekeeping including whitespace fixes, import cleanups, and test mock field renaming.
 
 - ## 0.0.1-alpha.4
