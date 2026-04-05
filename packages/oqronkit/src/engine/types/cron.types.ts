@@ -1,3 +1,4 @@
+import type { DisabledBehavior } from "./config.types.js";
 import type { ICronContext } from "../context/cron-context.interface.js";
 
 export type MissedFirePolicy = "skip" | "run-once" | "run-all";
@@ -43,6 +44,12 @@ export interface CronDefinition {
   retries?: RetryConfig;
   status?: "active" | "paused";
   maxConcurrent?: number;
+  /**
+   * Behavior when this cron fires while disabled/paused.
+   * Overrides the module-level `disabledBehavior` if set.
+   * @default "hold"
+   */
+  disabledBehavior?: DisabledBehavior;
 }
 
 export interface JobRecord {

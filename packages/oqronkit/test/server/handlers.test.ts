@@ -196,9 +196,18 @@ describe("Server Handlers", () => {
     it("POST /admin/jobs/:id/retry retries a failed job", async () => {
       const res = await dispatch(req("POST", "/admin/jobs/lookup-1/retry"));
       expect(res.status).toBe(200);
+      const body = res.body as any;
+      expect(body.ok).toBe(true);
+      expect(body.retryId).toBeDefined();
 
-      const job = await Storage.get<any>("jobs", "lookup-1");
-      expect(job.status).toBe("waiting");
+      // Original should be preserved as failed (audit trail)
+      const original = await Storage.get<any>("jobs", "lookup-1");
+      expect(original.status).toBe("failed");
+
+      // New retry job should exist with clean state
+      const retryJob = await Storage.get<any>("jobs", body.retryId);
+      expect(retryJob.status).toBe("waiting");
+      expect(retryJob.retriedFromId).toBe("lookup-1");
     });
 
     it("DELETE /admin/jobs/:id cancels a job", async () => {

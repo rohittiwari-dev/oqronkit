@@ -1,19 +1,15 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect } from "vitest";
 import { OqronConfigSchema } from "../../src/engine/config/schema.js";
 import { reconfigureConfig } from "../../src/engine/config/default-config.js";
-import type { OqronConfig } from "../../src/engine/types/config.types.js";
+import { cronModule, queueModule, scheduleModule } from "../../src/modules.js";
 
 describe("OqronConfigSchema — Zod Validation", () => {
   it("applies all defaults for minimal config", () => {
     const result = OqronConfigSchema.parse({});
-    // project is optional at schema level — default comes from reconfigureConfig()
     expect(result.project).toBeUndefined();
     expect(result.environment).toBe("development");
+    expect(result.mode).toBe("default");
     expect(result.modules).toEqual([]);
-    expect(result.cron.enable).toBe(true);
-    expect(result.cron.timezone).toBe("UTC");
-    expect(result.taskQueue.concurrency).toBe(5);
-    expect(result.worker.concurrency).toBe(5);
     expect(result.shutdown.enabled).toBe(true);
   });
 
@@ -21,51 +17,14 @@ describe("OqronConfigSchema — Zod Validation", () => {
     const result = OqronConfigSchema.parse({
       project: "my-app",
       environment: "production",
-      taskQueue: { concurrency: 20 },
     });
     expect(result.project).toBe("my-app");
     expect(result.environment).toBe("production");
-    expect(result.taskQueue.concurrency).toBe(20);
-    // Other taskQueue fields should still have defaults
-    expect(result.taskQueue.heartbeatMs).toBe(5000);
   });
 
-  it("validates cron configuration", () => {
-    const result = OqronConfigSchema.parse({
-      cron: {
-        tickInterval: 500,
-        maxConcurrentJobs: 10,
-        missedFirePolicy: "run-all",
-      },
-    });
-    expect(result.cron.tickInterval).toBe(500);
-    expect(result.cron.maxConcurrentJobs).toBe(10);
-    expect(result.cron.missedFirePolicy).toBe("run-all");
-  });
-
-  it("validates scheduler configuration", () => {
-    const result = OqronConfigSchema.parse({
-      scheduler: { tickInterval: 2000, leaderElection: false },
-    });
-    expect(result.scheduler.tickInterval).toBe(2000);
-    expect(result.scheduler.leaderElection).toBe(false);
-  });
-
-  it("validates taskQueue retry configuration", () => {
-    const result = OqronConfigSchema.parse({
-      taskQueue: {
-        retries: { max: 10, strategy: "fixed", baseDelay: 5000 },
-      },
-    });
-    expect(result.taskQueue.retries.max).toBe(10);
-    expect(result.taskQueue.retries.strategy).toBe("fixed");
-  });
-
-  it("validates worker strategy", () => {
-    const result = OqronConfigSchema.parse({
-      worker: { strategy: "priority" },
-    });
-    expect(result.worker.strategy).toBe("priority");
+  it("validates mode enum", () => {
+    const result = OqronConfigSchema.parse({ mode: "hybrid-db" });
+    expect(result.mode).toBe("hybrid-db");
   });
 
   it("validates logger can be false", () => {
@@ -90,6 +49,26 @@ describe("OqronConfigSchema — Zod Validation", () => {
     });
     expect(result.telemetry.prometheus.enabled).toBe(true);
     expect(result.telemetry.prometheus.path).toBe("/custom-metrics");
+  });
+
+  it("validates observability configuration", () => {
+    const result = OqronConfigSchema.parse({
+      observability: { maxJobLogs: 500, trackMemory: false },
+    });
+    expect(result.observability.maxJobLogs).toBe(500);
+    expect(result.observability.trackMemory).toBe(false);
+    expect(result.observability.maxTimelineEntries).toBe(20); // default
+  });
+
+  it("validates ui configuration", () => {
+    const result = OqronConfigSchema.parse({
+      ui: {
+        enabled: true,
+        auth: { username: "admin", password: "secret" },
+      },
+    });
+    expect(result.ui.enabled).toBe(true);
+    expect(result.ui.auth?.username).toBe("admin");
   });
 
   it("validates postgres configuration", () => {
@@ -128,35 +107,94 @@ describe("OqronConfigSchema — Zod Validation", () => {
   });
 });
 
-describe("reconfigureConfig — Deep Merge", () => {
+describe("reconfigureConfig — Module Normalization & Deep Merge", () => {
   it("merges user config with defaults", () => {
     const result = reconfigureConfig({ project: "custom-name" });
     expect(result.project).toBe("custom-name");
     expect(result.environment).toBe("development"); // default preserved
   });
 
-  it("deep-merges cron lagMonitor", () => {
+  it("normalizes string shorthand modules", () => {
     const result = reconfigureConfig({
-      cron: { lagMonitor: { maxLagMs: 10000 } },
+      modules: ["cron", "queue"],
     });
-    expect(result.cron.lagMonitor.maxLagMs).toBe(10000);
-    expect(result.cron.lagMonitor.sampleIntervalMs).toBe(1000); // default preserved
+    expect(result.modules).toHaveLength(2);
+    expect(result.modules[0].module).toBe("cron");
+    expect(result.modules[1].module).toBe("queue");
   });
 
-  it("deep-merges taskQueue retries", () => {
+  it("normalizes factory-invoked modules", () => {
     const result = reconfigureConfig({
-      taskQueue: { retries: { max: 10 } },
+      modules: [cronModule({ tickInterval: 500 }), queueModule({ concurrency: 20 })],
     });
-    expect(result.taskQueue.retries.max).toBe(10);
-    expect(result.taskQueue.retries.strategy).toBe("exponential"); // default
-    expect(result.taskQueue.retries.baseDelay).toBe(2000); // default
+    expect(result.modules).toHaveLength(2);
+    expect(result.modules[0].module).toBe("cron");
+    expect((result.modules[0] as any).tickInterval).toBe(500);
+    expect(result.modules[1].module).toBe("queue");
+    expect((result.modules[1] as any).concurrency).toBe(20);
   });
 
-  it("deep-merges worker deadLetter", () => {
+  it("normalizes factory references (no invocation)", () => {
     const result = reconfigureConfig({
-      worker: { deadLetter: { enabled: false } },
+      modules: [cronModule],
     });
-    expect(result.worker.deadLetter.enabled).toBe(false);
+    expect(result.modules).toHaveLength(1);
+    expect(result.modules[0].module).toBe("cron");
+  });
+
+  it("normalizes inline object modules", () => {
+    const result = reconfigureConfig({
+      modules: [{ module: "cron", tickInterval: 2000 }],
+    });
+    expect(result.modules).toHaveLength(1);
+    expect(result.modules[0].module).toBe("cron");
+    expect((result.modules[0] as any).tickInterval).toBe(2000);
+  });
+
+  it("supports mixed module input forms", () => {
+    const result = reconfigureConfig({
+      modules: [
+        "cron",
+        { module: "queue", concurrency: 10 },
+        scheduleModule({ tickInterval: 3000 }),
+      ],
+    });
+    expect(result.modules).toHaveLength(3);
+    expect(result.modules.map((m) => m.module)).toEqual([
+      "cron",
+      "queue",
+      "scheduler",
+    ]);
+  });
+
+  it("deduplicates modules — last one wins", () => {
+    const result = reconfigureConfig({
+      modules: [
+        cronModule({ tickInterval: 500 }),
+        cronModule({ tickInterval: 2000 }),
+      ],
+    });
+    expect(result.modules).toHaveLength(1);
+    expect((result.modules[0] as any).tickInterval).toBe(2000);
+  });
+
+  it("deep-merges cron lagMonitor with defaults", () => {
+    const result = reconfigureConfig({
+      modules: [cronModule({ lagMonitor: { maxLagMs: 10000 } })],
+    });
+    const cron = result.modules[0] as any;
+    expect(cron.lagMonitor.maxLagMs).toBe(10000);
+    expect(cron.lagMonitor.sampleIntervalMs).toBe(1000); // default preserved
+  });
+
+  it("deep-merges queue retries with defaults", () => {
+    const result = reconfigureConfig({
+      modules: [queueModule({ retries: { max: 10 } })],
+    });
+    const queue = result.modules[0] as any;
+    expect(queue.retries.max).toBe(10);
+    expect(queue.retries.strategy).toBe("exponential"); // default
+    expect(queue.retries.baseDelay).toBe(2000); // default
   });
 
   it("handles logger: false", () => {
@@ -178,9 +216,11 @@ describe("reconfigureConfig — Deep Merge", () => {
     expect(result.postgres?.poolSize).toBe(10);
   });
 
-  it("strategy defaults to fifo", () => {
-    const result = reconfigureConfig({});
-    expect(result.taskQueue.strategy).toBe("fifo");
-    expect(result.worker.strategy).toBe("fifo");
+  it("applies queue strategy default fifo", () => {
+    const result = reconfigureConfig({
+      modules: [queueModule()],
+    });
+    const queue = result.modules[0] as any;
+    expect(queue.strategy).toBe("fifo");
   });
 });

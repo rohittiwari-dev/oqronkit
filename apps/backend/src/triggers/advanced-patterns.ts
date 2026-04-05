@@ -3,7 +3,12 @@
  *
  * Demonstrates Job Dependencies (DAG), Cron Clustering, and Sandboxed Workers.
  */
-import { defineConfig, Queue, taskQueue, Worker } from "oqronkit";
+import {
+  cronModule,
+  defineConfig,
+  scheduleModule,
+  queue as taskQueue,
+} from "oqronkit";
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // 1. JOB DEPENDENCIES (DAG) — Extract → Transform → Load Pipeline
@@ -201,115 +206,42 @@ export async function runFanOutFanIn(sources: string[]) {
 export const usEastConfig = defineConfig({
   project: "global-saas",
   environment: "production",
-  modules: ["scheduler", "cron"],
-
-  scheduler: {
-    clustering: {
-      totalShards: 8,
-      ownedShards: [0, 1, 2, 3],
-      region: "us-east",
-    },
-  },
-
-  cron: {
-    clustering: {
-      totalShards: 8,
-      ownedShards: [0, 1, 2, 3],
-      region: "us-east",
-    },
-  },
+  modules: [
+    scheduleModule({
+      clustering: {
+        totalShards: 8,
+        ownedShards: [0, 1, 2, 3],
+        region: "us-east",
+      },
+    }),
+    cronModule({
+      clustering: {
+        totalShards: 8,
+        ownedShards: [0, 1, 2, 3],
+        region: "us-east",
+      },
+    }),
+  ],
 });
 
 /** EU-West region config — handles shards 4-7 */
 export const euWestConfig = defineConfig({
   project: "global-saas",
   environment: "production",
-  modules: ["scheduler", "cron"],
-
-  scheduler: {
-    clustering: {
-      totalShards: 8,
-      ownedShards: [4, 5, 6, 7],
-      region: "eu-west",
-    },
-  },
-
-  cron: {
-    clustering: {
-      totalShards: 8,
-      ownedShards: [4, 5, 6, 7],
-      region: "eu-west",
-    },
-  },
+  modules: [
+    scheduleModule({
+      clustering: {
+        totalShards: 8,
+        ownedShards: [4, 5, 6, 7],
+        region: "eu-west",
+      },
+    }),
+    cronModule({
+      clustering: {
+        totalShards: 8,
+        ownedShards: [4, 5, 6, 7],
+        region: "eu-west",
+      },
+    }),
+  ],
 });
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// 4. SANDBOXED PROCESSORS — Untrusted Code Execution
-// ═══════════════════════════════════════════════════════════════════════════════
-
-/**
- * Execute user-uploaded scripts in a sandboxed environment.
- *
- * - Memory is capped at 128MB (V8 heap limit)
- * - Execution is force-killed after 10 seconds
- * - Job data is deep-cloned — no shared references
- */
-
-/** Queue for user-submitted code execution */
-export const userCodeQueue = new Queue<{
-  userId: string;
-  scriptPath: string;
-  input: Record<string, unknown>;
-}>("user-code-runner");
-
-/** Sandboxed worker — runs processor files with resource limits */
-export const sandboxedWorker = new Worker(
-  "user-code-runner",
-  "./processors/run-user-script.js",
-  {
-    concurrency: 5,
-    sandbox: {
-      enabled: true,
-      timeout: 10_000, // Force-kill after 10s
-      maxMemoryMb: 128, // Cap V8 heap at 128MB
-      transferOnly: true, // Deep-clone job data
-    },
-    retries: { max: 1, strategy: "fixed", baseDelay: 2_000 },
-    hooks: {
-      onSuccess: async (job, result) => {
-        console.log(`✅ User ${job.data.userId} script completed:`, result);
-      },
-      onFail: async (job, error) => {
-        console.error(
-          `❌ User ${job.data.userId} script failed:`,
-          error.message,
-        );
-      },
-    },
-    deadLetter: {
-      enabled: true,
-      onDead: async (job) => {
-        console.error(
-          `💀 User ${job.data.userId} script permanently failed — moving to review`,
-        );
-      },
-    },
-  },
-);
-
-/**
- * Non-sandboxed worker (same queue name, no sandbox).
- * Useful for trusted server-side processors.
- */
-export const trustedWorker = new Worker(
-  "trusted-processor",
-  async (job) => {
-    // Inline functions run on the main thread — no isolation,
-    // but also no IPC overhead. Use for trusted code.
-    return { processed: true, jobId: job.id };
-  },
-  {
-    concurrency: 10,
-    // No sandbox — runs inline on the event loop
-  },
-);

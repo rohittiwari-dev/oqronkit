@@ -2,10 +2,7 @@ import { OqronContainer } from "./container.js";
 import { MemoryBroker } from "./memory/memory-broker.js";
 import { MemoryLock } from "./memory/memory-lock.js";
 import { MemoryStore } from "./memory/memory-store.js";
-import { RedisBroker } from "./redis/redis-broker.js";
-import { RedisLock } from "./redis/redis-lock.js";
-import { RedisStore } from "./redis/redis-store.js";
-import type { OqronConfig } from "./types/config.types.js";
+import type { OqronConfig, OqronStorageMode } from "./types/config.types.js";
 import type {
   IBrokerEngine,
   ILockAdapter,
@@ -16,8 +13,6 @@ import type {
 // These proxy objects delegate all property access to the container singleton.
 // Existing code that imports `Storage`, `Broker`, `Lock` will continue to work
 // without any changes — including destructured imports.
-//
-// The trick: we export a Proxy that lazily resolves from OqronContainer.get().
 
 function createProxy<T extends object>(accessor: () => T): T {
   return new Proxy({} as T, {
@@ -46,20 +41,74 @@ export const Lock: ILockAdapter = createProxy(() => OqronContainer.get().lock);
  */
 let _redisClient: any = null;
 let _redisClientOwned = false; // true only when WE created it from a URL string
+
+import type { ICloseable } from "./types/engine.js";
+
 /** PostgreSQL adapters tracked for pool close on shutdown */
-let _pgAdapters: Array<{ close(): Promise<void> }> | null = null;
+let _pgAdapters: ICloseable[] | null = null;
 
 /**
- * Bootstraps the engines dynamically based on config.
- * Priority: postgres > redis > memory (in-process monolith).
+ * Bootstraps the engines dynamically based on `config.mode`.
+ *
+ * Mode resolution:
+ * - `"default"` (or omitted) → Memory (all three: storage, broker, lock)
+ * - `"db"` → PostgreSQL (all three). Requires `config.postgres`.
+ * - `"redis"` → Redis (all three). Requires `config.redis`.
+ * - `"hybrid-db"` → PG (storage) + Redis (broker + lock). Requires both.
  */
 export async function initEngine(config: OqronConfig): Promise<void> {
   let storage: IStorageEngine;
   let broker: IBrokerEngine;
   let lock: ILockAdapter;
 
-  if (config.postgres) {
-    // ── PostgreSQL Adapters ────────────────────────────────────────────────
+  const mode: OqronStorageMode = config.mode ?? "default";
+
+  if (mode === "hybrid-db") {
+    // ── Hybrid: PG (storage) + Redis (broker + lock) ──────────────────────
+    if (!config.postgres) {
+      throw new Error(
+        '[OqronKit] mode "hybrid-db" requires `postgres` config for durable storage.',
+      );
+    }
+    if (!config.redis) {
+      throw new Error(
+        '[OqronKit] mode "hybrid-db" requires `redis` config for broker + lock.',
+      );
+    }
+
+    const { PostgresStore } = await import("./postgres/postgres-store.js");
+    const { RedisBroker } = await import("./redis/redis-broker.js");
+    const { RedisLock } = await import("./redis/redis-lock.js");
+    const { Redis } = await import("ioredis");
+
+    const prefix = config.postgres.tablePrefix ?? "oqron";
+    const pool = config.postgres.poolSize ?? 10;
+    const conn = config.postgres.connectionString;
+
+    storage = new PostgresStore(conn, prefix, pool);
+    _pgAdapters = [storage as unknown as ICloseable];
+
+    // Redis for broker + lock
+    if (typeof config.redis === "string") {
+      _redisClient = new Redis(config.redis);
+      _redisClientOwned = true;
+    } else if (config.redis && (config.redis as any).url) {
+      _redisClient = new Redis((config.redis as any).url, config.redis as any);
+      _redisClientOwned = true;
+    } else {
+      _redisClient = config.redis;
+      _redisClientOwned = false;
+    }
+
+    const redisPrefix = `${config.project}:${config.environment ?? "development"}`;
+    broker = new RedisBroker(_redisClient, redisPrefix);
+    lock = new RedisLock(_redisClient, redisPrefix);
+  } else if (mode === "db") {
+    // ── PostgreSQL Adapters ──────────────────────────────────────────────
+    if (!config.postgres) {
+      throw new Error('[OqronKit] mode "db" requires `postgres` config.');
+    }
+
     const { PostgresStore } = await import("./postgres/postgres-store.js");
     const { PostgresBroker } = await import("./postgres/postgres-broker.js");
     const { PostgresLock } = await import("./postgres/postgres-lock.js");
@@ -72,15 +121,25 @@ export async function initEngine(config: OqronConfig): Promise<void> {
     broker = new PostgresBroker(conn, prefix, pool);
     lock = new PostgresLock(conn, prefix, pool);
 
-    _pgAdapters = [storage, broker, lock] as any[];
+    _pgAdapters = [storage, broker, lock] as unknown as ICloseable[];
     _redisClient = null;
     _redisClientOwned = false;
-  } else if (config.redis) {
-    // ── Redis Adapters ─────────────────────────────────────────────────────
+  } else if (mode === "redis") {
+    // ── Redis Adapters ──────────────────────────────────────────────────
+    if (!config.redis) {
+      throw new Error('[OqronKit] mode "redis" requires `redis` config.');
+    }
+
+    const { RedisBroker } = await import("./redis/redis-broker.js");
+    const { RedisLock } = await import("./redis/redis-lock.js");
+    const { RedisStore } = await import("./redis/redis-store.js");
     const { Redis } = await import("ioredis");
 
     if (typeof config.redis === "string") {
       _redisClient = new Redis(config.redis);
+      _redisClientOwned = true;
+    } else if (config.redis && (config.redis as any).url) {
+      _redisClient = new Redis((config.redis as any).url, config.redis as any);
       _redisClientOwned = true;
     } else {
       _redisClient = config.redis;
@@ -93,7 +152,7 @@ export async function initEngine(config: OqronConfig): Promise<void> {
     lock = new RedisLock(_redisClient, prefix);
     _pgAdapters = null;
   } else {
-    // ── Memory Adapters (monolith / development) ───────────────────────────
+    // ── Memory Adapters (default — monolith / development) ──────────────
     _redisClient = null;
     _redisClientOwned = false;
     _pgAdapters = null;
@@ -118,7 +177,7 @@ export async function stopEngine(): Promise<void> {
       try {
         await adapter.close();
       } catch {
-        /* best-effort */
+        // best-effort: PG adapter close failed during shutdown — non-critical
       }
     }
     _pgAdapters = null;
@@ -132,7 +191,7 @@ export async function stopEngine(): Promise<void> {
       try {
         _redisClient.disconnect();
       } catch {
-        /* swallow */
+        // best-effort: Redis disconnect failed during shutdown — non-critical
       }
     }
   }

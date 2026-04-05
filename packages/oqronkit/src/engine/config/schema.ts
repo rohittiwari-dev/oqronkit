@@ -1,35 +1,114 @@
 import { z } from "zod";
+import type {
+  CronModuleDef,
+  OqronModuleDef,
+  QueueModuleDef,
+  SchedulerModuleDef,
+} from "../../modules.js";
 
-// ── Shared sub-schemas ──────────────────────────────────────────────────────
+// ── Resolved Module Config Defaults ─────────────────────────────────────────
 
-const KeepJobsSchema = z.object({
-  age: z.number().optional(),
-  count: z.number().optional(),
-});
+const DEFAULT_CRON: Omit<Required<CronModuleDef>, "clustering" | "disabledBehavior" | "maxHeldJobs"> & {
+  clustering?: CronModuleDef["clustering"];
+  disabledBehavior?: CronModuleDef["disabledBehavior"];
+  maxHeldJobs?: CronModuleDef["maxHeldJobs"];
+} = {
+  module: "cron",
+  timezone: "UTC",
+  tickInterval: 1000,
+  missedFirePolicy: "run-once",
+  maxConcurrentJobs: 5,
+  leaderElection: true,
+  keepJobHistory: true,
+  keepFailedJobHistory: true,
+  shutdownTimeout: 25000,
+  lagMonitor: { maxLagMs: 5000, sampleIntervalMs: 1000 },
+};
 
-const RemoveOnConfigSchema = z.union([z.boolean(), z.number(), KeepJobsSchema]);
+const DEFAULT_SCHEDULER: Omit<Required<SchedulerModuleDef>, "clustering" | "disabledBehavior" | "maxHeldJobs"> & {
+  clustering?: SchedulerModuleDef["clustering"];
+  disabledBehavior?: SchedulerModuleDef["disabledBehavior"];
+  maxHeldJobs?: SchedulerModuleDef["maxHeldJobs"];
+} = {
+  module: "scheduler",
+  tickInterval: 1000,
+  timezone: "UTC",
+  leaderElection: true,
+  keepJobHistory: true,
+  keepFailedJobHistory: true,
+  shutdownTimeout: 25000,
+  lagMonitor: { maxLagMs: 5000, sampleIntervalMs: 1000 },
+};
 
-const RetriesSchema = z
-  .object({
-    max: z.number().default(3),
-    strategy: z.enum(["fixed", "exponential"]).default("exponential"),
-    baseDelay: z.number().default(2000),
-    maxDelay: z.number().default(60000),
-  })
-  .default({});
+const DEFAULT_QUEUE: Omit<Required<QueueModuleDef>, "disabledBehavior" | "maxHeldJobs"> & {
+  disabledBehavior?: QueueModuleDef["disabledBehavior"];
+  maxHeldJobs?: QueueModuleDef["maxHeldJobs"];
+} = {
+  module: "queue",
+  concurrency: 5,
+  heartbeatMs: 5000,
+  lockTtlMs: 30000,
+  strategy: "fifo",
+  retries: {
+    max: 3,
+    strategy: "exponential",
+    baseDelay: 2000,
+    maxDelay: 60000,
+  },
+  deadLetter: { enabled: true },
+  removeOnComplete: false,
+  removeOnFail: false,
+  shutdownTimeout: 25000,
+  maxStalledCount: 1,
+  stalledInterval: 30000,
+};
 
-const DeadLetterSchema = z
-  .object({
-    enabled: z.boolean().default(true),
-  })
-  .default({});
+/**
+ * Apply defaults to a normalized OqronModuleDef.
+ * Deep-merges nested objects (lagMonitor, retries, deadLetter).
+ */
+export function applyModuleDefaults(def: OqronModuleDef): OqronModuleDef {
+  switch (def.module) {
+    case "cron":
+      return applyCronDefaults(def);
+    case "scheduler":
+      return applySchedulerDefaults(def);
+    case "queue":
+      return applyQueueDefaults(def);
+    default:
+      return def;
+  }
+}
 
-const LagMonitorSchema = z
-  .object({
-    maxLagMs: z.number().default(5000),
-    sampleIntervalMs: z.number().default(1000),
-  })
-  .default({ maxLagMs: 5000, sampleIntervalMs: 1000 });
+function applyCronDefaults(def: CronModuleDef): CronModuleDef {
+  return {
+    ...DEFAULT_CRON,
+    ...def,
+    module: "cron",
+    lagMonitor: { ...DEFAULT_CRON.lagMonitor, ...(def.lagMonitor ?? {}) },
+    clustering: def.clustering,
+  };
+}
+
+function applySchedulerDefaults(def: SchedulerModuleDef): SchedulerModuleDef {
+  return {
+    ...DEFAULT_SCHEDULER,
+    ...def,
+    module: "scheduler",
+    lagMonitor: { ...DEFAULT_SCHEDULER.lagMonitor, ...(def.lagMonitor ?? {}) },
+    clustering: def.clustering,
+  };
+}
+
+function applyQueueDefaults(def: QueueModuleDef): QueueModuleDef {
+  return {
+    ...DEFAULT_QUEUE,
+    ...def,
+    module: "queue",
+    retries: { ...DEFAULT_QUEUE.retries, ...(def.retries ?? {}) },
+    deadLetter: { ...DEFAULT_QUEUE.deadLetter, ...(def.deadLetter ?? {}) },
+  };
+}
 
 // ── Main Config Schema ──────────────────────────────────────────────────────
 
@@ -37,102 +116,26 @@ export const OqronConfigSchema = z.object({
   project: z.string().optional(),
   environment: z.string().default("development"),
 
+  // Storage mode
+  mode: z.enum(["default", "db", "redis", "hybrid-db"]).default("default"),
+
   // Infrastructure
   redis: z.any().optional(),
 
-  // Modules
-  modules: z
-    .array(
-      z.enum([
-        "cron",
-        "scheduler",
-        "taskQueue",
-        "queue",
-        "worker",
-        "workflow",
-        "batch",
-        "webhook",
-        "pipeline",
-      ]),
-    )
-    .default([]),
-
-  // ── Cron ─────────────────────────────────────────────────────────────────
-  cron: z
+  // PostgreSQL
+  postgres: z
     .object({
-      enable: z.boolean().default(true),
-      timezone: z.string().default("UTC"),
-      tickInterval: z.number().default(1000),
-      missedFirePolicy: z
-        .enum(["skip", "run-once", "run-all"])
-        .default("run-once"),
-      maxConcurrentJobs: z.number().default(5),
-      leaderElection: z.boolean().default(true),
-      keepJobHistory: z.union([z.boolean(), z.number()]).default(true),
-      keepFailedJobHistory: z.union([z.boolean(), z.number()]).default(true),
-      shutdownTimeout: z.number().default(25000),
-      lagMonitor: LagMonitorSchema,
+      connectionString: z.string(),
+      tablePrefix: z.string().default("oqron"),
+      poolSize: z.number().default(10),
     })
-    .default({}),
+    .optional(),
 
-  // ── Scheduler ────────────────────────────────────────────────────────────
-  scheduler: z
-    .object({
-      enable: z.boolean().default(true),
-      tickInterval: z.number().default(1000),
-      timezone: z.string().default("UTC"),
-      leaderElection: z.boolean().default(true),
-      keepJobHistory: z.union([z.boolean(), z.number()]).default(true),
-      keepFailedJobHistory: z.union([z.boolean(), z.number()]).default(true),
-      shutdownTimeout: z.number().default(25000),
-      lagMonitor: LagMonitorSchema,
-    })
-    .default({}),
+  // Modules — accepts any[] at the Zod layer; runtime normalizes before use
+  modules: z.array(z.any()).default([]),
 
-  // ── TaskQueue ────────────────────────────────────────────────────────────
-  taskQueue: z
-    .object({
-      concurrency: z.number().default(5),
-      heartbeatMs: z.number().default(5000),
-      lockTtlMs: z.number().default(30000),
-      strategy: z.enum(["fifo", "lifo", "priority"]).default("fifo"),
-      retries: RetriesSchema,
-      deadLetter: DeadLetterSchema,
-      removeOnComplete: RemoveOnConfigSchema.default(false),
-      removeOnFail: RemoveOnConfigSchema.default(false),
-      shutdownTimeout: z.number().default(25000),
-      maxStalledCount: z.number().default(1),
-      stalledInterval: z.number().default(30000),
-    })
-    .default({}),
-
-  // ── Queue ────────────────────────────────────────────────────────────────
-  queue: z
-    .object({
-      defaultTtl: z.number().default(86400 * 1000),
-      ack: z.enum(["leader", "all", "none"]).default("leader"),
-    })
-    .default({}),
-
-  // ── Worker ───────────────────────────────────────────────────────────────
-  worker: z
-    .object({
-      concurrency: z.number().default(5),
-      heartbeatMs: z.number().default(5000),
-      lockTtlMs: z.number().default(30000),
-      strategy: z.enum(["fifo", "lifo", "priority"]).default("fifo"),
-      retries: RetriesSchema,
-      deadLetter: DeadLetterSchema,
-      removeOnComplete: RemoveOnConfigSchema.default(false),
-      removeOnFail: RemoveOnConfigSchema.default(false),
-      shutdownTimeout: z.number().default(25000),
-      maxStalledCount: z.number().default(1),
-      stalledInterval: z.number().default(30000),
-    })
-    .default({}),
-
-  // Auto-discovery directory
-  jobsDir: z.string().default("./src/jobs"),
+  // Trigger auto-discovery: string path, false to disable, or omit for auto-detect
+  triggers: z.union([z.string(), z.literal(false)]).optional(),
 
   // Global tags
   tags: z.array(z.string()).default([]),
@@ -174,6 +177,38 @@ export const OqronConfigSchema = z.object({
     })
     .default({}),
 
+  // Observability (alpha-5 port)
+  observability: z
+    .object({
+      maxJobLogs: z.number().default(200),
+      maxTimelineEntries: z.number().default(20),
+      trackMemory: z.boolean().default(true),
+      logCollector: z.boolean().default(true),
+      logCollectorMaxGlobal: z.number().default(500),
+      logCollectorMaxPerCategory: z.number().default(200),
+    })
+    .default({}),
+
+  // UI Dashboard configuration
+  ui: z
+    .object({
+      enabled: z.boolean().default(false),
+      auth: z
+        .object({
+          username: z.string().optional(),
+          password: z.string().optional(),
+        })
+        .optional(),
+      retention: z
+        .object({
+          runs: z.string().default("30d"),
+          events: z.string().default("7d"),
+          metrics: z.string().default("30d"),
+        })
+        .default({}),
+    })
+    .default({}),
+
   // Shutdown
   shutdown: z
     .object({
@@ -182,15 +217,12 @@ export const OqronConfigSchema = z.object({
       signals: z.array(z.string()).default(["SIGINT", "SIGTERM"]),
     })
     .default({}),
-
-  // PostgreSQL (optional — alternative to Redis for persistence)
-  postgres: z
-    .object({
-      connectionString: z.string(),
-      tablePrefix: z.string().default("oqron"),
-      poolSize: z.number().default(10),
-    })
-    .optional(),
 });
 
-export type ValidatedConfig = z.infer<typeof OqronConfigSchema>;
+export type ValidatedConfig = Omit<
+  z.infer<typeof OqronConfigSchema>,
+  "modules"
+> & {
+  /** Normalized and default-merged module definitions */
+  modules: OqronModuleDef[];
+};

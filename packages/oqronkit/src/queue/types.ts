@@ -1,7 +1,8 @@
+import type { DisabledBehavior } from "../engine/types/config.types.js";
 import type { BrokerStrategy } from "../engine/types/engine.js";
 import type { OqronJob, OqronJobOptions } from "../engine/types/job.types.js";
 
-export interface TaskJobContext<T = any> {
+export interface QueueJobContext<T = any> {
   /** The internal idempotency key or generated UUID of the job */
   id: string;
 
@@ -22,9 +23,21 @@ export interface TaskJobContext<T = any> {
 
   /** Mark the job as permanently failed without triggering backoff retries */
   discard: () => void;
+
+  /** The queue this job belongs to */
+  queueName: string;
+
+  /** The module definition name that created this job */
+  moduleName: string;
+
+  /** The environment context (isolation boundary) */
+  environment: string;
+
+  /** The project context (isolation boundary) */
+  project: string;
 }
 
-export interface TaskQueueConfig<T = any, R = any> {
+export interface QueueConfig<T = any, R = any> {
   /** The unified identifier for this specific task pipeline */
   name: string;
 
@@ -58,6 +71,14 @@ export interface TaskQueueConfig<T = any, R = any> {
   };
 
   /**
+   * Behavior when a job is added to this queue but the queue is disabled.
+   * - "hold": Accept the job, place it in "paused" status (default)
+   * - "skip": Silently drop the job without enqueueing
+   * - "reject": Throw an error explicitly rejecting the enqueue attempt
+   */
+  disabledBehavior?: DisabledBehavior;
+
+  /**
    * Auto-remove completed jobs after processing.
    * Overrides global config. See OqronJobOptions.removeOnComplete.
    */
@@ -76,16 +97,22 @@ export interface TaskQueueConfig<T = any, R = any> {
   };
 
   /**
-   * The monolithic processing function.
-   * Required for taskQueue.
+   * Execution timeout in milliseconds.
+   * If the handler does not fulfill within this time, it is aborted and fails.
    */
-  handler: (job: TaskJobContext<T>) => Promise<R>;
+  timeout?: number;
+
+  /**
+   * The monolithic processing function.
+   * Required for queue definitions.
+   */
+  handler: (job: QueueJobContext<T>) => Promise<R>;
 }
 
-export interface ITaskQueue<T = any, R = any> {
+export interface IQueue<T = any, R = any> {
   name: string;
   /**
-   * Pushes a new payload onto the task queue.
+   * Pushes a new payload onto the queue.
    */
   add(data: T, opts?: OqronJobOptions): Promise<OqronJob<T, R>>;
 }

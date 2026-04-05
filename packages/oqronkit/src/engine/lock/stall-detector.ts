@@ -40,6 +40,7 @@ export class StallDetector {
         this.logger.error("StallDetector tick error", { err: String(err) });
       }
     }, this.checkIntervalMs);
+    this.timer.unref();
   }
 
   stop(): void {

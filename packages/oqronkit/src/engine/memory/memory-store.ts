@@ -96,8 +96,22 @@ export class MemoryStore implements IStorageEngine {
     let prunedCount = 0;
 
     for (const [id, value] of map.entries()) {
-      const createdAt = value?.createdAt?.getTime?.() ?? value?.createdAt;
-      if (typeof createdAt === "number" && createdAt < beforeMs) {
+      const createdAt = value?.createdAt;
+      let createdAtMs: number | undefined;
+
+      if (createdAt instanceof Date) {
+        createdAtMs = createdAt.getTime();
+      } else if (typeof createdAt === "string") {
+        createdAtMs = new Date(createdAt).getTime();
+      } else if (typeof createdAt === "number") {
+        createdAtMs = createdAt;
+      }
+
+      if (
+        createdAtMs !== undefined &&
+        !Number.isNaN(createdAtMs) &&
+        createdAtMs < beforeMs
+      ) {
         map.delete(id);
         prunedCount++;
       }

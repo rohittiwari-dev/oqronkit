@@ -82,3 +82,11 @@ export interface ILockAdapter {
   release(key: string, ownerId: string): Promise<void>;
   isOwner(key: string, ownerId: string): Promise<boolean>;
 }
+
+/**
+ * Implemented by adapters that hold connection pools (PG pools, etc.)
+ * and need explicit cleanup during engine shutdown.
+ */
+export interface ICloseable {
+  close(): Promise<void>;
+}

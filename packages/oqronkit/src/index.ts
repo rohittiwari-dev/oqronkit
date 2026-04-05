@@ -1,5 +1,5 @@
-import fs from "node:fs/promises";
-import path from "node:path";
+import { access, readdir } from "node:fs/promises";
+import * as path from "node:path";
 import { pathToFileURL } from "node:url";
 import { initEngine, Storage, stopEngine } from "./engine/core.js";
 import {
@@ -11,26 +11,36 @@ import {
   reconfigureConfig,
   type ValidatedConfig,
 } from "./engine/index.js";
+import {
+  type CronModuleDef,
+  getModuleConfig,
+  type QueueModuleDef,
+  type SchedulerModuleDef,
+} from "./modules.js";
 import { expressRouter as _expressRouter } from "./server/express.js";
 import { fastifyPlugin as _fastifyPlugin } from "./server/fastify.js";
 import { TelemetryManager } from "./telemetry/index.js";
 
 let _config: ValidatedConfig | null = null;
 let _logger: Logger | null = null;
-let _telemetry: TelemetryManager | null = null;
 
 export type {
   ClusteringConfig,
   CronDefinition,
   CronHooks,
+  DisabledBehavior,
   EveryConfig,
   ICronContext,
   IScheduleContext,
+  JobLogEntry,
   JobRecord,
+  JobTimelineEntry,
+  JobTriggerSource,
   Logger,
   MissedFirePolicy,
   OqronLoggerConfig,
   OverlapPolicy,
+  PausedReason,
   RetryConfig,
   ScheduleDefinition,
   ScheduleHooks,
@@ -46,11 +56,32 @@ export {
   OqronEventBus,
 } from "./engine/index.js";
 export { ShardedLeaderElection } from "./engine/lock/index.js";
-export { OqronManager } from "./manager/oqron-manager.js";
-export { Queue } from "./queue/queue.js";
-export { QueueEvents } from "./queue/queue-events.js";
-export { type SandboxOptions, SandboxWorker } from "./queue/sandbox-worker.js";
-export { Worker } from "./queue/worker.js";
+export {
+  type JobHistoryResult,
+  type ModuleInfo,
+  OqronManager,
+  type QueueInfoResult,
+  type QueueMetrics,
+} from "./manager/oqron-manager.js";
+// ── Module factories ────────────────────────────────────────────────────────
+export {
+  type CronModuleConfig,
+  type CronModuleDef,
+  cronModule,
+  getModuleConfig,
+  normalizeModules,
+  type OqronModuleDef,
+  type OqronModuleInput,
+  type OqronModuleName,
+  type QueueModuleConfig,
+  type QueueModuleDef,
+  queueModule,
+  type SchedulerModuleConfig,
+  type SchedulerModuleDef,
+  scheduleModule,
+} from "./modules.js";
+export { queue } from "./queue/define-queue.js";
+export type { IQueue, QueueConfig, QueueJobContext } from "./queue/types.js";
 export {
   cron,
   type DefineCronOptions,
@@ -58,18 +89,81 @@ export {
   type ScheduleInstance,
   schedule,
 } from "./scheduler/index.js";
-export { taskQueue } from "./task-queue/define-task-queue.js";
-export type {
-  ITaskQueue,
-  TaskJobContext,
-  TaskQueueConfig,
-} from "./task-queue/types.js";
+
+// ── Trigger Auto-Discovery ──────────────────────────────────────────────────
+
+/** Well-known directories checked when `triggers` is not set */
+const TRIGGER_PROBE_PATHS = ["src/triggers", "triggers", "src/jobs", "jobs"];
+
+/** Recursively import all .ts/.js files in a directory */
+async function scanDir(dir: string): Promise<number> {
+  let count = 0;
+  const entries = await readdir(dir, { withFileTypes: true });
+  for (const entry of entries) {
+    const full = path.join(dir, entry.name);
+    if (entry.isDirectory()) {
+      count += await scanDir(full);
+    } else if (entry.isFile() && /\.(js|ts|mjs|cjs)$/.test(entry.name)) {
+      await import(pathToFileURL(full).toString());
+      count++;
+      ``;
+    }
+  }
+  return count;
+}
+
+async function discoverTriggers(
+  config: ValidatedConfig,
+  cwd: string,
+  logger: Logger,
+): Promise<void> {
+  // Explicitly disabled
+  if (config.triggers === false) return;
+
+  // Explicit path provided
+  if (typeof config.triggers === "string") {
+    const resolved = path.resolve(cwd, config.triggers);
+    try {
+      await access(resolved);
+      const count = await scanDir(resolved);
+      logger.info(`Loaded ${count} trigger file(s) from ${config.triggers}`);
+    } catch {
+      logger.warn(
+        `Triggers directory "${config.triggers}" not found at ${resolved}. ` +
+          `Ensure trigger files are imported manually before OqronKit.init().`,
+      );
+    }
+    return;
+  }
+
+  // Auto-detect: probe common directories
+  for (const probe of TRIGGER_PROBE_PATHS) {
+    const resolved = path.resolve(cwd, probe);
+    try {
+      await access(resolved);
+      const count = await scanDir(resolved);
+      logger.info(`Auto-discovered ${count} trigger file(s) from ${probe}/`);
+      return;
+    } catch {
+      // Not found — try next
+    }
+  }
+
+  // Nothing found — warn with guidance
+  logger.warn(
+    "No triggers directory found. OqronKit checked: " +
+      TRIGGER_PROBE_PATHS.join(", ") +
+      ". To fix: (1) create a triggers/ directory, (2) set config.triggers to an explicit path, " +
+      "or (3) import job files manually before OqronKit.init(). " +
+      "Set triggers: false to silence this warning.",
+  );
+}
 
 export const OqronKit = {
   /**
-   * Initialize OqronKit: loads config, auto-discovers jobs, and boots modules.
+   * Initialize OqronKit: loads config and boots modules.
    *
-   * @param opts.cwd - Working directory for config file lookup and jobsDir resolution
+   * @param opts.cwd - Working directory for config file lookup
    * @param opts.config - Explicit config object (skips loadConfig)
    */
   async init(opts?: { cwd?: string; config?: OqronConfig }): Promise<void> {
@@ -96,26 +190,12 @@ export const OqronKit = {
       }
     }
 
-    // --- Auto-discover jobs ---
-    if (_config.jobsDir) {
-      const jobsPath = path.resolve(cwd, _config.jobsDir);
-      try {
-        async function scan(dir: string) {
-          const entries = await fs.readdir(dir, { withFileTypes: true });
-          for (const entry of entries) {
-            const fullPath = path.join(dir, entry.name);
-            if (entry.isDirectory()) await scan(fullPath);
-            else if (entry.isFile() && /\.(js|ts|mjs|cjs)$/.test(entry.name)) {
-              await import(pathToFileURL(fullPath).toString());
-            }
-          }
-        }
-        await scan(jobsPath);
-      } catch (_err) {}
-    }
+    // --- Auto-discover trigger/job definitions ---
+    await discoverTriggers(_config, cwd, _logger);
 
-    // --- Boot modules ---
-    if (_config.modules.includes("cron")) {
+    // --- Boot modules from normalized definitions ---
+    const cronConf = getModuleConfig<CronModuleDef>(_config.modules, "cron");
+    if (cronConf) {
       const { SchedulerModule, _drainPending } = await import(
         "./scheduler/index.js"
       );
@@ -127,12 +207,16 @@ export const OqronKit = {
         _logger!,
         _config.environment,
         _config.project,
-        _config.cron,
+        cronConf,
       );
       OqronRegistry.getInstance().register(scheduler);
     }
 
-    if (_config.modules.includes("scheduler")) {
+    const schedulerConf = getModuleConfig<SchedulerModuleDef>(
+      _config.modules,
+      "scheduler",
+    );
+    if (schedulerConf) {
       const { ScheduleEngine, _drainPendingSchedules } = await import(
         "./scheduler/index.js"
       );
@@ -144,22 +228,15 @@ export const OqronKit = {
         _logger!,
         _config.environment,
         _config.project,
-        _config.scheduler,
+        schedulerConf,
       );
       OqronRegistry.getInstance().register(scheduleEngine);
     }
 
-    if (_config.modules.includes("taskQueue")) {
-      const { TaskQueueEngine } = await import(
-        "./task-queue/task-queue-engine.js"
-      );
-      const engine = new TaskQueueEngine(_config, _logger!);
-      OqronRegistry.getInstance().register(engine);
-    }
-
-    if (_config.modules.includes("worker")) {
-      const { WorkerEngine } = await import("./queue/worker-engine.js");
-      const engine = new WorkerEngine(_config, _logger!);
+    const queueConf = getModuleConfig<QueueModuleDef>(_config.modules, "queue");
+    if (queueConf) {
+      const { QueueEngine } = await import("./queue/queue-engine.js");
+      const engine = new QueueEngine(_config, _logger!, queueConf);
       OqronRegistry.getInstance().register(engine);
     }
 
@@ -174,6 +251,9 @@ export const OqronKit = {
     _logger.info("OqronKit ready ✓");
     const { configureHandlers } = await import("./server/handlers.js");
     configureHandlers(registry, _config);
+
+    // Start TelemetryManager — collects throughput, latency, memory from EventBus
+    TelemetryManager.getInstance().start();
   },
 
   async stop(): Promise<void> {
@@ -207,13 +287,36 @@ export const OqronKit = {
   },
 
   async pause(scheduleId: string): Promise<void> {
-    const s = (await Storage.get("schedules", scheduleId)) as any;
+    const s = await Storage.get<{ paused?: boolean }>("schedules", scheduleId);
     if (s) await Storage.save("schedules", scheduleId, { ...s, paused: true });
   },
 
   async resume(scheduleId: string): Promise<void> {
-    const s = (await Storage.get("schedules", scheduleId)) as any;
+    const s = await Storage.get<{ paused?: boolean }>("schedules", scheduleId);
     if (s) await Storage.save("schedules", scheduleId, { ...s, paused: false });
+  },
+
+  /**
+   * Returns a sealed configuration object for the OqronUI dashboard package.
+   * Used as: `app.use("/oqron", OqronUI.register(OqronKit.ui()))`
+   */
+  ui(): {
+    apiBasePath: string;
+    auth?: { username?: string; password?: string };
+    retention?: { runs?: string; events?: string; metrics?: string };
+    project: string;
+    environment: string;
+    modules: string[];
+  } {
+    if (!_config) throw new Error("OqronKit.ui() called before init()");
+    return {
+      apiBasePath: "/api/oqron",
+      auth: _config.ui?.auth,
+      retention: _config.ui?.retention,
+      project: _config.project ?? "unnamed",
+      environment: _config.environment ?? "development",
+      modules: (_config.modules ?? []).map((m) => m.module),
+    };
   },
 
   expressRouter() {
@@ -223,19 +326,9 @@ export const OqronKit = {
     return _fastifyPlugin(fastify, opts, done);
   },
   getMetrics(): string {
-    if (!_telemetry) {
-      _telemetry = new TelemetryManager();
-      _telemetry.start();
-    }
-    return _telemetry.serialize();
+    return TelemetryManager.getInstance().serialize();
   },
   getTelemetry(): TelemetryManager {
-    if (!_telemetry) {
-      _telemetry = new TelemetryManager();
-      _telemetry.start();
-    }
-    return _telemetry;
+    return TelemetryManager.getInstance();
   },
 };
-
-export default OqronKit;

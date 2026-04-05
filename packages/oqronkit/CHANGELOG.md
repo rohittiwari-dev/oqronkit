@@ -3,6 +3,20 @@
 
 ### Patch Changes
 
+- ## 0.0.1-alpha.5
+
+  ### New Features
+
+  - **Disabled Queue/Schedule Handling** — Added configurable `disabled` behavior for schedules and queues. Includes `maxHeldJobs` config and `disabledold` handling to efficiently prune the oldest held jobs when an instance is disabled.
+  - **Admin Module & Isolation** — Added admin module and instance handlers with improved isolation prefixing.
+  - **Trigger Auto-Discovery** — Added trigger auto-discovery support with new configuration options. Removed unused trigger modules from the backend.
+
+  ### Fixes & Improvements
+
+  - Refined `nextRun` calculation and optimized job pruning logic.
+  - Enhanced robustness of memory lock/store handling and cron compatibility.
+  - General housekeeping including whitespace fixes, import cleanups, and test mock field renaming.
+
 - ## 0.0.1-alpha.4
 
   ### New Features
