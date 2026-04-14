@@ -9,6 +9,7 @@
     "type": "git",
     "url": "https://github.com/rohittiwari-dev/oqronkit"
   },
+  "license": "MIT",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
