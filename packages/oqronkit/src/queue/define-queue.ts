@@ -3,14 +3,17 @@ import { OqronContainer } from "../engine/index.js";
 import type { OqronJob } from "../engine/types/job.types.js";
 import { DependencyResolver } from "../engine/utils/dependency-resolver.js";
 import { registerQueue } from "./registry.js";
-import type { IQueue, QueueConfig } from "./types.js";
+import type { IPublisherQueue, IQueue, QueueConfig } from "./types.js";
 
 /**
  * Enterprise Queue Factory.
- * Simple API for monolithic/server-centric applications where publisher and consumer live together.
+ *
+ * **With handler** (monolithic): publisher and consumer live in the same process.
+ * **Without handler** (publisher-only): only pushes jobs; a separate `worker()` node consumes them.
  *
  * @example
  * ```ts
+ * // Monolithic (with handler)
  * const emailQueue = queue<{ to: string; subject: string }, void>({
  *   name: "email-queue",
  *   handler: async (ctx) => {
@@ -18,13 +21,26 @@ import type { IQueue, QueueConfig } from "./types.js";
  *   },
  * });
  *
- * // Later, push a job:
+ * // Publisher-only (without handler)
+ * const videoQueue = queue<{ url: string }>({ name: "video-encode" });
+ *
+ * // Push a job (works in both modes):
  * await emailQueue.add({ to: "user@example.com", subject: "Welcome!" });
+ * await videoQueue.add({ url: "https://..." });
  * ```
  */
 export function queue<T = any, R = any>(
+  config: QueueConfig<T, R> & { handler: (job: any) => Promise<R> },
+): IQueue<T, R>;
+export function queue<T = any>(
+  config: Omit<QueueConfig<T>, "handler">,
+): IPublisherQueue<T>;
+export function queue<T = any, R = any>(
   config: QueueConfig<T, R>,
-): IQueue<T, R> {
+): IQueue<T, R> | IPublisherQueue<T>;
+export function queue<T = any, R = any>(
+  config: QueueConfig<T, R>,
+): IQueue<T, R> | IPublisherQueue<T> {
   registerQueue(config);
 
   return {

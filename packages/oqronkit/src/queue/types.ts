@@ -104,15 +104,29 @@ export interface QueueConfig<T = any, R = any> {
 
   /**
    * The monolithic processing function.
-   * Required for queue definitions.
+   * When omitted, this queue acts as a **Publisher-Only** endpoint: it can
+   * push jobs to the broker but will NOT start any polling or execution loops.
+   * Use the `worker()` factory on a separate node to consume these jobs.
    */
-  handler: (job: QueueJobContext<T>) => Promise<R>;
+  handler?: (job: QueueJobContext<T>) => Promise<R>;
 }
 
 export interface IQueue<T = any, R = any> {
-  name: string;
+  readonly name: string;
   /**
    * Pushes a new payload onto the queue.
    */
   add(data: T, opts?: OqronJobOptions): Promise<OqronJob<T, R>>;
+}
+
+/**
+ * A queue instance that can only push jobs (no handler, no polling).
+ * Returned when `queue()` is called without a handler.
+ */
+export interface IPublisherQueue<T = any> {
+  readonly name: string;
+  /**
+   * Pushes a new payload onto the queue.
+   */
+  add(data: T, opts?: OqronJobOptions): Promise<OqronJob<T>>;
 }

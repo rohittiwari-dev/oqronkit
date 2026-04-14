@@ -5,6 +5,7 @@ import type {
   QueueModuleDef,
   SchedulerModuleDef,
   WebhookModuleDef,
+  WorkerModuleDef,
 } from "../../modules.js";
 
 // ── Resolved Module Config Defaults ─────────────────────────────────────────
@@ -73,6 +74,32 @@ const DEFAULT_QUEUE: Omit<
   stalledInterval: 30000,
 };
 
+const DEFAULT_WORKER: Omit<
+  Required<WorkerModuleDef>,
+  "disabledBehavior" | "maxHeldJobs"
+> & {
+  disabledBehavior?: WorkerModuleDef["disabledBehavior"];
+  maxHeldJobs?: WorkerModuleDef["maxHeldJobs"];
+} = {
+  module: "worker",
+  concurrency: 5,
+  heartbeatMs: 5000,
+  lockTtlMs: 30000,
+  strategy: "fifo",
+  retries: {
+    max: 3,
+    strategy: "exponential",
+    baseDelay: 2000,
+    maxDelay: 60000,
+  },
+  deadLetter: { enabled: true },
+  removeOnComplete: false,
+  removeOnFail: false,
+  shutdownTimeout: 25000,
+  maxStalledCount: 1,
+  stalledInterval: 30000,
+};
+
 const DEFAULT_WEBHOOK: Omit<
   Required<WebhookModuleDef>,
   "disabledBehavior" | "maxHeldJobs" | "removeOnComplete" | "removeOnFail"
@@ -112,6 +139,8 @@ export function applyModuleDefaults(def: OqronModuleDef): OqronModuleDef {
       return applySchedulerDefaults(def);
     case "queue":
       return applyQueueDefaults(def);
+    case "worker":
+      return applyWorkerDefaults(def as WorkerModuleDef);
     case "webhook":
       return applyWebhookDefaults(def as WebhookModuleDef);
     default:
@@ -146,6 +175,16 @@ function applyQueueDefaults(def: QueueModuleDef): QueueModuleDef {
     module: "queue",
     retries: { ...DEFAULT_QUEUE.retries, ...(def.retries ?? {}) },
     deadLetter: { ...DEFAULT_QUEUE.deadLetter, ...(def.deadLetter ?? {}) },
+  };
+}
+
+function applyWorkerDefaults(def: WorkerModuleDef): WorkerModuleDef {
+  return {
+    ...DEFAULT_WORKER,
+    ...def,
+    module: "worker",
+    retries: { ...DEFAULT_WORKER.retries, ...(def.retries ?? {}) },
+    deadLetter: { ...DEFAULT_WORKER.deadLetter, ...(def.deadLetter ?? {}) },
   };
 }
 

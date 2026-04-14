@@ -17,6 +17,7 @@ import {
   type QueueModuleDef,
   type SchedulerModuleDef,
   type WebhookModuleDef,
+  type WorkerModuleDef,
 } from "./modules.js";
 import { expressRouter as _expressRouter } from "./server/express.js";
 import { fastifyPlugin as _fastifyPlugin } from "./server/fastify.js";
@@ -83,9 +84,19 @@ export {
   type WebhookModuleConfig,
   type WebhookModuleDef,
   webhookModule,
+  type WorkerModuleConfig,
+  type WorkerModuleDef,
+  workerModule,
 } from "./modules.js";
+export { worker } from "./worker/define-worker.js";
+export type { IWorker, WorkerConfig } from "./worker/types.js";
 export { queue } from "./queue/define-queue.js";
-export type { IQueue, QueueConfig, QueueJobContext } from "./queue/types.js";
+export type {
+  IPublisherQueue,
+  IQueue,
+  QueueConfig,
+  QueueJobContext,
+} from "./queue/types.js";
 export {
   cron,
   type DefineCronOptions,
@@ -254,6 +265,13 @@ export const OqronKit = {
     if (queueConf) {
       const { QueueEngine } = await import("./queue/queue-engine.js");
       const engine = new QueueEngine(_config, _logger!, queueConf);
+      OqronRegistry.getInstance().register(engine);
+    }
+
+    const workerConf = getModuleConfig<WorkerModuleDef>(_config.modules, "worker");
+    if (workerConf) {
+      const { WorkerEngine } = await import("./worker/worker-engine.js");
+      const engine = new WorkerEngine(_config, _logger!, workerConf);
       OqronRegistry.getInstance().register(engine);
     }
 

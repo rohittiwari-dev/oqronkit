@@ -11,6 +11,7 @@ export type OqronModuleName =
   | "cron"
   | "scheduler"
   | "queue"
+  | "worker"
   | "workflow"
   | "batch"
   | "webhook"
@@ -173,12 +174,58 @@ export type SchedulerModuleDef = {
   module: "scheduler";
 } & SchedulerModuleConfig;
 export type QueueModuleDef = { module: "queue" } & QueueModuleConfig;
-export type WebhookModuleDef = { module: "webhook" } & WebhookModuleConfig;
+export type WebhookModuleDef = {
+  module: "webhook";
+} & WebhookModuleConfig;
+
+/**
+ * Worker-level configuration. Inherited by individual `worker()` instances.
+ */
+export interface WorkerModuleConfig {
+  /** Parallel execution limit. @default 5 */
+  concurrency?: number;
+  /** Polling heartbeat interval in ms. @default 5000 */
+  heartbeatMs?: number;
+  /** Lock TTL in ms. @default 30000 */
+  lockTtlMs?: number;
+  /** Job ordering strategy. @default "fifo" */
+  strategy?: import("./engine/types/engine.js").BrokerStrategy;
+  /** Default retry configuration */
+  retries?: {
+    max?: number;
+    strategy?: "fixed" | "exponential";
+    baseDelay?: number;
+    maxDelay?: number;
+  };
+  /** Dead letter queue configuration */
+  deadLetter?: { enabled?: boolean };
+  /** Graceful shutdown drain timeout in ms. @default 25000 */
+  shutdownTimeout?: number;
+  /** Max stalled job retries. @default 1 */
+  maxStalledCount?: number;
+  /** Stalled check interval in ms. @default 30000 */
+  stalledInterval?: number;
+
+  /** Behavior if the module is disabled */
+  disabledBehavior?: import("./engine/types/config.types.js").DisabledBehavior;
+  
+  /** Max jobs claimed proactively */
+  maxHeldJobs?: number;
+
+  /** Default auto-remove configuration */
+  removeOnComplete?: import("./engine/types/job.types.js").RemoveOnConfig;
+  removeOnFail?: import("./engine/types/job.types.js").RemoveOnConfig;
+}
+
+export type WorkerModuleDef = {
+  module: "worker";
+} & WorkerModuleConfig;
 
 export type OqronModuleDef =
   | CronModuleDef
   | SchedulerModuleDef
   | QueueModuleDef
+  | WorkerModuleDef
   | WebhookModuleDef;
 
 // ── Flexible Input Type ─────────────────────────────────────────────────────
@@ -250,11 +297,16 @@ const STRING_TO_DEF: Record<OqronModuleName, () => OqronModuleDef> = {
   cron: () => ({ module: "cron" }),
   scheduler: () => ({ module: "scheduler" }),
   queue: () => ({ module: "queue" }),
+  worker: () => ({ module: "worker" }),
   webhook: () => ({ module: "webhook" }),
   workflow: () => ({ module: "queue" }), // placeholder until workflow module exists
   batch: () => ({ module: "queue" }), // placeholder
   pipeline: () => ({ module: "queue" }), // placeholder
 };
+
+export function workerModule(config?: WorkerModuleConfig): WorkerModuleDef {
+  return { module: "worker", ...config };
+}
 
 /**
  * Normalize a mixed `modules` array into a clean `OqronModuleDef[]`.
