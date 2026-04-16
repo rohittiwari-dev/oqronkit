@@ -1,6 +1,6 @@
 import type {
-  ClusteringConfig,
-  DisabledBehavior,
+	ClusteringConfig,
+	DisabledBehavior,
 } from "./engine/types/config.types.js";
 import type { BrokerStrategy } from "./engine/types/engine.js";
 import type { RemoveOnConfig } from "./engine/types/job.types.js";
@@ -8,225 +8,224 @@ import type { RemoveOnConfig } from "./engine/types/job.types.js";
 // ── Module Names ────────────────────────────────────────────────────────────
 
 export type OqronModuleName =
-  | "cron"
-  | "scheduler"
-  | "queue"
-  | "worker"
-  | "workflow"
-  | "batch"
-  | "webhook"
-  | "pipeline";
+	| "cron"
+	| "scheduler"
+	| "queue"
+	| "worker"
+	| "webhook"
+	| "ratelimit";
 
 // ── Per-Module Config Interfaces (user-facing, all optional) ────────────────
 
 export interface CronModuleConfig {
-  /** Global timezone fallback when a cron def doesn't specify one. @default "UTC" */
-  timezone?: string;
-  /** Tick interval in ms for the cron polling loop. @default 1000 */
-  tickInterval?: number;
-  /** Default missed-fire policy. @default "run-once" */
-  missedFirePolicy?: "skip" | "run-once" | "run-all";
-  /** Global max concurrent cron jobs. @default 5 */
-  maxConcurrentJobs?: number;
-  /** Enable cluster-wide leader election. @default true */
-  leaderElection?: boolean;
-  /** Rolling execution history. `true` = infinite, `false` = 0, `number` = keep N */
-  keepJobHistory?: boolean | number;
-  /** Override for failed tasks retention */
-  keepFailedJobHistory?: boolean | number;
-  /** Graceful shutdown drain timeout in ms. @default 25000 */
-  shutdownTimeout?: number;
-  /** Lag monitor thresholds */
-  lagMonitor?: { maxLagMs?: number; sampleIntervalMs?: number };
-  /** Sharded leader election for multi-region cron distribution */
-  clustering?: ClusteringConfig;
-  /**
-   * Default behavior when a disabled cron instance fires.
-   * Individual cron definitions can override this.
-   * @default "hold"
-   */
-  disabledBehavior?: DisabledBehavior;
-  /**
-   * Maximum number of held jobs to keep per definition when disabledBehavior is "hold".
-   * Oldest held jobs are pruned when this limit is exceeded.
-   * @default 100
-   */
-  maxHeldJobs?: number;
+	/** Global timezone fallback when a cron def doesn't specify one. @default "UTC" */
+	timezone?: string;
+	/** Tick interval in ms for the cron polling loop. @default 1000 */
+	tickInterval?: number;
+	/** Default missed-fire policy. @default "run-once" */
+	missedFirePolicy?: "skip" | "run-once" | "run-all";
+	/** Global max concurrent cron jobs. @default 5 */
+	maxConcurrentJobs?: number;
+	/** Enable cluster-wide leader election. @default true */
+	leaderElection?: boolean;
+	/** Rolling execution history. `true` = infinite, `false` = 0, `number` = keep N */
+	keepJobHistory?: boolean | number;
+	/** Override for failed tasks retention */
+	keepFailedJobHistory?: boolean | number;
+	/** Graceful shutdown drain timeout in ms. @default 25000 */
+	shutdownTimeout?: number;
+	/** Lag monitor thresholds */
+	lagMonitor?: { maxLagMs?: number; sampleIntervalMs?: number };
+	/** Sharded leader election for multi-region cron distribution */
+	clustering?: ClusteringConfig;
+	/**
+	 * Default behavior when a disabled cron instance fires.
+	 * Individual cron definitions can override this.
+	 * @default "hold"
+	 */
+	disabledBehavior?: DisabledBehavior;
+	/**
+	 * Maximum number of held jobs to keep per definition when disabledBehavior is "hold".
+	 * Oldest held jobs are pruned when this limit is exceeded.
+	 * @default 100
+	 */
+	maxHeldJobs?: number;
 }
 
 export interface SchedulerModuleConfig {
-  /** Tick interval in ms. @default 1000 */
-  tickInterval?: number;
-  /** Global timezone fallback. @default "UTC" */
-  timezone?: string;
-  /** Enable cluster-wide leader election. @default true */
-  leaderElection?: boolean;
-  /** Rolling execution history retention */
-  keepJobHistory?: boolean | number;
-  /** Failed job history retention */
-  keepFailedJobHistory?: boolean | number;
-  /** Graceful shutdown drain timeout in ms. @default 25000 */
-  shutdownTimeout?: number;
-  /** Lag monitor thresholds */
-  lagMonitor?: { maxLagMs?: number; sampleIntervalMs?: number };
-  /** Sharded leader election for multi-region schedule distribution */
-  clustering?: ClusteringConfig;
-  /**
-   * Default behavior when a disabled schedule instance fires.
-   * Individual schedule definitions can override this.
-   * @default "hold"
-   */
-  disabledBehavior?: DisabledBehavior;
-  /**
-   * Maximum number of held jobs to keep per definition when disabledBehavior is "hold".
-   * Oldest held jobs are pruned when this limit is exceeded.
-   * @default 100
-   */
-  maxHeldJobs?: number;
+	/** Tick interval in ms. @default 1000 */
+	tickInterval?: number;
+	/** Global timezone fallback. @default "UTC" */
+	timezone?: string;
+	/** Enable cluster-wide leader election. @default true */
+	leaderElection?: boolean;
+	/** Rolling execution history retention */
+	keepJobHistory?: boolean | number;
+	/** Failed job history retention */
+	keepFailedJobHistory?: boolean | number;
+	/** Graceful shutdown drain timeout in ms. @default 25000 */
+	shutdownTimeout?: number;
+	/** Lag monitor thresholds */
+	lagMonitor?: { maxLagMs?: number; sampleIntervalMs?: number };
+	/** Sharded leader election for multi-region schedule distribution */
+	clustering?: ClusteringConfig;
+	/**
+	 * Default behavior when a disabled schedule instance fires.
+	 * Individual schedule definitions can override this.
+	 * @default "hold"
+	 */
+	disabledBehavior?: DisabledBehavior;
+	/**
+	 * Maximum number of held jobs to keep per definition when disabledBehavior is "hold".
+	 * Oldest held jobs are pruned when this limit is exceeded.
+	 * @default 100
+	 */
+	maxHeldJobs?: number;
 }
 
 export interface QueueModuleConfig {
-  /** Parallel execution limit. @default 5 */
-  concurrency?: number;
-  /** Polling interval in ms. @default 5000 */
-  heartbeatMs?: number;
-  /** Lock TTL in ms for crash recovery. @default 30000 */
-  lockTtlMs?: number;
-  /** Job ordering strategy. @default "fifo" */
-  strategy?: BrokerStrategy;
-  /** Default retry configuration for all queues */
-  retries?: {
-    max?: number;
-    strategy?: "fixed" | "exponential";
-    baseDelay?: number;
-    maxDelay?: number;
-  };
-  /** Dead letter queue configuration */
-  deadLetter?: { enabled?: boolean };
-  /** Global default: auto-remove completed jobs. @default false */
-  removeOnComplete?: RemoveOnConfig;
-  /** Global default: auto-remove failed jobs. @default false */
-  removeOnFail?: RemoveOnConfig;
-  /** Graceful shutdown drain timeout in ms. @default 25000 */
-  shutdownTimeout?: number;
-  /** Max stalled job retries before marking as permanently failed. @default 1 */
-  maxStalledCount?: number;
-  /** Stalled check interval in ms. @default 30000 */
-  stalledInterval?: number;
-  /**
-   * Default behavior when a disabled queue instance receives a new job.
-   * Individual queue definitions can override this.
-   * @default "hold"
-   */
-  disabledBehavior?: DisabledBehavior;
-  /**
-   * Maximum number of held jobs to keep per definition when disabledBehavior is "hold".
-   * Oldest held jobs are pruned when this limit is exceeded.
-   * @default 100
-   */
-  maxHeldJobs?: number;
+	/** Parallel execution limit. @default 5 */
+	concurrency?: number;
+	/** Polling interval in ms. @default 5000 */
+	heartbeatMs?: number;
+	/** Lock TTL in ms for crash recovery. @default 30000 */
+	lockTtlMs?: number;
+	/** Job ordering strategy. @default "fifo" */
+	strategy?: BrokerStrategy;
+	/** Default retry configuration for all queues */
+	retries?: {
+		max?: number;
+		strategy?: "fixed" | "exponential";
+		baseDelay?: number;
+		maxDelay?: number;
+	};
+	/** Dead letter queue configuration */
+	deadLetter?: { enabled?: boolean };
+	/** Global default: auto-remove completed jobs. @default false */
+	removeOnComplete?: RemoveOnConfig;
+	/** Global default: auto-remove failed jobs. @default false */
+	removeOnFail?: RemoveOnConfig;
+	/** Graceful shutdown drain timeout in ms. @default 25000 */
+	shutdownTimeout?: number;
+	/** Max stalled job retries before marking as permanently failed. @default 1 */
+	maxStalledCount?: number;
+	/** Stalled check interval in ms. @default 30000 */
+	stalledInterval?: number;
+	/**
+	 * Default behavior when a disabled queue instance receives a new job.
+	 * Individual queue definitions can override this.
+	 * @default "hold"
+	 */
+	disabledBehavior?: DisabledBehavior;
+	/**
+	 * Maximum number of held jobs to keep per definition when disabledBehavior is "hold".
+	 * Oldest held jobs are pruned when this limit is exceeded.
+	 * @default 100
+	 */
+	maxHeldJobs?: number;
 }
 
 export interface WebhookModuleConfig {
-  /** Maximum number of parallel Webhook jobs across all dispatchers. @default 10 */
-  concurrency?: number;
-  /** Polling heartbeat interval in ms. @default 5000 */
-  heartbeatMs?: number;
-  /** Lock TTL in ms for crash recovery. @default 30000 */
-  lockTtlMs?: number;
-  /** Default HTTP request timeout in ms. @default 30000 */
-  timeout?: number;
-  /** Default retry configuration for all webhooks */
-  retries?: {
-    max?: number;
-    strategy?: "fixed" | "exponential";
-    baseDelay?: number;
-    maxDelay?: number;
-  };
-  /** Graceful shutdown drain timeout in ms. @default 25000 */
-  shutdownTimeout?: number;
-  /** Max stalled job retries before marking as permanently failed. @default 1 */
-  maxStalledCount?: number;
-  /** Stalled check interval in ms. @default 30000 */
-  stalledInterval?: number;
-  /**
-   * Default behavior when a disabled webhook dispatcher receives a new event.
-   * Individual dispatcher definitions can override this.
-   * @default "hold"
-   */
-  disabledBehavior?: DisabledBehavior;
-  /**
-   * Maximum number of held jobs to keep per definition when disabledBehavior is "hold".
-   * Oldest held jobs are pruned when this limit is exceeded.
-   * @default 100
-   */
-  maxHeldJobs?: number;
-  /** Global default: auto-remove completed webhook deliveries. @default false */
-  removeOnComplete?: RemoveOnConfig;
-  /** Global default: auto-remove failed webhook deliveries. @default false */
-  removeOnFail?: RemoveOnConfig;
+	/** Maximum number of parallel Webhook jobs across all dispatchers. @default 10 */
+	concurrency?: number;
+	/** Polling heartbeat interval in ms. @default 5000 */
+	heartbeatMs?: number;
+	/** Lock TTL in ms for crash recovery. @default 30000 */
+	lockTtlMs?: number;
+	/** Default HTTP request timeout in ms. @default 30000 */
+	timeout?: number;
+	/** Default retry configuration for all webhooks */
+	retries?: {
+		max?: number;
+		strategy?: "fixed" | "exponential";
+		baseDelay?: number;
+		maxDelay?: number;
+	};
+	/** Graceful shutdown drain timeout in ms. @default 25000 */
+	shutdownTimeout?: number;
+	/** Max stalled job retries before marking as permanently failed. @default 1 */
+	maxStalledCount?: number;
+	/** Stalled check interval in ms. @default 30000 */
+	stalledInterval?: number;
+	/**
+	 * Default behavior when a disabled webhook dispatcher receives a new event.
+	 * Individual dispatcher definitions can override this.
+	 * @default "hold"
+	 */
+	disabledBehavior?: DisabledBehavior;
+	/**
+	 * Maximum number of held jobs to keep per definition when disabledBehavior is "hold".
+	 * Oldest held jobs are pruned when this limit is exceeded.
+	 * @default 100
+	 */
+	maxHeldJobs?: number;
+	/** Global default: auto-remove completed webhook deliveries. @default false */
+	removeOnComplete?: RemoveOnConfig;
+	/** Global default: auto-remove failed webhook deliveries. @default false */
+	removeOnFail?: RemoveOnConfig;
 }
 
 // ── Discriminated Union (resolved module definitions) ───────────────────────
 
 export type CronModuleDef = { module: "cron" } & CronModuleConfig;
 export type SchedulerModuleDef = {
-  module: "scheduler";
+	module: "scheduler";
 } & SchedulerModuleConfig;
 export type QueueModuleDef = { module: "queue" } & QueueModuleConfig;
 export type WebhookModuleDef = {
-  module: "webhook";
+	module: "webhook";
 } & WebhookModuleConfig;
 
 /**
  * Worker-level configuration. Inherited by individual `worker()` instances.
  */
 export interface WorkerModuleConfig {
-  /** Parallel execution limit. @default 5 */
-  concurrency?: number;
-  /** Polling heartbeat interval in ms. @default 5000 */
-  heartbeatMs?: number;
-  /** Lock TTL in ms. @default 30000 */
-  lockTtlMs?: number;
-  /** Job ordering strategy. @default "fifo" */
-  strategy?: import("./engine/types/engine.js").BrokerStrategy;
-  /** Default retry configuration */
-  retries?: {
-    max?: number;
-    strategy?: "fixed" | "exponential";
-    baseDelay?: number;
-    maxDelay?: number;
-  };
-  /** Dead letter queue configuration */
-  deadLetter?: { enabled?: boolean };
-  /** Graceful shutdown drain timeout in ms. @default 25000 */
-  shutdownTimeout?: number;
-  /** Max stalled job retries. @default 1 */
-  maxStalledCount?: number;
-  /** Stalled check interval in ms. @default 30000 */
-  stalledInterval?: number;
+	/** Parallel execution limit. @default 5 */
+	concurrency?: number;
+	/** Polling heartbeat interval in ms. @default 5000 */
+	heartbeatMs?: number;
+	/** Lock TTL in ms. @default 30000 */
+	lockTtlMs?: number;
+	/** Job ordering strategy. @default "fifo" */
+	strategy?: import("./engine/types/engine.js").BrokerStrategy;
+	/** Default retry configuration */
+	retries?: {
+		max?: number;
+		strategy?: "fixed" | "exponential";
+		baseDelay?: number;
+		maxDelay?: number;
+	};
+	/** Dead letter queue configuration */
+	deadLetter?: { enabled?: boolean };
+	/** Graceful shutdown drain timeout in ms. @default 25000 */
+	shutdownTimeout?: number;
+	/** Max stalled job retries. @default 1 */
+	maxStalledCount?: number;
+	/** Stalled check interval in ms. @default 30000 */
+	stalledInterval?: number;
 
-  /** Behavior if the module is disabled */
-  disabledBehavior?: import("./engine/types/config.types.js").DisabledBehavior;
-  
-  /** Max jobs claimed proactively */
-  maxHeldJobs?: number;
+	/** Behavior if the module is disabled */
+	disabledBehavior?: import("./engine/types/config.types.js").DisabledBehavior;
 
-  /** Default auto-remove configuration */
-  removeOnComplete?: import("./engine/types/job.types.js").RemoveOnConfig;
-  removeOnFail?: import("./engine/types/job.types.js").RemoveOnConfig;
+	/** Max jobs claimed proactively */
+	maxHeldJobs?: number;
+
+	/** Default auto-remove configuration */
+	removeOnComplete?: import("./engine/types/job.types.js").RemoveOnConfig;
+	removeOnFail?: import("./engine/types/job.types.js").RemoveOnConfig;
 }
 
 export type WorkerModuleDef = {
-  module: "worker";
+	module: "worker";
 } & WorkerModuleConfig;
 
 export type OqronModuleDef =
-  | CronModuleDef
-  | SchedulerModuleDef
-  | QueueModuleDef
-  | WorkerModuleDef
-  | WebhookModuleDef;
+	| CronModuleDef
+	| SchedulerModuleDef
+	| QueueModuleDef
+	| WorkerModuleDef
+	| WebhookModuleDef
+	| RateLimitModuleDef;
 
 // ── Flexible Input Type ─────────────────────────────────────────────────────
 // Users can pass any of these forms inside the `modules` array:
@@ -236,9 +235,9 @@ export type OqronModuleDef =
 //   4. cronModule({ tickInterval: 500 }) — factory invoked (returns OqronModuleDef)
 
 export type OqronModuleInput =
-  | OqronModuleName
-  | OqronModuleDef
-  | (() => OqronModuleDef);
+	| OqronModuleName
+	| OqronModuleDef
+	| (() => OqronModuleDef);
 
 // ── Factory Functions ───────────────────────────────────────────────────────
 
@@ -252,7 +251,7 @@ export type OqronModuleInput =
  * modules: [cronModule()]                             // explicit defaults
  */
 export function cronModule(config?: CronModuleConfig): CronModuleDef {
-  return { module: "cron", ...config };
+	return { module: "cron", ...config };
 }
 
 /**
@@ -263,9 +262,9 @@ export function cronModule(config?: CronModuleConfig): CronModuleDef {
  * modules: [scheduleModule({ leaderElection: false })]
  */
 export function scheduleModule(
-  config?: SchedulerModuleConfig,
+	config?: SchedulerModuleConfig,
 ): SchedulerModuleDef {
-  return { module: "scheduler", ...config };
+	return { module: "scheduler", ...config };
 }
 
 /**
@@ -276,7 +275,7 @@ export function scheduleModule(
  * modules: [queueModule({ concurrency: 20 })]
  */
 export function queueModule(config?: QueueModuleConfig): QueueModuleDef {
-  return { module: "queue", ...config };
+	return { module: "queue", ...config };
 }
 
 /**
@@ -287,25 +286,52 @@ export function queueModule(config?: QueueModuleConfig): QueueModuleDef {
  * modules: [webhookModule({ concurrency: 20 })]
  */
 export function webhookModule(config?: WebhookModuleConfig): WebhookModuleDef {
-  return { module: "webhook", ...config };
+	return { module: "webhook", ...config };
 }
 
 // ── Normalizer ──────────────────────────────────────────────────────────────
 // Converts all flexible input forms into a uniform OqronModuleDef[].
 
 const STRING_TO_DEF: Record<OqronModuleName, () => OqronModuleDef> = {
-  cron: () => ({ module: "cron" }),
-  scheduler: () => ({ module: "scheduler" }),
-  queue: () => ({ module: "queue" }),
-  worker: () => ({ module: "worker" }),
-  webhook: () => ({ module: "webhook" }),
-  workflow: () => ({ module: "queue" }), // placeholder until workflow module exists
-  batch: () => ({ module: "queue" }), // placeholder
-  pipeline: () => ({ module: "queue" }), // placeholder
+	cron: () => ({ module: "cron" }),
+	scheduler: () => ({ module: "scheduler" }),
+	queue: () => ({ module: "queue" }),
+	worker: () => ({ module: "worker" }),
+	webhook: () => ({ module: "webhook" }),
+	ratelimit: () => ({ module: "ratelimit" }),
 };
 
+export interface RateLimitModuleConfig {
+	/** Default algorithm for instances that don't specify. @default "sliding-window" */
+	algorithm?: "sliding-window" | "token-bucket" | "fixed-window";
+	/** Default fail-open behavior. @default false */
+	failOpen?: boolean;
+	/** Default jitter fraction. @default 0.1 */
+	jitter?: number;
+	/** GC sweep interval in ms. @default 300_000 (5 min) */
+	gcIntervalMs?: number;
+	/** Block event retention in ms. @default 86_400_000 (24h) */
+	eventRetentionMs?: number;
+	/** Stats flush interval. 0 = immediate (per-check). @default 0 */
+	statsFlushIntervalMs?: number;
+	/** Default behavior when an instance is disabled. @default "skip" */
+	disabledBehavior?: "skip" | "block" | "passthrough";
+	/** Max idle time for algorithm state before GC deletes it. @default 3_600_000 (1h) */
+	maxIdleMs?: number;
+}
+
+export type RateLimitModuleDef = {
+	module: "ratelimit";
+} & RateLimitModuleConfig;
+
+export function rateLimitModule(
+	config?: RateLimitModuleConfig,
+): RateLimitModuleDef {
+	return { module: "ratelimit", ...config };
+}
+
 export function workerModule(config?: WorkerModuleConfig): WorkerModuleDef {
-  return { module: "worker", ...config };
+	return { module: "worker", ...config };
 }
 
 /**
@@ -313,45 +339,45 @@ export function workerModule(config?: WorkerModuleConfig): WorkerModuleDef {
  * Handles strings, objects, and factory functions (with or without invocation).
  */
 export function normalizeModules(inputs: OqronModuleInput[]): OqronModuleDef[] {
-  const seen = new Set<string>();
-  const result: OqronModuleDef[] = [];
+	const seen = new Set<string>();
+	const result: OqronModuleDef[] = [];
 
-  for (const input of inputs) {
-    let def: OqronModuleDef;
+	for (const input of inputs) {
+		let def: OqronModuleDef;
 
-    if (typeof input === "string") {
-      // "cron" → { module: "cron" }
-      const factory = STRING_TO_DEF[input];
-      if (!factory) {
-        throw new Error(`[OqronKit] Unknown module name: "${input}"`);
-      }
-      def = factory();
-    } else if (typeof input === "function") {
-      // cronModule (passed as reference without invocation)
-      def = input();
-    } else if (
-      typeof input === "object" &&
-      input !== null &&
-      "module" in input
-    ) {
-      // { module: "cron", tickInterval: 500 }
-      def = input;
-    } else {
-      throw new Error(
-        `[OqronKit] Invalid module entry. Expected a string, object with 'module' key, or factory function. Got: ${typeof input}`,
-      );
-    }
+		if (typeof input === "string") {
+			// "cron" → { module: "cron" }
+			const factory = STRING_TO_DEF[input];
+			if (!factory) {
+				throw new Error(`[OqronKit] Unknown module name: "${input}"`);
+			}
+			def = factory();
+		} else if (typeof input === "function") {
+			// cronModule (passed as reference without invocation)
+			def = input();
+		} else if (
+			typeof input === "object" &&
+			input !== null &&
+			"module" in input
+		) {
+			// { module: "cron", tickInterval: 500 }
+			def = input;
+		} else {
+			throw new Error(
+				`[OqronKit] Invalid module entry. Expected a string, object with 'module' key, or factory function. Got: ${typeof input}`,
+			);
+		}
 
-    // Deduplicate by module name — last one wins
-    if (seen.has(def.module)) {
-      const idx = result.findIndex((r) => r.module === def.module);
-      if (idx >= 0) result.splice(idx, 1);
-    }
-    seen.add(def.module);
-    result.push(def);
-  }
+		// Deduplicate by module name — last one wins
+		if (seen.has(def.module)) {
+			const idx = result.findIndex((r) => r.module === def.module);
+			if (idx >= 0) result.splice(idx, 1);
+		}
+		seen.add(def.module);
+		result.push(def);
+	}
 
-  return result;
+	return result;
 }
 
 /**
@@ -359,8 +385,8 @@ export function normalizeModules(inputs: OqronModuleInput[]): OqronModuleDef[] {
  * Returns undefined if the module is not present.
  */
 export function getModuleConfig<T extends OqronModuleDef>(
-  modules: OqronModuleDef[],
-  name: T["module"],
+	modules: OqronModuleDef[],
+	name: T["module"],
 ): T | undefined {
-  return modules.find((m) => m.module === name) as T | undefined;
+	return modules.find((m) => m.module === name) as T | undefined;
 }

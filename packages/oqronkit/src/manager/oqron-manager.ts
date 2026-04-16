@@ -7,6 +7,13 @@ import type {
   JobType,
   OqronJob,
 } from "../engine/types/job.types.js";
+import type {
+  RateLimitEvent,
+  RateLimitInstanceRecord,
+  RateLimitKeyStatus,
+  RateLimitStats,
+} from "../ratelimit/types.js";
+import { getLimiter } from "../ratelimit/registry.js";
 
 // ── Result types ────────────────────────────────────────────────────────────
 
@@ -160,6 +167,9 @@ export class OqronManager {
         return true;
       }
     }
+    if (type === ("ratelimit" as any)) {
+      return this.enableRateLimiter(name);
+    }
     return false;
   }
 
@@ -179,7 +189,63 @@ export class OqronManager {
         return true;
       }
     }
+    if (type === ("ratelimit" as any)) {
+      return this.disableRateLimiter(name);
+    }
     return false;
+  }
+
+  // ── Rate Limiter Management ─────────────────────────────────────────────
+
+  async listRateLimiters(): Promise<RateLimitInstanceRecord[]> {
+    return Storage.list<RateLimitInstanceRecord>("ratelimit_instances");
+  }
+
+  async getRateLimiterStats(name: string): Promise<RateLimitStats | null> {
+    return Storage.get<RateLimitStats>("ratelimit_stats", name);
+  }
+
+  async enableRateLimiter(name: string): Promise<boolean> {
+    const rec = await Storage.get<RateLimitInstanceRecord>(
+      "ratelimit_instances",
+      name,
+    );
+    if (!rec) return false;
+    rec.enabled = true;
+    await Storage.save("ratelimit_instances", name, rec);
+    return true;
+  }
+
+  async disableRateLimiter(name: string): Promise<boolean> {
+    const rec = await Storage.get<RateLimitInstanceRecord>(
+      "ratelimit_instances",
+      name,
+    );
+    if (!rec) return false;
+    rec.enabled = false;
+    await Storage.save("ratelimit_instances", name, rec);
+    return true;
+  }
+
+  async getRateLimiterEvents(
+    name: string,
+    opts?: { limit?: number; offset?: number },
+  ): Promise<{ events: RateLimitEvent[]; total: number }> {
+    const filter = { limiterName: name };
+    const [events, total] = await Promise.all([
+      Storage.list<RateLimitEvent>("ratelimit_events", filter, opts),
+      Storage.count("ratelimit_events", filter),
+    ]);
+    return { events, total };
+  }
+
+  async getRateLimiterKeyStatus(
+    name: string,
+    adminKey: string,
+  ): Promise<RateLimitKeyStatus | null> {
+    const limiter = getLimiter(name);
+    if (!limiter) return null;
+    return limiter.getStatus(adminKey);
   }
 
   // ── Queue Administration ───────────────────────────────────────────────────

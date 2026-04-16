@@ -1,130 +1,131 @@
 import { z } from "zod";
 import type {
-  CronModuleDef,
-  OqronModuleDef,
-  QueueModuleDef,
-  SchedulerModuleDef,
-  WebhookModuleDef,
-  WorkerModuleDef,
+	CronModuleDef,
+	OqronModuleDef,
+	QueueModuleDef,
+	RateLimitModuleDef,
+	SchedulerModuleDef,
+	WebhookModuleDef,
+	WorkerModuleDef,
 } from "../../modules.js";
 
 // ── Resolved Module Config Defaults ─────────────────────────────────────────
 
 const DEFAULT_CRON: Omit<
-  Required<CronModuleDef>,
-  "clustering" | "disabledBehavior" | "maxHeldJobs"
+	Required<CronModuleDef>,
+	"clustering" | "disabledBehavior" | "maxHeldJobs"
 > & {
-  clustering?: CronModuleDef["clustering"];
-  disabledBehavior?: CronModuleDef["disabledBehavior"];
-  maxHeldJobs?: CronModuleDef["maxHeldJobs"];
+	clustering?: CronModuleDef["clustering"];
+	disabledBehavior?: CronModuleDef["disabledBehavior"];
+	maxHeldJobs?: CronModuleDef["maxHeldJobs"];
 } = {
-  module: "cron",
-  timezone: "UTC",
-  tickInterval: 1000,
-  missedFirePolicy: "run-once",
-  maxConcurrentJobs: 5,
-  leaderElection: true,
-  keepJobHistory: true,
-  keepFailedJobHistory: true,
-  shutdownTimeout: 25000,
-  lagMonitor: { maxLagMs: 5000, sampleIntervalMs: 1000 },
+	module: "cron",
+	timezone: "UTC",
+	tickInterval: 1000,
+	missedFirePolicy: "run-once",
+	maxConcurrentJobs: 5,
+	leaderElection: true,
+	keepJobHistory: true,
+	keepFailedJobHistory: true,
+	shutdownTimeout: 25000,
+	lagMonitor: { maxLagMs: 5000, sampleIntervalMs: 1000 },
 };
 
 const DEFAULT_SCHEDULER: Omit<
-  Required<SchedulerModuleDef>,
-  "clustering" | "disabledBehavior" | "maxHeldJobs"
+	Required<SchedulerModuleDef>,
+	"clustering" | "disabledBehavior" | "maxHeldJobs"
 > & {
-  clustering?: SchedulerModuleDef["clustering"];
-  disabledBehavior?: SchedulerModuleDef["disabledBehavior"];
-  maxHeldJobs?: SchedulerModuleDef["maxHeldJobs"];
+	clustering?: SchedulerModuleDef["clustering"];
+	disabledBehavior?: SchedulerModuleDef["disabledBehavior"];
+	maxHeldJobs?: SchedulerModuleDef["maxHeldJobs"];
 } = {
-  module: "scheduler",
-  tickInterval: 1000,
-  timezone: "UTC",
-  leaderElection: true,
-  keepJobHistory: true,
-  keepFailedJobHistory: true,
-  shutdownTimeout: 25000,
-  lagMonitor: { maxLagMs: 5000, sampleIntervalMs: 1000 },
+	module: "scheduler",
+	tickInterval: 1000,
+	timezone: "UTC",
+	leaderElection: true,
+	keepJobHistory: true,
+	keepFailedJobHistory: true,
+	shutdownTimeout: 25000,
+	lagMonitor: { maxLagMs: 5000, sampleIntervalMs: 1000 },
 };
 
 const DEFAULT_QUEUE: Omit<
-  Required<QueueModuleDef>,
-  "disabledBehavior" | "maxHeldJobs"
+	Required<QueueModuleDef>,
+	"disabledBehavior" | "maxHeldJobs"
 > & {
-  disabledBehavior?: QueueModuleDef["disabledBehavior"];
-  maxHeldJobs?: QueueModuleDef["maxHeldJobs"];
+	disabledBehavior?: QueueModuleDef["disabledBehavior"];
+	maxHeldJobs?: QueueModuleDef["maxHeldJobs"];
 } = {
-  module: "queue",
-  concurrency: 5,
-  heartbeatMs: 5000,
-  lockTtlMs: 30000,
-  strategy: "fifo",
-  retries: {
-    max: 3,
-    strategy: "exponential",
-    baseDelay: 2000,
-    maxDelay: 60000,
-  },
-  deadLetter: { enabled: true },
-  removeOnComplete: false,
-  removeOnFail: false,
-  shutdownTimeout: 25000,
-  maxStalledCount: 1,
-  stalledInterval: 30000,
+	module: "queue",
+	concurrency: 5,
+	heartbeatMs: 5000,
+	lockTtlMs: 30000,
+	strategy: "fifo",
+	retries: {
+		max: 3,
+		strategy: "exponential",
+		baseDelay: 2000,
+		maxDelay: 60000,
+	},
+	deadLetter: { enabled: true },
+	removeOnComplete: false,
+	removeOnFail: false,
+	shutdownTimeout: 25000,
+	maxStalledCount: 1,
+	stalledInterval: 30000,
 };
 
 const DEFAULT_WORKER: Omit<
-  Required<WorkerModuleDef>,
-  "disabledBehavior" | "maxHeldJobs"
+	Required<WorkerModuleDef>,
+	"disabledBehavior" | "maxHeldJobs"
 > & {
-  disabledBehavior?: WorkerModuleDef["disabledBehavior"];
-  maxHeldJobs?: WorkerModuleDef["maxHeldJobs"];
+	disabledBehavior?: WorkerModuleDef["disabledBehavior"];
+	maxHeldJobs?: WorkerModuleDef["maxHeldJobs"];
 } = {
-  module: "worker",
-  concurrency: 5,
-  heartbeatMs: 5000,
-  lockTtlMs: 30000,
-  strategy: "fifo",
-  retries: {
-    max: 3,
-    strategy: "exponential",
-    baseDelay: 2000,
-    maxDelay: 60000,
-  },
-  deadLetter: { enabled: true },
-  removeOnComplete: false,
-  removeOnFail: false,
-  shutdownTimeout: 25000,
-  maxStalledCount: 1,
-  stalledInterval: 30000,
+	module: "worker",
+	concurrency: 5,
+	heartbeatMs: 5000,
+	lockTtlMs: 30000,
+	strategy: "fifo",
+	retries: {
+		max: 3,
+		strategy: "exponential",
+		baseDelay: 2000,
+		maxDelay: 60000,
+	},
+	deadLetter: { enabled: true },
+	removeOnComplete: false,
+	removeOnFail: false,
+	shutdownTimeout: 25000,
+	maxStalledCount: 1,
+	stalledInterval: 30000,
 };
 
 const DEFAULT_WEBHOOK: Omit<
-  Required<WebhookModuleDef>,
-  "disabledBehavior" | "maxHeldJobs" | "removeOnComplete" | "removeOnFail"
+	Required<WebhookModuleDef>,
+	"disabledBehavior" | "maxHeldJobs" | "removeOnComplete" | "removeOnFail"
 > & {
-  disabledBehavior?: WebhookModuleDef["disabledBehavior"];
-  maxHeldJobs?: WebhookModuleDef["maxHeldJobs"];
-  removeOnComplete?: WebhookModuleDef["removeOnComplete"];
-  removeOnFail?: WebhookModuleDef["removeOnFail"];
+	disabledBehavior?: WebhookModuleDef["disabledBehavior"];
+	maxHeldJobs?: WebhookModuleDef["maxHeldJobs"];
+	removeOnComplete?: WebhookModuleDef["removeOnComplete"];
+	removeOnFail?: WebhookModuleDef["removeOnFail"];
 } = {
-  module: "webhook",
-  concurrency: 5,
-  heartbeatMs: 5000,
-  lockTtlMs: 30000,
-  retries: {
-    max: 3,
-    strategy: "exponential",
-    baseDelay: 2000,
-    maxDelay: 60000,
-  },
-  maxStalledCount: 1,
-  shutdownTimeout: 25000,
-  stalledInterval: 30000,
-  timeout: 30000,
-  removeOnComplete: false,
-  removeOnFail: false,
+	module: "webhook",
+	concurrency: 5,
+	heartbeatMs: 5000,
+	lockTtlMs: 30000,
+	retries: {
+		max: 3,
+		strategy: "exponential",
+		baseDelay: 2000,
+		maxDelay: 60000,
+	},
+	maxStalledCount: 1,
+	shutdownTimeout: 25000,
+	stalledInterval: 30000,
+	timeout: 30000,
+	removeOnComplete: false,
+	removeOnFail: false,
 };
 
 /**
@@ -132,183 +133,212 @@ const DEFAULT_WEBHOOK: Omit<
  * Deep-merges nested objects (lagMonitor, retries, deadLetter).
  */
 export function applyModuleDefaults(def: OqronModuleDef): OqronModuleDef {
-  switch (def.module) {
-    case "cron":
-      return applyCronDefaults(def);
-    case "scheduler":
-      return applySchedulerDefaults(def);
-    case "queue":
-      return applyQueueDefaults(def);
-    case "worker":
-      return applyWorkerDefaults(def as WorkerModuleDef);
-    case "webhook":
-      return applyWebhookDefaults(def as WebhookModuleDef);
-    default:
-      return def;
-  }
+	switch (def.module) {
+		case "cron":
+			return applyCronDefaults(def);
+		case "scheduler":
+			return applySchedulerDefaults(def);
+		case "queue":
+			return applyQueueDefaults(def);
+		case "worker":
+			return applyWorkerDefaults(def as WorkerModuleDef);
+		case "webhook":
+			return applyWebhookDefaults(def as WebhookModuleDef);
+		case "ratelimit":
+			return applyRateLimitDefaults(def as RateLimitModuleDef);
+		default:
+			return def;
+	}
 }
 
 function applyCronDefaults(def: CronModuleDef): CronModuleDef {
-  return {
-    ...DEFAULT_CRON,
-    ...def,
-    module: "cron",
-    lagMonitor: { ...DEFAULT_CRON.lagMonitor, ...(def.lagMonitor ?? {}) },
-    clustering: def.clustering,
-  };
+	return {
+		...DEFAULT_CRON,
+		...def,
+		module: "cron",
+		lagMonitor: { ...DEFAULT_CRON.lagMonitor, ...(def.lagMonitor ?? {}) },
+		clustering: def.clustering,
+	};
 }
 
 function applySchedulerDefaults(def: SchedulerModuleDef): SchedulerModuleDef {
-  return {
-    ...DEFAULT_SCHEDULER,
-    ...def,
-    module: "scheduler",
-    lagMonitor: { ...DEFAULT_SCHEDULER.lagMonitor, ...(def.lagMonitor ?? {}) },
-    clustering: def.clustering,
-  };
+	return {
+		...DEFAULT_SCHEDULER,
+		...def,
+		module: "scheduler",
+		lagMonitor: {
+			...DEFAULT_SCHEDULER.lagMonitor,
+			...(def.lagMonitor ?? {}),
+		},
+		clustering: def.clustering,
+	};
 }
 
 function applyQueueDefaults(def: QueueModuleDef): QueueModuleDef {
-  return {
-    ...DEFAULT_QUEUE,
-    ...def,
-    module: "queue",
-    retries: { ...DEFAULT_QUEUE.retries, ...(def.retries ?? {}) },
-    deadLetter: { ...DEFAULT_QUEUE.deadLetter, ...(def.deadLetter ?? {}) },
-  };
+	return {
+		...DEFAULT_QUEUE,
+		...def,
+		module: "queue",
+		retries: { ...DEFAULT_QUEUE.retries, ...(def.retries ?? {}) },
+		deadLetter: { ...DEFAULT_QUEUE.deadLetter, ...(def.deadLetter ?? {}) },
+	};
 }
 
 function applyWorkerDefaults(def: WorkerModuleDef): WorkerModuleDef {
-  return {
-    ...DEFAULT_WORKER,
-    ...def,
-    module: "worker",
-    retries: { ...DEFAULT_WORKER.retries, ...(def.retries ?? {}) },
-    deadLetter: { ...DEFAULT_WORKER.deadLetter, ...(def.deadLetter ?? {}) },
-  };
+	return {
+		...DEFAULT_WORKER,
+		...def,
+		module: "worker",
+		retries: { ...DEFAULT_WORKER.retries, ...(def.retries ?? {}) },
+		deadLetter: { ...DEFAULT_WORKER.deadLetter, ...(def.deadLetter ?? {}) },
+	};
 }
 
 function applyWebhookDefaults(def: WebhookModuleDef): WebhookModuleDef {
-  return {
-    ...DEFAULT_WEBHOOK,
-    ...def,
-    module: "webhook",
-    retries: { ...DEFAULT_WEBHOOK.retries, ...(def.retries ?? {}) },
-  };
+	return {
+		...DEFAULT_WEBHOOK,
+		...def,
+		module: "webhook",
+		retries: { ...DEFAULT_WEBHOOK.retries, ...(def.retries ?? {}) },
+	};
+}
+
+// ── Rate Limit Defaults ─────────────────────────────────────────────────────
+
+const DEFAULT_RATELIMIT: Required<Omit<RateLimitModuleDef, "module">> & {
+	module: "ratelimit";
+} = {
+	module: "ratelimit",
+	algorithm: "sliding-window",
+	failOpen: false,
+	jitter: 0.1,
+	gcIntervalMs: 300_000,
+	eventRetentionMs: 86_400_000,
+	statsFlushIntervalMs: 0,
+	disabledBehavior: "skip",
+	maxIdleMs: 3_600_000,
+};
+
+function applyRateLimitDefaults(def: RateLimitModuleDef): RateLimitModuleDef {
+	return {
+		...DEFAULT_RATELIMIT,
+		...def,
+		module: "ratelimit",
+	};
 }
 
 // ── Main Config Schema ──────────────────────────────────────────────────────
 
 export const OqronConfigSchema = z.object({
-  project: z.string().optional(),
-  environment: z.string().default("development"),
+	project: z.string().optional(),
+	environment: z.string().default("development"),
 
-  // Storage mode
-  mode: z.enum(["default", "db", "redis", "hybrid-db"]).default("default"),
+	// Storage mode
+	mode: z.enum(["default", "db", "redis", "hybrid-db"]).default("default"),
 
-  // Infrastructure
-  redis: z.any().optional(),
+	// Infrastructure
+	redis: z.any().optional(),
 
-  // PostgreSQL
-  postgres: z
-    .object({
-      connectionString: z.string(),
-      tablePrefix: z.string().default("oqron"),
-      poolSize: z.number().default(10),
-    })
-    .optional(),
+	// PostgreSQL
+	postgres: z
+		.object({
+			connectionString: z.string(),
+			tablePrefix: z.string().default("oqron"),
+			poolSize: z.number().default(10),
+		})
+		.optional(),
 
-  // Modules — accepts any[] at the Zod layer; runtime normalizes before use
-  modules: z.array(z.any()).default([]),
+	// Modules — accepts any[] at the Zod layer; runtime normalizes before use
+	modules: z.array(z.any()).default([]),
 
-  // Trigger auto-discovery: string path, false to disable, or omit for auto-detect
-  triggers: z.union([z.string(), z.literal(false)]).optional(),
+	// Trigger auto-discovery: string path, false to disable, or omit for auto-detect
+	triggers: z.union([z.string(), z.literal(false)]).optional(),
 
-  // Global tags
-  tags: z.array(z.string()).default([]),
+	// Global tags
+	tags: z.array(z.string()).default([]),
 
-  // Logger
-  logger: z
-    .union([
-      z.literal(false),
-      z.object({
-        enabled: z.boolean().default(true),
-        level: z.string().default("info"),
-        prettify: z.boolean().default(false),
-        showMetadata: z.boolean().default(true),
-        redact: z.array(z.string()).default([]),
-      }),
-    ])
-    .default({
-      enabled: true,
-      level: "info",
-      prettify: false,
-      showMetadata: true,
-      redact: [],
-    }),
+	// Logger
+	logger: z
+		.union([
+			z.literal(false),
+			z.object({
+				enabled: z.boolean().default(true),
+				level: z.string().default("info"),
+				prettify: z.boolean().default(false),
+				showMetadata: z.boolean().default(true),
+				redact: z.array(z.string()).default([]),
+			}),
+		])
+		.default({
+			enabled: true,
+			level: "info",
+			prettify: false,
+			showMetadata: true,
+			redact: [],
+		}),
 
-  // Telemetry
-  telemetry: z
-    .object({
-      prometheus: z
-        .object({
-          enabled: z.boolean().default(false),
-          path: z.string().default("/metrics"),
-        })
-        .default({}),
-      opentelemetry: z
-        .object({
-          enabled: z.boolean().default(false),
-        })
-        .default({}),
-    })
-    .default({}),
+	// Telemetry
+	telemetry: z
+		.object({
+			prometheus: z
+				.object({
+					enabled: z.boolean().default(false),
+					path: z.string().default("/metrics"),
+				})
+				.default({}),
+			opentelemetry: z
+				.object({
+					enabled: z.boolean().default(false),
+				})
+				.default({}),
+		})
+		.default({}),
 
-  observability: z
-    .object({
-      maxJobLogs: z.number().default(200),
-      maxTimelineEntries: z.number().default(20),
-      trackMemory: z.boolean().default(true),
-      logCollector: z.boolean().default(true),
-      logCollectorMaxGlobal: z.number().default(500),
-      logCollectorMaxPerCategory: z.number().default(200),
-    })
-    .default({}),
+	observability: z
+		.object({
+			maxJobLogs: z.number().default(200),
+			maxTimelineEntries: z.number().default(20),
+			trackMemory: z.boolean().default(true),
+			logCollector: z.boolean().default(true),
+			logCollectorMaxGlobal: z.number().default(500),
+			logCollectorMaxPerCategory: z.number().default(200),
+		})
+		.default({}),
 
-  // UI Dashboard configuration
-  ui: z
-    .object({
-      enabled: z.boolean().default(false),
-      auth: z
-        .object({
-          username: z.string().optional(),
-          password: z.string().optional(),
-        })
-        .optional(),
-      retention: z
-        .object({
-          runs: z.string().default("30d"),
-          events: z.string().default("7d"),
-          metrics: z.string().default("30d"),
-        })
-        .default({}),
-    })
-    .default({}),
+	// UI Dashboard configuration
+	ui: z
+		.object({
+			enabled: z.boolean().default(false),
+			auth: z
+				.object({
+					username: z.string().optional(),
+					password: z.string().optional(),
+				})
+				.optional(),
+			retention: z
+				.object({
+					runs: z.string().default("30d"),
+					events: z.string().default("7d"),
+					metrics: z.string().default("30d"),
+				})
+				.default({}),
+		})
+		.default({}),
 
-  // Shutdown
-  shutdown: z
-    .object({
-      enabled: z.boolean().default(true),
-      timeout: z.number().default(30000),
-      signals: z.array(z.string()).default(["SIGINT", "SIGTERM"]),
-    })
-    .default({}),
+	// Shutdown
+	shutdown: z
+		.object({
+			enabled: z.boolean().default(true),
+			timeout: z.number().default(30000),
+			signals: z.array(z.string()).default(["SIGINT", "SIGTERM"]),
+		})
+		.default({}),
 });
 
 export type ValidatedConfig = Omit<
-  z.infer<typeof OqronConfigSchema>,
-  "modules"
+	z.infer<typeof OqronConfigSchema>,
+	"modules"
 > & {
-  /** Normalized and default-merged module definitions */
-  modules: OqronModuleDef[];
+	/** Normalized and default-merged module definitions */
+	modules: OqronModuleDef[];
 };

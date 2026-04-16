@@ -2,6 +2,7 @@ import { OqronEventBus, type OqronJob } from "../engine/index.js";
 import type { OqronRegistry } from "../engine/registry.js";
 import type { OqronConfig } from "../engine/types/config.types.js";
 import { OqronManager } from "../manager/oqron-manager.js";
+import { getLimiter } from "../ratelimit/registry.js";
 export type MonitorRequest = {
   method: string;
   path: string;
@@ -271,6 +272,116 @@ export async function handleAdminJob(
   return { status: 400, body: { ok: false, error: "Unknown operation" } };
 }
 
+// ── Rate Limiter Handlers ───────────────────────────────────────────────
+
+export async function handleAdminRateLimiters(
+  req: MonitorRequest,
+): Promise<MonitorResponse> {
+  const mgr = getManager();
+  if (!mgr)
+    return { status: 503, body: { ok: false, error: "Manager not initialized" } };
+
+  // GET /admin/ratelimiters — list all
+  if (!req.params.name) {
+    const limiters = await mgr.listRateLimiters();
+    const withStats = await Promise.all(
+      limiters.map(async (rec) => ({
+        ...rec,
+        stats: await mgr.getRateLimiterStats(rec.name),
+      })),
+    );
+    return { status: 200, body: { ok: true, limiters: withStats } };
+  }
+
+  const { name } = req.params;
+
+  // POST actions
+  if (req.method === "POST") {
+    const { action } = req.params;
+
+    if (action === "enable") {
+      const ok = await mgr.enableRateLimiter(name);
+      return { status: ok ? 200 : 404, body: { ok } };
+    }
+    if (action === "disable") {
+      const ok = await mgr.disableRateLimiter(name);
+      return { status: ok ? 200 : 404, body: { ok } };
+    }
+
+    // Key-level actions: reset, ban, unban, override
+    const { key, keyAction } = req.params;
+    if (key && keyAction) {
+      const limiter = getLimiter(name);
+      if (!limiter)
+        return { status: 404, body: { ok: false, error: "Limiter not found" } };
+
+      if (keyAction === "reset") {
+        await limiter.reset(key);
+        return { status: 200, body: { ok: true } };
+      }
+      if (keyAction === "ban") {
+        const duration = (req.body as any)?.duration;
+        await limiter.ban(key, duration);
+        return { status: 200, body: { ok: true } };
+      }
+      if (keyAction === "unban") {
+        await limiter.unban(key);
+        return { status: 200, body: { ok: true } };
+      }
+      if (keyAction === "override") {
+        const max = (req.body as any)?.max;
+        if (typeof max !== "number")
+          return { status: 400, body: { ok: false, error: "Missing max" } };
+        await limiter.setOverride(key, { max });
+        return { status: 200, body: { ok: true } };
+      }
+    }
+
+    return { status: 400, body: { ok: false, error: "Unknown action" } };
+  }
+
+  // DELETE — clear override for a key
+  if (req.method === "DELETE" && req.params.key) {
+    const limiter = getLimiter(name);
+    if (!limiter)
+      return { status: 404, body: { ok: false, error: "Limiter not found" } };
+    await limiter.clearOverride(req.params.key);
+    return { status: 200, body: { ok: true } };
+  }
+
+  // GET sub-resources
+  const { subResource } = req.params;
+
+  if (subResource === "events") {
+    const limit = Number(req.query.limit ?? 50);
+    const offset = Number(req.query.offset ?? 0);
+    const result = await mgr.getRateLimiterEvents(name, { limit, offset });
+    return { status: 200, body: { ok: true, ...result } };
+  }
+
+  if (subResource === "keys" && req.params.key) {
+    const status = await mgr.getRateLimiterKeyStatus(name, req.params.key);
+    if (!status)
+      return { status: 404, body: { ok: false, error: "Key not found" } };
+    return { status: 200, body: { ok: true, status } };
+  }
+
+  if (subResource === "snapshot") {
+    const limiter = getLimiter(name);
+    if (!limiter)
+      return { status: 404, body: { ok: false, error: "Limiter not found" } };
+    const snapshot = await limiter.snapshot();
+    return { status: 200, body: { ok: true, snapshot } };
+  }
+
+  // GET /admin/ratelimiters/:name — detail + stats
+  const rec = (await mgr.listRateLimiters()).find((r) => r.name === name);
+  if (!rec)
+    return { status: 404, body: { ok: false, error: "Limiter not found" } };
+  const stats = await mgr.getRateLimiterStats(name);
+  return { status: 200, body: { ok: true, limiter: rec, stats } };
+}
+
 // ── Unified Dispatcher ────────────────────────────────────────────────────────
 
 export async function dispatch(req: MonitorRequest): Promise<MonitorResponse> {
@@ -344,6 +455,72 @@ export async function dispatch(req: MonitorRequest): Promise<MonitorResponse> {
   if (jobMatch) {
     req.params = { ...req.params, id: jobMatch[1], action: jobMatch[2] ?? "" };
     return handleAdminJob(req);
+  }
+
+  // ── Rate Limiter Routes ──────────────────────────────────────────────────
+
+  // GET  /admin/ratelimiters
+  if (method === "GET" && path === "/admin/ratelimiters") {
+    req.params = { ...req.params };
+    return handleAdminRateLimiters(req);
+  }
+
+  // GET  /admin/ratelimiters/:name
+  const rlDetailMatch = path.match(/^\/admin\/ratelimiters\/([^/]+)$/);
+  if (rlDetailMatch && method === "GET") {
+    req.params = { ...req.params, name: rlDetailMatch[1] };
+    return handleAdminRateLimiters(req);
+  }
+
+  // GET  /admin/ratelimiters/:name/events
+  // GET  /admin/ratelimiters/:name/snapshot
+  const rlSubMatch = path.match(
+    /^\/admin\/ratelimiters\/([^/]+)\/(events|snapshot)$/,
+  );
+  if (rlSubMatch && method === "GET") {
+    req.params = { ...req.params, name: rlSubMatch[1], subResource: rlSubMatch[2] };
+    return handleAdminRateLimiters(req);
+  }
+
+  // GET  /admin/ratelimiters/:name/keys/:key
+  const rlKeyMatch = path.match(
+    /^\/admin\/ratelimiters\/([^/]+)\/keys\/([^/]+)$/,
+  );
+  if (rlKeyMatch && method === "GET") {
+    req.params = { ...req.params, name: rlKeyMatch[1], subResource: "keys", key: rlKeyMatch[2] };
+    return handleAdminRateLimiters(req);
+  }
+
+  // POST /admin/ratelimiters/:name/(enable|disable)
+  const rlActionMatch = path.match(
+    /^\/admin\/ratelimiters\/([^/]+)\/(enable|disable)$/,
+  );
+  if (rlActionMatch && method === "POST") {
+    req.params = { ...req.params, name: rlActionMatch[1], action: rlActionMatch[2] };
+    return handleAdminRateLimiters(req);
+  }
+
+  // POST /admin/ratelimiters/:name/keys/:key/(reset|ban|unban|override)
+  const rlKeyActionMatch = path.match(
+    /^\/admin\/ratelimiters\/([^/]+)\/keys\/([^/]+)\/(reset|ban|unban|override)$/,
+  );
+  if (rlKeyActionMatch && method === "POST") {
+    req.params = {
+      ...req.params,
+      name: rlKeyActionMatch[1],
+      key: rlKeyActionMatch[2],
+      keyAction: rlKeyActionMatch[3],
+    };
+    return handleAdminRateLimiters(req);
+  }
+
+  // DELETE /admin/ratelimiters/:name/keys/:key/override
+  const rlKeyDeleteMatch = path.match(
+    /^\/admin\/ratelimiters\/([^/]+)\/keys\/([^/]+)\/override$/,
+  );
+  if (rlKeyDeleteMatch && method === "DELETE") {
+    req.params = { ...req.params, name: rlKeyDeleteMatch[1], key: rlKeyDeleteMatch[2] };
+    return handleAdminRateLimiters(req);
   }
 
   return { status: 404, body: { ok: false, error: "Not found" } };
