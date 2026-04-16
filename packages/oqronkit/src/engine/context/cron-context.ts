@@ -19,6 +19,10 @@ export class CronContext extends JobContext implements ICronContext {
     this.startedLocalAt = Date.now();
   }
 
+  get aborted(): boolean {
+    return this.signal.aborted;
+  }
+
   get duration(): number {
     return Date.now() - this.startedLocalAt;
   }

@@ -120,15 +120,37 @@ export class ScheduleEngine implements IOqronModule {
   }
 
   private async upsertAndSeed(def: ScheduleDefinition, now: Date) {
-    await this.di.storage.save("schedules", def.name, def);
-    const nextRun = this.computeNextRun(def, now);
-    if (nextRun) {
-      const existing =
-        (await this.di.storage.get<any>("schedules", def.name)) || {};
-      await this.di.storage.save("schedules", def.name, {
-        ...existing,
-        nextRunAt: nextRun,
-      });
+    const existing = await this.di.storage.get<any>("schedules", def.name);
+    
+    let shouldRecompute = !existing?.nextRunAt;
+    if (existing) {
+       const cmp = (a: any, b: any) => JSON.stringify(a) === JSON.stringify(b);
+       if (!cmp(existing.every, def.every) || 
+           !cmp(existing.runAt, def.runAt) ||
+           !cmp(existing.runAfter, def.runAfter) ||
+           existing.rrule !== def.rrule ||
+           !cmp(existing.recurring, def.recurring)) {
+           shouldRecompute = true;
+       }
+    }
+
+    await this.di.storage.save("schedules", def.name, {
+      ...(existing || {}),
+      ...def,
+      nextRunAt: shouldRecompute ? null : existing?.nextRunAt,
+      lastRunAt: existing?.lastRunAt,
+      paused: existing?.paused ?? (def.status === "paused"),
+    });
+    
+    if (shouldRecompute) {
+      const nextRun = this.computeNextRun(def, now);
+      if (nextRun) {
+        const latest = await this.di.storage.get<any>("schedules", def.name);
+        await this.di.storage.save("schedules", def.name, {
+          ...latest,
+          nextRunAt: nextRun,
+        });
+      }
     }
   }
 
@@ -141,6 +163,7 @@ export class ScheduleEngine implements IOqronModule {
 
   async cancel(name: string): Promise<void> {
     this.schedules.delete(name);
+    await this.di.storage.delete("schedules", name).catch(() => {});
   }
 
   async start(): Promise<void> {
@@ -376,11 +399,28 @@ export class ScheduleEngine implements IOqronModule {
           !record.paused &&
           new Date(record.nextRunAt) < now
         ) {
+          // Respect the missedFire policy — default to "skip" if not set
+          const policy = def.missedFire ?? "skip";
+          if (policy === "skip") {
+            this.logger.info("Missed fire skipped per policy", { name: def.name });
+            // Still must advance nextRunAt to prevent infinite re-evaluation
+            const nextRun = this.computeNextRun(def, now);
+            if (nextRun) {
+              await this.di.storage.save("schedules", def.name, {
+                ...record,
+                nextRunAt: nextRun,
+                lastRunAt: now,
+              });
+            }
+            continue;
+          }
+
           this.logger.info("Triggering recovery for missed schedule", {
             name: def.name,
             missedAt: record.nextRunAt,
+            policy,
           });
-          void this.fire(def);
+          void this.fire(def, now);
 
           // Advance nextRunAt so we don't re-fire on the next tick
           const nextRun = this.computeNextRun(def, now);
@@ -421,14 +461,40 @@ export class ScheduleEngine implements IOqronModule {
       const now = new Date();
       const allSchedules = await this.di.storage.list<any>("schedules");
       const dueRecords = allSchedules
-        .filter((s) => s.nextRunAt && new Date(s.nextRunAt) <= now)
+        .filter((s) => s.nextRunAt && !s.completed && new Date(s.nextRunAt) <= now)
         // If using sharded leader, only process schedules that hash to our owned shards
         .filter((s) =>
           this.shardedLeader ? this.shardedLeader.ownsJob(s.name) : true,
         );
 
       for (const record of dueRecords) {
-        const def = this.schedules.get(record.name);
+        let def = this.schedules.get(record.name);
+
+        // C3 Fix: Reconstitute dynamic schedules from their baseName reference.
+        // If a dynamic schedule (e.g. "myTask:user_123") was created via trigger()/schedule(),
+        // it stores baseName="myTask" in the DB. On restart, we reconstruct the definition
+        // by cloning the static base definition and applying the DB record's overrides.
+        if (!def && record.baseName) {
+          const baseDef = this.schedules.get(record.baseName);
+          if (baseDef) {
+            def = {
+              ...baseDef,
+              name: record.name,
+              runAt: record.runAt,
+              runAfter: record.runAfter,
+              recurring: record.recurring,
+              rrule: record.rrule,
+              every: record.every,
+              payload: record.payload ?? baseDef.payload,
+            } as ScheduleDefinition;
+            this.schedules.set(record.name, def);
+            this.logger.debug("Reconstituted dynamic schedule from baseName", {
+              name: record.name,
+              baseName: record.baseName,
+            });
+          }
+        }
+
         if (!def) continue;
 
         // ── Disabled behavior enforcement ──────────────────────────────────
@@ -569,12 +635,22 @@ export class ScheduleEngine implements IOqronModule {
               name: def.name,
               error: String(e),
             });
+            // Must advance nextRunAt even on crash to prevent infinite retry loop
+            const nextRun = this.computeNextRun(def, now);
+            if (nextRun) {
+              const existing = (await this.di.storage.get<any>("schedules", def.name)) || {};
+              await this.di.storage.save("schedules", def.name, {
+                ...existing,
+                nextRunAt: nextRun,
+              });
+            }
             continue;
           }
         }
 
+        const isOneShot = !!(def.runAt || def.runAfter);
         let nextRun: Date | null = null;
-        if (!def.runAt && !def.runAfter) {
+        if (!isOneShot) {
           nextRun = this.computeNextRun(def, now);
           if (!nextRun) {
             this.logger.error(
@@ -591,21 +667,36 @@ export class ScheduleEngine implements IOqronModule {
           }
         }
 
-        const existing =
-          (await this.di.storage.get<any>("schedules", def.name)) || {};
-        await this.di.storage.save("schedules", def.name, {
-          ...existing,
-          nextRunAt: nextRun,
-        });
+        // At-Least-Once delivery: Fire the job synchronously into the queue first
+        // before advancing the DB pointer. If we crash in between, we run twice instead of never.
+        void (async () => {
+          await this.fire(def, now);
 
-        void this.fire(def);
+          if (isOneShot) {
+            // One-shot schedules: mark as completed so tick() never re-fires them
+            const existing = (await this.di.storage.get<any>("schedules", def.name)) || {};
+            await this.di.storage.save("schedules", def.name, {
+              ...existing,
+              nextRunAt: null,
+              completed: true,
+              lastRunAt: now,
+            });
+          } else {
+            const existing = (await this.di.storage.get<any>("schedules", def.name)) || {};
+            await this.di.storage.save("schedules", def.name, {
+              ...existing,
+              nextRunAt: nextRun,
+              lastRunAt: now,
+            });
+          }
+        })();
       }
     } catch (err) {
       this.logger.error("Tick error", { err: String(err) });
     }
   }
 
-  private async fire(def: ScheduleDefinition): Promise<void> {
+  private async fire(def: ScheduleDefinition, tickTime: Date = new Date()): Promise<void> {
     const isOverlapSkip = def.overlap === "skip" || def.overlap === false;
 
     if (isOverlapSkip) {
@@ -636,9 +727,11 @@ export class ScheduleEngine implements IOqronModule {
     }
 
     const runId = randomUUID();
+    // If overlap is 'run', tie the distributed lock to the tickTime epoch to prevent 
+    // clustered nodes from duplicating the exact same scheduled tick concurrently
     const lockKey = isOverlapSkip
       ? `${this.lockPrefix}:schedule:run:${def.name}`
-      : `${this.lockPrefix}:schedule:run:${def.name}:${runId}`;
+      : `${this.lockPrefix}:schedule:run:${def.name}:${tickTime.getTime()}`;
     const startedAt = new Date();
 
     let worker: HeartbeatWorker | undefined;

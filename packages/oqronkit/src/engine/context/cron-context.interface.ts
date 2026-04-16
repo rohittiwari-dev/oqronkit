@@ -5,6 +5,7 @@ export interface ICronContext {
   readonly id: string;
   readonly log: Logger;
   readonly signal: AbortSignal;
+  readonly aborted: boolean;
   readonly firedAt: Date;
   readonly scheduleName: string;
   readonly duration: number;

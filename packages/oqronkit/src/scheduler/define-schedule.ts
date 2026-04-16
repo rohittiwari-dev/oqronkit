@@ -116,9 +116,8 @@ export const schedule = <TPayload = unknown>(
         );
       }
 
-      const dynamicDef = { ...def };
+      const dynamicDef = { ...def } as any;
       if (opts) {
-        if (opts.nameSuffix) dynamicDef.name = `${def.name}:${opts.nameSuffix}`;
         if (opts.runAt) dynamicDef.runAt = opts.runAt;
         if (opts.runAfter) dynamicDef.runAfter = opts.runAfter;
         if (opts.recurring) dynamicDef.recurring = opts.recurring;
@@ -126,6 +125,12 @@ export const schedule = <TPayload = unknown>(
         if (opts.every) dynamicDef.every = opts.every;
         if (opts.payload) dynamicDef.payload = opts.payload;
       }
+
+      // SAFETY: Always isolate dynamic triggers from the base singleton.
+      // Use the caller's nameSuffix or generate a unique one.
+      const suffix = opts?.nameSuffix ?? `dyn-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      dynamicDef.name = `${def.name}:${suffix}`;
+      dynamicDef.baseName = def.name;
 
       // Override default execution immediately if runAt isn't defined explicitly as future
       if (
@@ -147,9 +152,8 @@ export const schedule = <TPayload = unknown>(
         );
       }
 
-      const dynamicDef = { ...def };
+      const dynamicDef = { ...def } as any;
       if (opts) {
-        if (opts.nameSuffix) dynamicDef.name = `${def.name}:${opts.nameSuffix}`;
         if (opts.runAt) dynamicDef.runAt = opts.runAt;
         if (opts.runAfter) dynamicDef.runAfter = opts.runAfter;
         if (opts.recurring) dynamicDef.recurring = opts.recurring;
@@ -157,6 +161,12 @@ export const schedule = <TPayload = unknown>(
         if (opts.every) dynamicDef.every = opts.every;
         if (opts.payload) dynamicDef.payload = opts.payload;
       }
+
+      // SAFETY: Always isolate dynamic schedules from the base singleton.
+      const suffix = opts?.nameSuffix ?? `dyn-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      dynamicDef.name = `${def.name}:${suffix}`;
+      dynamicDef.baseName = def.name;
+
       await engineRef.current.registerDynamic(dynamicDef);
     },
     cancel: async () => {
