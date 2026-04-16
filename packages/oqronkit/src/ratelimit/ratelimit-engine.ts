@@ -920,7 +920,7 @@ export class RateLimitEngine<TContext = any> implements IRateLimiter<TContext> {
     await storage.save(
       NS_OVERRIDES,
       overrideId(this.name, tier, key),
-      override,
+      { ...override, tier, key },
     );
 
     // EventBus emission
