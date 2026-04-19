@@ -45,7 +45,7 @@ export class MemoryStore implements IStorageEngine {
       });
     }
 
-    // E1: Apply comparison conditions
+    //  Apply comparison conditions
     if (opts?.where) {
       results = results.filter((item: any) =>
         this.matchesWhere(item, opts.where!),

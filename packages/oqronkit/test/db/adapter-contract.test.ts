@@ -1,7 +1,6 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import { MemoryStore } from "../../src/engine/memory/memory-store.js";
 import type { IStorageEngine } from "../../src/engine/types/engine.js";
-import type { OqronJob } from "../../src/engine/types/job.types.js";
 
 /**
  * IStorageEngine Contract Tests
@@ -70,7 +69,7 @@ function runStorageContractTests(
       });
     });
 
-    describe("E1: WhereCondition queries", () => {
+    describe(" WhereCondition queries", () => {
       it("$lte returns only records with field <= value", async () => {
         const now = new Date();
         const past = new Date(now.getTime() - 60_000);

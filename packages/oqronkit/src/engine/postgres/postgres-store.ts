@@ -110,7 +110,7 @@ export class PostgresStore implements IStorageEngine {
                WHERE namespace = $1`;
     }
 
-    // E1: Append WHERE conditions for comparison operators
+    //  Append WHERE conditions for comparison operators
     if (opts?.where) {
       for (const cond of opts.where) {
         const sqlOp = { $lt: '<', $lte: '<=', $gt: '>', $gte: '>=', $ne: '!=' }[cond.op];

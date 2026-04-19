@@ -466,9 +466,9 @@ describe("ScheduleEngine", () => {
     });
   });
 
-  // ── F1: Schedule Versioning ──────────────────────────────────────────────
+  // ──  Schedule Versioning ──────────────────────────────────────────────
 
-  describe("F1: Schedule versioning", () => {
+  describe(" Schedule versioning", () => {
     it("version bump preserves paused state but recomputes nextRunAt", async () => {
       await storage.save("schedule_schedules", "versioned-sched", {
         name: "versioned-sched",

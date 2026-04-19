@@ -242,7 +242,7 @@ export class ScheduleEngine extends BaseSchedulerEngine<ScheduleDefinition> {
     const codeVersion = def.version ?? 0;
     const dbVersion = existing?.version ?? 0;
 
-    // F1: Downgrade protection
+    //  Downgrade protection
     if (existing && codeVersion < dbVersion) {
       this.logger.warn("Code version is older than DB — skipping overwrite", {
         name: def.name,
@@ -252,7 +252,7 @@ export class ScheduleEngine extends BaseSchedulerEngine<ScheduleDefinition> {
       return;
     }
 
-    // F1: Version bump — controlled migration
+    //  Version bump — controlled migration
     if (existing && codeVersion > dbVersion) {
       this.logger.info("Schedule version upgraded", {
         name: def.name,
@@ -380,7 +380,7 @@ export class ScheduleEngine extends BaseSchedulerEngine<ScheduleDefinition> {
             job.abort?.abort();
             this.activeJobs.delete(id);
 
-            // M2: Persist stall telemetry (matching base class handler)
+            //  Persist stall telemetry (matching base class handler)
             try {
               const jobRecord = await this.di.storage.get<any>("jobs", id);
               if (jobRecord) {
@@ -428,7 +428,7 @@ export class ScheduleEngine extends BaseSchedulerEngine<ScheduleDefinition> {
     this.logger.info("Schedule cancelled", { name });
   }
 
-  // ── M1: Condition guard via shouldFire() hook ──────────────────────────────
+  // ──  Condition guard via shouldFire() hook ──────────────────────────────
 
   protected async shouldFire(def: ScheduleDefinition, _record: any): Promise<boolean> {
     if (def.condition) {

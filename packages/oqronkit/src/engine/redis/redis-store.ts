@@ -101,7 +101,7 @@ export class RedisStore implements IStorageEngine {
       });
     }
 
-    // E1: Apply comparison conditions in memory
+    //  Apply comparison conditions in memory
     if (opts?.where) {
       entities = entities.filter((item: any) =>
         this.matchesWhere(item, opts.where!),
@@ -159,7 +159,7 @@ export class RedisStore implements IStorageEngine {
     });
   }
 
-  /** E1: Evaluates an item against all WhereConditions (AND semantics) */
+  /**  Evaluates an item against all WhereConditions (AND semantics) */
   private matchesWhere(item: any, conditions: WhereCondition[]): boolean {
     for (const cond of conditions) {
       const raw = item[cond.field];

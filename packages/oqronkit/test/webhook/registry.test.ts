@@ -28,8 +28,8 @@ describe("Webhook Registry", () => {
   });
 
   it("should overwrite a webhook with the same name", () => {
-    const config1: WebhookConfig = { name: "dup", endpoints: [] };
-    const config2: WebhookConfig = {
+    const confi WebhookConfig = { name: "dup", endpoints: [] };
+    const confi WebhookConfig = {
       name: "dup",
       endpoints: [{ name: "ep", url: "http://x.com", events: ["*"] }],
     };

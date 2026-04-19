@@ -4,7 +4,6 @@ import type { OqronJob } from "../../src/engine/types/job.types.js";
 import type { WebhookDeliveryPayload } from "../../src/webhook/types.js";
 import * as delivery from "../../src/webhook/delivery.js";
 import * as hmac from "../../src/webhook/hmac.js";
-import { OqronContainer } from "../../src/engine/index.js";
 
 // ── Canonical OqronJob mock factory ─────────────────────────────────────────
 
@@ -25,7 +24,7 @@ function createMockJob(
       method: "POST",
       headers: { "content-type": "application/json" },
       body: { hello: "world" },
-      idempotencyKey: "test-dispatcher:ep1:job-1",
+      idempotencyKey: "test-dispatcher:ejob-1",
       timestamp: Date.now(),
     },
     opts: {},

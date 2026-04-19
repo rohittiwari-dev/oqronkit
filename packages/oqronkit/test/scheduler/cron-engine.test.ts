@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
 import { CronEngine } from "../../src/scheduler/cron-engine.js";
 import { MemoryStore } from "../../src/engine/memory/memory-store.js";
 import { MemoryLock } from "../../src/engine/memory/memory-lock.js";
-import { createLogger, OqronEventBus } from "../../src/engine/index.js";
+import { createLogger } from "../../src/engine/index.js";
 
 const logger = createLogger({ level: "error" }, { module: "cron-engine-test" });
 
@@ -73,6 +73,25 @@ describe("CronEngine", () => {
 
       const saved = await storage.get<any>("cron_schedules", "existing");
       expect(new Date(saved.nextRunAt).getTime()).toBe(future.getTime());
+    });
+
+    it(" throws synchronously on invalid cron expression during construction", () => {
+      expect(() => {
+        new CronEngine(
+          [
+            {
+              name: "bad-cron",
+              expression: "invalid cron * * *",
+              handler: async () => {},
+            },
+          ],
+          logger,
+          "test",
+          "default",
+          {},
+          container,
+        );
+      }).toThrowError(/Invalid cron expression for schedule "bad-cron"/);
     });
   });
 
@@ -462,9 +481,9 @@ describe("CronEngine", () => {
     });
   });
 
-  // ── F1: Schedule Versioning ──────────────────────────────────────────────
+  // ──  Schedule Versioning ──────────────────────────────────────────────
 
-  describe("F1: Schedule versioning", () => {
+  describe(" Schedule versioning", () => {
     it("version bump preserves paused state but recomputes nextRunAt", async () => {
       // Seed DB with v1 definition that is paused
       await storage.save("cron_schedules", "versioned-cron", {

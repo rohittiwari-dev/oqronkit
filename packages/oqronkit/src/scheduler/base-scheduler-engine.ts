@@ -170,7 +170,7 @@ export abstract class BaseSchedulerEngine<
 	// ── Lifecycle (shared) ────────────────────────────────────────────────────
 
 	async start(): Promise<void> {
-		// B3: Idempotent — skip if already running
+		//  Idempotent — skip if already running
 		if (this.tickTimer) return;
 
 		if (this.baseConfig?.leaderElection !== false) {
@@ -306,7 +306,7 @@ export abstract class BaseSchedulerEngine<
 
 	async disable(): Promise<void> {
 		this.enabled = false;
-		// B2: Stop timers and monitors to avoid wasted CPU
+		//  Stop timers and monitors to avoid wasted CPU
 		if (this.tickTimer) {
 			clearInterval(this.tickTimer);
 			this.tickTimer = undefined;
@@ -316,7 +316,7 @@ export abstract class BaseSchedulerEngine<
 		OqronEventBus.emit("module:disabled", this.name);
 	}
 
-	// ── C4: Cancel a running job by ID ──────────────────────────────────────
+	// ──  Cancel a running job by ID ──────────────────────────────────────
 
 	async cancelActiveJob(jobId: string): Promise<boolean> {
 		const entry = this.activeJobs.get(jobId);
@@ -370,7 +370,7 @@ export abstract class BaseSchedulerEngine<
 			}
 
 			const now = new Date();
-			// E1: Fetch only due schedules instead of scanning all
+			//  Fetch only due schedules instead of scanning all
 			const due = await this.di.storage.list<any>(
 				this.storageNamespace,
 				undefined,
@@ -424,7 +424,7 @@ export abstract class BaseSchedulerEngine<
 				}
 
 				// CRITICAL: Advance pointer BEFORE firing
-				// M1: Condition guard hook
+				//  Condition guard hook
 				if (!(await this.shouldFire(def, record))) {
 					this.logger.debug("Skipping fire — condition guard returned false", { name: def.name });
 					continue;
@@ -444,7 +444,7 @@ export abstract class BaseSchedulerEngine<
 					continue;
 				}
 
-				// G4: Re-check leader status before critical pointer advance
+				//  Re-check leader status before critical pointer advance
 				if (this.leader && !this.leader.isLeader) {
 					this.logger.warn("Leader demoted mid-tick — skipping pointer advance", {
 						name: def.name,
@@ -541,7 +541,7 @@ export abstract class BaseSchedulerEngine<
 			createdAt: now,
 		});
 
-		// E3: Count-first pruning — only fetch excess records instead of all held jobs
+		//  Count-first pruning — only fetch excess records instead of all held jobs
 		const maxHeld = this.baseConfig?.maxHeldJobs ?? DEFAULT_MAX_HELD_JOBS;
 		const heldFilter = {
 			moduleName: def.name,
@@ -881,7 +881,7 @@ export abstract class BaseSchedulerEngine<
 			);
 		}
 
-		// F2+F3: Enrich schedule record with aggregate counters and last-run info
+		// F2+ Enrich schedule record with aggregate counters and last-run info
 		try {
 			const schedRecord = await this.di.storage.get<any>(this.storageNamespace, def.name);
 			if (schedRecord) {

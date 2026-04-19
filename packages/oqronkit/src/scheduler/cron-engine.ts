@@ -3,10 +3,11 @@ import {
 	type CronDefinition,
 	type Logger,
 	OqronContainer,
+	OqronError,
 	OqronEventBus,
 } from "../engine/index.js";
 import { BaseSchedulerEngine } from "./base-scheduler-engine.js";
-import { getNextRunDate } from "./expression-parser.js";
+import { getNextRunDate, validateExpression } from "./expression-parser.js";
 import { MissedFireHandler } from "./missed-fire.handler.js";
 
 /**
@@ -49,6 +50,16 @@ export class CronEngine extends BaseSchedulerEngine<CronDefinition> {
 	) {
 		super(logger, environment, project, config, container);
 		for (const def of staticSchedules) {
+			if (def.expression) {
+				try {
+					validateExpression(def.expression);
+				} catch (err: any) {
+					throw new OqronError(
+						"ERR_INVALID_CRON",
+						`Invalid cron expression for schedule "${def.name}": ${def.expression}. Error: ${err.message}`,
+					);
+				}
+			}
 			this.schedules.set(def.name, def);
 		}
 		this.missedFireHandler = new MissedFireHandler(this.logger);
@@ -143,7 +154,7 @@ export class CronEngine extends BaseSchedulerEngine<CronDefinition> {
 			const dbVersion = existing?.version ?? 0;
 
 			if (existing && codeVersion < dbVersion) {
-				// F1: Downgrade protection
+				//  Downgrade protection
 				this.logger.warn("Code version is older than DB — skipping overwrite", {
 					name: def.name,
 					codeVersion,
@@ -153,7 +164,7 @@ export class CronEngine extends BaseSchedulerEngine<CronDefinition> {
 			}
 
 			if (existing && codeVersion > dbVersion) {
-				// F1: Version bump — controlled migration
+				//  Version bump — controlled migration
 				this.logger.info("Schedule version upgraded", {
 					name: def.name,
 					from: dbVersion,

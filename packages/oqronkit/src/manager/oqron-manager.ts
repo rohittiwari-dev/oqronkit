@@ -202,7 +202,7 @@ export class OqronManager {
     }
     return false;
   }
-  // ── C2: Schedule Instance Listing ───────────────────────────────────────────
+  // ──  Schedule Instance Listing ───────────────────────────────────────────
 
   /**
    * List all registered cron and schedule instances with their current state.
@@ -216,7 +216,7 @@ export class OqronManager {
     return [...cronRecords, ...schedRecords];
   }
 
-  // ── C3: Single Schedule Detail ─────────────────────────────────────────────
+  // ──  Single Schedule Detail ─────────────────────────────────────────────
 
   /**
    * Get the full state of a single schedule/cron instance by name.
@@ -349,7 +349,7 @@ export class OqronManager {
   }
 
   /**
-   * D2: Retry a failed job. For scheduler jobs (cron/schedule), triggers
+   *  Retry a failed job. For scheduler jobs (cron/schedule), triggers
    * the schedule directly instead of publishing to the Broker.
    * For queue/task jobs, creates a new job record with memoization link.
    */
@@ -357,7 +357,7 @@ export class OqronManager {
     const job = await Storage.get<OqronJob>("jobs", jobId);
     if (!job || job.status !== "failed") return undefined;
 
-    // D2: Scheduler jobs don't use Broker — trigger via engine
+    //  Scheduler jobs don't use Broker — trigger via engine
     if (job.type === "cron" || job.type === "schedule") {
       const targetName = job.scheduleId ?? job.moduleName;
       if (!targetName) return undefined;
@@ -411,7 +411,7 @@ export class OqronManager {
   }
 
   /**
-   * D3: Rerun any job regardless of status (completed, failed, etc.).
+   *  Rerun any job regardless of status (completed, failed, etc.).
    * For scheduler jobs: triggers the schedule engine directly.
    * For queue/task jobs: creates a new job record via Broker.
    */
