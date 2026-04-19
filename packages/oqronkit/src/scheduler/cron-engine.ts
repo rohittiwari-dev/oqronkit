@@ -44,6 +44,7 @@ export class SchedulerModule implements IOqronModule {
 
 	private readonly activeJobs = new Map<string, ActiveJobEntry>();
 	private _hasRunLeaderInit = false;
+	private _tickCount = 0;
 
 	constructor(
 		private readonly schedules: CronDefinition[],
@@ -83,8 +84,8 @@ export class SchedulerModule implements IOqronModule {
 		);
 		this.lagMonitor = new LagMonitor(
 			this.logger,
-			this.config?.lagMonitor?.maxLagMs ?? 500,
-			this.config?.lagMonitor?.sampleIntervalMs ?? 50,
+			this.config?.lagMonitor?.maxLagMs ?? 5_000,
+			this.config?.lagMonitor?.sampleIntervalMs ?? 1_000,
 		);
 		this.missedFireHandler = new MissedFireHandler(this.logger);
 	}
@@ -412,8 +413,8 @@ export class SchedulerModule implements IOqronModule {
 				return;
 			}
 
-			// 1. Cluster stall check (~10% probability per tick)
-			if (Math.random() < 0.1) {
+			// 1. Cluster stall check (every 10th tick — deterministic)
+			if (++this._tickCount % 10 === 0) {
 				void this.detectClusterStalls();
 			}
 
@@ -558,18 +559,19 @@ export class SchedulerModule implements IOqronModule {
 					continue;
 				}
 
-				// At-Least-Once delivery: Fire the job synchronously into the queue first
-				// before advancing the DB pointer. If we crash in between, we run twice instead of never.
-				void (async () => {
-					await this.fire(def, now);
+				// SAFETY: Advance the DB pointer SYNCHRONOUSLY before firing.
+				// This prevents the race where a slow fire() causes the next tick
+				// to see a stale nextRunAt and double-fire the same schedule.
+				const latest = (await this.di.storage.get<any>("schedules", def.name)) || {};
+				await this.di.storage.save("schedules", def.name, {
+					...latest,
+					nextRunAt: nextRun,
+					lastRunAt: now,
+				});
 
-					const latest = (await this.di.storage.get<any>("schedules", def.name)) || {};
-					await this.di.storage.save("schedules", def.name, {
-						...latest,
-						nextRunAt: nextRun,
-						lastRunAt: now,
-					});
-				})();
+				// Fire handler in detached promise (non-blocking tick loop).
+				// Pointer is already advanced, so re-entrant ticks won't double-fire.
+				void this.fire(def, now);
 			}
 		} catch (err) {
 			this.logger.error("Tick error", { err: String(err) });
@@ -703,8 +705,8 @@ export class SchedulerModule implements IOqronModule {
 					try {
 						localTimeline.push({
 							ts: new Date(),
-							from: "active",
-							to: "active",
+							from: "running",
+							to: "running",
 							reason: `Progress: ${percent}% ${label || ""}`,
 						});
 						const job = await this.di.storage.get<any>(
@@ -722,6 +724,9 @@ export class SchedulerModule implements IOqronModule {
 								],
 								logs: [...(job.logs || []), ...localLogs],
 							});
+							// Clear accumulators after flush to prevent O(n²) duplicate entries
+							localTimeline.length = 0;
+							localLogs.length = 0;
 						}
 					} catch (err) {
 						this.logger.error("Failed to update progress", {
@@ -833,7 +838,7 @@ export class SchedulerModule implements IOqronModule {
 			// Push the final completion event into local accumulator
 			localTimeline.push({
 				ts: finishedAt,
-				from: "active",
+				from: "running",
 				to: status,
 				reason:
 					status === "failed"

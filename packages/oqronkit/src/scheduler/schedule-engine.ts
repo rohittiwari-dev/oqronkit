@@ -47,6 +47,7 @@ export class ScheduleEngine implements IOqronModule {
   // Includes static instances and dynamically triggered instances
   private readonly schedules = new Map<string, ScheduleDefinition>();
   private _hasRunLeaderInit = false;
+  private _tickCount = 0;
 
   constructor(
     staticSchedules: ScheduleDefinition[],
@@ -56,6 +57,7 @@ export class ScheduleEngine implements IOqronModule {
     private readonly config?: {
       enable?: boolean;
       tickInterval?: number;
+      leaderElection?: boolean;
       keepJobHistory?: boolean | number;
       keepFailedJobHistory?: boolean | number;
       shutdownTimeout?: number;
@@ -85,8 +87,8 @@ export class ScheduleEngine implements IOqronModule {
     this.stallDetector = new StallDetector(this.di.lock, this.logger, 15_000);
     this.lagMonitor = new LagMonitor(
       this.logger,
-      this.config?.lagMonitor?.maxLagMs ?? 500,
-      this.config?.lagMonitor?.sampleIntervalMs ?? 50,
+      this.config?.lagMonitor?.maxLagMs ?? 5_000,
+      this.config?.lagMonitor?.sampleIntervalMs ?? 1_000,
     );
 
     for (const def of staticSchedules) {
@@ -357,9 +359,15 @@ export class ScheduleEngine implements IOqronModule {
 
       if (def.every) {
         const add =
-          (def.every.hours ?? 0) * 3600000 +
-          (def.every.minutes ?? 0) * 60000 +
-          (def.every.seconds ?? 0) * 1000;
+          (def.every.weeks ?? 0) * 604_800_000 +
+          (def.every.days ?? 0) * 86_400_000 +
+          (def.every.hours ?? 0) * 3_600_000 +
+          (def.every.minutes ?? 0) * 60_000 +
+          (def.every.seconds ?? 0) * 1_000;
+        if (add <= 0) {
+          this.logger.error("Invalid `every` config — resolves to zero interval", { name: def.name });
+          return null;
+        }
         return new Date(from.getTime() + add);
       }
     } catch (err) {
@@ -438,6 +446,38 @@ export class ScheduleEngine implements IOqronModule {
     }
   }
 
+  private async detectClusterStalls(): Promise<void> {
+    try {
+      const activeDbJobs = await this.di.storage.list<any>("jobs", {
+        status: "running",
+      });
+      for (const job of activeDbJobs) {
+        if (!job.scheduleId) continue;
+        const def = this.schedules.get(job.scheduleId);
+        if (!def?.guaranteedWorker) continue;
+
+        const ageMs = Date.now() - new Date(job.startedAt).getTime();
+        const ttl = def.lockTtlMs ?? 50_000;
+
+        if (ageMs > ttl + 10_000) {
+          this.logger.warn("Cluster stall detected (schedule)", {
+            runId: job.id,
+          });
+          await this.di.storage.save("jobs", job.id, {
+            ...job,
+            status: "failed",
+            error: "Stall detected (lock assumed expired)",
+            completedAt: new Date(),
+          });
+        }
+      }
+    } catch (err) {
+      this.logger.error("Failed to detect cluster stalls", {
+        err: String(err),
+      });
+    }
+  }
+
   private async tick(): Promise<void> {
     if (!this.enabled) return;
 
@@ -459,6 +499,12 @@ export class ScheduleEngine implements IOqronModule {
       }
 
       const now = new Date();
+
+      // Cluster stall check (every 10th tick — deterministic)
+      if (++this._tickCount % 10 === 0) {
+        void this.detectClusterStalls();
+      }
+
       const allSchedules = await this.di.storage.list<any>("schedules");
       const dueRecords = allSchedules
         .filter((s) => s.nextRunAt && !s.completed && new Date(s.nextRunAt) <= now)
@@ -476,7 +522,7 @@ export class ScheduleEngine implements IOqronModule {
         // by cloning the static base definition and applying the DB record's overrides.
         if (!def && record.baseName) {
           const baseDef = this.schedules.get(record.baseName);
-          if (baseDef) {
+          if (baseDef?.handler) {
             def = {
               ...baseDef,
               name: record.name,
@@ -489,6 +535,11 @@ export class ScheduleEngine implements IOqronModule {
             } as ScheduleDefinition;
             this.schedules.set(record.name, def);
             this.logger.debug("Reconstituted dynamic schedule from baseName", {
+              name: record.name,
+              baseName: record.baseName,
+            });
+          } else if (baseDef) {
+            this.logger.warn("Cannot reconstitute dynamic schedule — base definition has no handler", {
               name: record.name,
               baseName: record.baseName,
             });
@@ -667,29 +718,29 @@ export class ScheduleEngine implements IOqronModule {
           }
         }
 
-        // At-Least-Once delivery: Fire the job synchronously into the queue first
-        // before advancing the DB pointer. If we crash in between, we run twice instead of never.
-        void (async () => {
-          await this.fire(def, now);
+        // SAFETY: Advance the DB pointer SYNCHRONOUSLY before firing.
+        // This prevents the race where a slow fire() causes the next tick
+        // to see a stale nextRunAt and double-fire the same schedule.
+        if (isOneShot) {
+          const existing = (await this.di.storage.get<any>("schedules", def.name)) || {};
+          await this.di.storage.save("schedules", def.name, {
+            ...existing,
+            nextRunAt: null,
+            completed: true,
+            lastRunAt: now,
+          });
+        } else {
+          const existing = (await this.di.storage.get<any>("schedules", def.name)) || {};
+          await this.di.storage.save("schedules", def.name, {
+            ...existing,
+            nextRunAt: nextRun,
+            lastRunAt: now,
+          });
+        }
 
-          if (isOneShot) {
-            // One-shot schedules: mark as completed so tick() never re-fires them
-            const existing = (await this.di.storage.get<any>("schedules", def.name)) || {};
-            await this.di.storage.save("schedules", def.name, {
-              ...existing,
-              nextRunAt: null,
-              completed: true,
-              lastRunAt: now,
-            });
-          } else {
-            const existing = (await this.di.storage.get<any>("schedules", def.name)) || {};
-            await this.di.storage.save("schedules", def.name, {
-              ...existing,
-              nextRunAt: nextRun,
-              lastRunAt: now,
-            });
-          }
-        })();
+        // Fire handler in detached promise (non-blocking tick loop).
+        // Pointer is already advanced, so re-entrant ticks won't double-fire.
+        void this.fire(def, now);
       }
     } catch (err) {
       this.logger.error("Tick error", { err: String(err) });
@@ -769,9 +820,10 @@ export class ScheduleEngine implements IOqronModule {
       status: "running",
       data: def.payload,
       opts: {},
-      attemptMade: 1,
+      attemptMade: 0,
       progressPercent: 0,
-      tags: [],
+      workerId: this.nodeId,
+      tags: def.tags ?? [],
       scheduleId: def.name,
       environment: this.environment ?? "default",
       project: this.project ?? "default",
@@ -828,6 +880,9 @@ export class ScheduleEngine implements IOqronModule {
                 timeline: [...(job.timeline || []), ...localTimeline],
                 logs: [...(job.logs || []), ...localLogs],
               });
+              // Clear accumulators after flush to prevent O(n²) duplicate entries
+              localTimeline.length = 0;
+              localLogs.length = 0;
             }
           } catch (err) {
             this.logger.error("Failed to update schedule progress", {

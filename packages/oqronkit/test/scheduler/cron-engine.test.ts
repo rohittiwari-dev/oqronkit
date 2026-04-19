@@ -12,8 +12,8 @@ describe("CronEngine", () => {
   let container: any;
 
   beforeEach(() => {
-    storage = new MemoryStore(logger);
-    lock = new MemoryLock(logger);
+    storage = new MemoryStore();
+    lock = new MemoryLock();
     container = { storage, lock };
     vi.useFakeTimers();
   });
@@ -102,14 +102,14 @@ describe("CronEngine", () => {
       const module = new SchedulerModule([], logger, "test", "default", { leaderElection: false }, container);
       const stallSpy = vi.spyOn(module as any, "detectClusterStalls");
       
-      // Force Math.random to return 0.05 to trigger the stall check
-      const originalRandom = Math.random;
-      Math.random = () => 0.05;
-      
-      await (module as any).tick();
-      expect(stallSpy).toHaveBeenCalled();
-      
-      Math.random = originalRandom;
+      // Deterministic: fires every 10th tick
+      for (let i = 0; i < 9; i++) {
+        await (module as any).tick();
+      }
+      expect(stallSpy).not.toHaveBeenCalled();
+
+      await (module as any).tick(); // 10th tick
+      expect(stallSpy).toHaveBeenCalledTimes(1);
     });
 
     it("fires due cron and updates nextRunAt", async () => {

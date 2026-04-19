@@ -137,7 +137,9 @@ describe("Schedule — trigger()/schedule() with mock engine", () => {
     expect(mockEngine.registerDynamic).toHaveBeenCalledTimes(1);
 
     const arg = mockEngine.registerDynamic.mock.calls[0][0];
-    expect(arg.name).toBe("trigger-ok");
+    // Safety: trigger() always appends a dynamic suffix to isolate from the base definition
+    expect(arg.name).toMatch(/^trigger-ok:dyn-/);
+    expect(arg.baseName).toBe("trigger-ok");
     // runAt should be set to now (immediate fire)
     expect(arg.runAt).toBeDefined();
     expect(arg.runAt instanceof Date).toBe(true);

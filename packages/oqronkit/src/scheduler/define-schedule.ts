@@ -16,7 +16,7 @@ type EnqueueOptions<TPayload> = {
   runAfter?: ScheduleRunAfter;
   recurring?: ScheduleRecurring;
   rrule?: string;
-  every?: { minutes?: number; hours?: number; seconds?: number };
+  every?: { weeks?: number; days?: number; minutes?: number; hours?: number; seconds?: number };
   payload?: TPayload;
   nameSuffix?: string; // Optional suffix for dynamic names (e.g. queue pattern)
 };
@@ -34,7 +34,7 @@ export type DefineScheduleOptions<TPayload> = {
   runAfter?: ScheduleRunAfter;
   recurring?: ScheduleRecurring;
   rrule?: string;
-  every?: { minutes?: number; hours?: number; seconds?: number };
+  every?: { weeks?: number; days?: number; minutes?: number; hours?: number; seconds?: number };
   timezone?: string;
   missedFire?: MissedFirePolicy;
   overlap?: OverlapPolicy;
@@ -106,69 +106,51 @@ export const schedule = <TPayload = unknown>(
 
   _registerSchedule(def as ScheduleDefinition<unknown>);
 
+  /**
+   * Shared enqueue logic for both trigger() and schedule().
+   * @param defaultImmediate If true and no timing opts are provided, defaults to runAt: new Date()
+   */
+  const _enqueue = async (opts: EnqueueOptions<TPayload> | undefined, defaultImmediate: boolean) => {
+    if (!engineRef.current) {
+      throw new Error(
+        `[OqronKit] Cannot enqueue "${options.name}" — ScheduleEngine is not running.`,
+      );
+    }
+
+    const dynamicDef = { ...def } as any;
+    if (opts) {
+      if (opts.runAt) dynamicDef.runAt = opts.runAt;
+      if (opts.runAfter) dynamicDef.runAfter = opts.runAfter;
+      if (opts.recurring) dynamicDef.recurring = opts.recurring;
+      if (opts.rrule) dynamicDef.rrule = opts.rrule;
+      if (opts.every) dynamicDef.every = opts.every;
+      if (opts.payload) dynamicDef.payload = opts.payload;
+    }
+
+    // SAFETY: Always isolate dynamic triggers from the base singleton.
+    const suffix = opts?.nameSuffix ?? `dyn-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    dynamicDef.name = `${def.name}:${suffix}`;
+    dynamicDef.baseName = def.name;
+
+    // If defaultImmediate and no explicit timing is provided, fire now
+    if (
+      defaultImmediate &&
+      !opts?.runAt &&
+      !opts?.runAfter &&
+      !opts?.recurring &&
+      !opts?.rrule &&
+      !opts?.every
+    ) {
+      dynamicDef.runAt = new Date();
+    }
+
+    await engineRef.current.registerDynamic(dynamicDef);
+  };
+
   return {
     ...def,
-    trigger: async (opts?: EnqueueOptions<TPayload>) => {
-      // Dynamic triggering relies on the engine being alive
-      if (!engineRef.current) {
-        throw new Error(
-          `[OqronKit] Cannot trigger "${options.name}" — ScheduleEngine is not running.`,
-        );
-      }
-
-      const dynamicDef = { ...def } as any;
-      if (opts) {
-        if (opts.runAt) dynamicDef.runAt = opts.runAt;
-        if (opts.runAfter) dynamicDef.runAfter = opts.runAfter;
-        if (opts.recurring) dynamicDef.recurring = opts.recurring;
-        if (opts.rrule) dynamicDef.rrule = opts.rrule;
-        if (opts.every) dynamicDef.every = opts.every;
-        if (opts.payload) dynamicDef.payload = opts.payload;
-      }
-
-      // SAFETY: Always isolate dynamic triggers from the base singleton.
-      // Use the caller's nameSuffix or generate a unique one.
-      const suffix = opts?.nameSuffix ?? `dyn-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      dynamicDef.name = `${def.name}:${suffix}`;
-      dynamicDef.baseName = def.name;
-
-      // Override default execution immediately if runAt isn't defined explicitly as future
-      if (
-        !opts?.runAt &&
-        !opts?.runAfter &&
-        !opts?.recurring &&
-        !opts?.rrule &&
-        !opts?.every
-      ) {
-        dynamicDef.runAt = new Date();
-      }
-
-      await engineRef.current.registerDynamic(dynamicDef);
-    },
-    schedule: async (opts?: EnqueueOptions<TPayload>) => {
-      if (!engineRef.current) {
-        throw new Error(
-          `[OqronKit] Cannot schedule "${options.name}" — ScheduleEngine is not running.`,
-        );
-      }
-
-      const dynamicDef = { ...def } as any;
-      if (opts) {
-        if (opts.runAt) dynamicDef.runAt = opts.runAt;
-        if (opts.runAfter) dynamicDef.runAfter = opts.runAfter;
-        if (opts.recurring) dynamicDef.recurring = opts.recurring;
-        if (opts.rrule) dynamicDef.rrule = opts.rrule;
-        if (opts.every) dynamicDef.every = opts.every;
-        if (opts.payload) dynamicDef.payload = opts.payload;
-      }
-
-      // SAFETY: Always isolate dynamic schedules from the base singleton.
-      const suffix = opts?.nameSuffix ?? `dyn-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      dynamicDef.name = `${def.name}:${suffix}`;
-      dynamicDef.baseName = def.name;
-
-      await engineRef.current.registerDynamic(dynamicDef);
-    },
+    trigger: (opts?: EnqueueOptions<TPayload>) => _enqueue(opts, true),
+    schedule: (opts?: EnqueueOptions<TPayload>) => _enqueue(opts, false),
     cancel: async () => {
       if (!engineRef.current) return;
       await engineRef.current.cancel(def.name);

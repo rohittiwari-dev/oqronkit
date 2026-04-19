@@ -30,7 +30,7 @@ export interface ScheduleHooks<TPayload = unknown> {
   onError?: (
     ctx: IScheduleContext<TPayload>,
     error: Error,
-  ) => Promise<void> | void;
+  ) => Promise<boolean | void> | boolean | void;
   onMissedFire?: (
     ctx: IScheduleContext<TPayload>,
     missedAt: Date,
@@ -56,17 +56,17 @@ export interface ScheduleDefinition<TPayload = unknown> {
   runAfter?: ScheduleRunAfter;
   recurring?: ScheduleRecurring;
   rrule?: string;
-  every?: { minutes?: number; hours?: number; seconds?: number };
+  every?: { weeks?: number; days?: number; minutes?: number; hours?: number; seconds?: number };
 
   // Execution Logic
   timezone?: string;
-  missedFire: MissedFirePolicy;
-  overlap: OverlapPolicy;
+  missedFire?: MissedFirePolicy;
+  overlap?: OverlapPolicy;
   guaranteedWorker?: boolean;
   heartbeatMs?: number;
   lockTtlMs?: number;
   timeout?: number;
-  tags: string[];
+  tags?: string[];
   /** Override global history rolling. `true` = infinite, `false` = none, `number` = max retained jobs. */
   keepHistory?: boolean | number;
   /** Keep specific bounded history length for failed jobs overriding general logic */

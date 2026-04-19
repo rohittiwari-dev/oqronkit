@@ -12,8 +12,8 @@ describe("ScheduleEngine", () => {
   let container: any;
 
   beforeEach(() => {
-    storage = new MemoryStore(logger);
-    lock = new MemoryLock(logger);
+    storage = new MemoryStore();
+    lock = new MemoryLock();
     container = { storage, lock };
     vi.useFakeTimers();
   });
@@ -127,18 +127,29 @@ describe("ScheduleEngine", () => {
         container,
       );
       (module as any).leader = { isLeader: true };
+      // Skip first-tick leader init (missed-fire recovery) — this test focuses on normal tick firing
+      (module as any)._hasRunLeaderInit = true;
 
       await (module as any).tick();
-      
-      // Need to flush microtasks to let the fire() method acquire the lock and add to activeJobs
-      await Promise.resolve();
-      await Promise.resolve();
-      await Promise.resolve();
+
+      // The nextRunAt pointer should already be advanced (synchronously in tick)
+      const saved = await storage.get<any>("schedules", "due-cron");
+      expect(new Date(saved.nextRunAt).getTime()).toBeGreaterThan(past.getTime());
+
+      // tick() fires via detached `void this.fire()`. The fire() creates a promise chain
+      // (Promise.resolve().then(async () => {...})). We must drain this chain by
+      // repeatedly advancing time and flushing microtasks.
+      for (let i = 0; i < 10; i++) {
+        await vi.advanceTimersByTimeAsync(10);
+      }
+
+      // Wait for any active jobs to fully complete
+      const activeJobs = Array.from(module["activeJobs"].values());
+      for (const job of activeJobs) {
+        if (job.promise) await job.promise;
+      }
 
       expect(fired).toBe(true);
-      const saved = await storage.get<any>("schedules", "due-cron");
-      // nextRunAt should have advanced
-      expect(new Date(saved.nextRunAt).getTime()).toBeGreaterThan(past.getTime());
     });
 
     it("handles disabled hold behavior on tick", async () => {
