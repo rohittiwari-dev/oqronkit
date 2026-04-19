@@ -206,7 +206,7 @@ describe("CronEngine", () => {
     });
   });
 
-  describe("G3: Priority ordering", () => {
+  describe(" Priority ordering", () => {
     it("fires higher priority (lower number) schedules first", async () => {
       const now = Date.now();
       const past = new Date(now - 1000);
@@ -253,7 +253,7 @@ describe("CronEngine", () => {
     });
   });
 
-  describe("G5: Jitter", () => {
+  describe(" Jitter", () => {
     it("applies random jitter to nextRunAt when jitterMs is set", async () => {
       const now = Date.now();
       const past = new Date(now - 1000);
@@ -321,6 +321,123 @@ describe("CronEngine", () => {
       // Without jitter: exactly now + 60000 (within tick timing tolerance)
       expect(nextRunTime).toBeGreaterThanOrEqual(now + 59_000);
       expect(nextRunTime).toBeLessThanOrEqual(now + 61_000);
+    });
+  });
+
+  describe(" Per-schedule rate limiting", () => {
+    it("skips fire when rate limiter blocks", async () => {
+      const now = Date.now();
+      const past = new Date(now - 1000);
+
+      await storage.save("cron_schedules", "rl-cron", {
+        name: "rl-cron",
+        nextRunAt: past,
+      });
+
+      let fired = false;
+      const mockLimiter = {
+        check: vi.fn().mockResolvedValue({ allowed: false }),
+      };
+
+      const module = new CronEngine(
+        [
+          {
+            name: "rl-cron",
+            intervalMs: 60_000,
+            rateLimiter: mockLimiter,
+            handler: async () => { fired = true; },
+          },
+        ],
+        logger,
+        "test",
+        "default",
+        { leaderElection: false },
+        container,
+      );
+
+      await (module as any).tick();
+
+      expect(fired).toBe(false);
+      expect(mockLimiter.check).toHaveBeenCalledWith({ name: "rl-cron" });
+      // Pointer should still advance
+      const saved = await storage.get<any>("cron_schedules", "rl-cron");
+      expect(new Date(saved.nextRunAt).getTime()).toBeGreaterThan(past.getTime());
+    });
+
+    it("proceeds with fire when rate limiter allows", async () => {
+      const now = Date.now();
+      const past = new Date(now - 1000);
+
+      await storage.save("cron_schedules", "rl-allow", {
+        name: "rl-allow",
+        nextRunAt: past,
+      });
+
+      let fired = false;
+      const mockLimiter = {
+        check: vi.fn().mockResolvedValue({ allowed: true }),
+      };
+
+      const module = new CronEngine(
+        [
+          {
+            name: "rl-allow",
+            intervalMs: 60_000,
+            rateLimiter: mockLimiter,
+            handler: async () => { fired = true; },
+          },
+        ],
+        logger,
+        "test",
+        "default",
+        { leaderElection: false },
+        container,
+      );
+
+      await (module as any).tick();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(fired).toBe(true);
+    });
+
+    it("falls through on rate limiter error (fail-open)", async () => {
+      const now = Date.now();
+      const past = new Date(now - 1000);
+
+      await storage.save("cron_schedules", "rl-error", {
+        name: "rl-error",
+        nextRunAt: past,
+      });
+
+      let fired = false;
+      const mockLimiter = {
+        check: vi.fn().mockRejectedValue(new Error("Redis down")),
+      };
+
+      const module = new CronEngine(
+        [
+          {
+            name: "rl-error",
+            intervalMs: 60_000,
+            rateLimiter: mockLimiter,
+            handler: async () => { fired = true; },
+          },
+        ],
+        logger,
+        "test",
+        "default",
+        { leaderElection: false },
+        container,
+      );
+
+      await (module as any).tick();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(fired).toBe(true);
     });
   });
 

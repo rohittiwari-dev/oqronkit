@@ -71,6 +71,12 @@ export interface BaseDefinition {
 	priority?: number;
 	/**  Random jitter in ms added to nextRunAt to prevent thundering herd. Default: 0. */
 	jitterMs?: number;
+	/**
+	 *  Optional rate limiter reference. When set, the tick loop calls
+	 * `rateLimiter.check({ name })` before firing. If blocked, the fire
+	 * is skipped and nextRunAt is advanced normally.
+	 */
+	rateLimiter?: { check(ctx: any): Promise<{ allowed: boolean }> };
 }
 
 export interface BaseSchedulerConfig {
@@ -439,6 +445,36 @@ export abstract class BaseSchedulerEngine<
 				if (!(await this.shouldFire(def, record))) {
 					this.logger.debug("Skipping fire — condition guard returned false", { name: def.name });
 					continue;
+				}
+
+				//  Per-schedule rate limiting
+				if (def.rateLimiter) {
+					try {
+						const rlResult = await def.rateLimiter.check({ name: def.name });
+						if (!rlResult.allowed) {
+							this.logger.info("Rate limited — skipping fire", { name: def.name });
+							OqronEventBus.emit("schedule:rate-limited" as any, {
+								name: def.name,
+								module: this.moduleType,
+							});
+							// Still advance the pointer to prevent re-firing
+							const rlNext = this.computeNextRun(def, now);
+							if (rlNext) {
+								await this.di.storage.save(this.storageNamespace, def.name, {
+									...record,
+									nextRunAt: rlNext,
+									lastRunAt: now,
+									type: this.moduleType,
+								});
+							}
+							continue;
+						}
+					} catch (err) {
+						this.logger.warn("Rate limiter check failed — proceeding with fire", {
+							name: def.name,
+							err: String(err),
+						});
+					}
 				}
 
 				let nextRun = this.computeNextRun(def, now);

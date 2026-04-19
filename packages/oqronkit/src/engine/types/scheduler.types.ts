@@ -103,5 +103,7 @@ export interface ScheduleDefinition<TPayload = unknown> {
   priority?: number;
   /**  Random jitter in ms added to nextRunAt to prevent thundering herd. Default: 0. */
   jitterMs?: number;
+  /**  Optional rate limiter. If check() returns { allowed: false }, fire is skipped. */
+  rateLimiter?: { check(ctx: any): Promise<{ allowed: boolean }> };
 }
 
