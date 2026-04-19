@@ -19,6 +19,11 @@ export class CronContext extends JobContext implements ICronContext {
     this.startedLocalAt = Date.now();
   }
 
+  /** Unified name field — alias for `scheduleName` (M8 parity with IScheduleContext) */
+  get name(): string {
+    return this.scheduleName;
+  }
+
   get aborted(): boolean {
     return this.signal.aborted;
   }

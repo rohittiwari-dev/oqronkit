@@ -23,11 +23,12 @@ export class ScheduleContext<TPayload = unknown>
   public readonly payload: TPayload;
   public readonly environment?: string;
   public readonly project?: string;
+  public readonly signal: AbortSignal;
   private readonly logger: Logger;
-  private readonly signal: AbortSignal;
   private readonly startedLocalAt: number;
   private readonly _onProgress?: (percent: number, label?: string) => void;
   private readonly _onLog?: (level: string, message: string) => void;
+  private _progress = 0;
 
   constructor(opts: ScheduleContextOptions<TPayload>) {
     this.id = opts.id;
@@ -45,6 +46,11 @@ export class ScheduleContext<TPayload = unknown>
     // Bind methods so they can be destructured safely
     this.log = this.log.bind(this);
     this.progress = this.progress.bind(this);
+  }
+
+  /** @alias name — backward compat with ICronContext */
+  get scheduleName(): string {
+    return this.name;
   }
 
   get aborted(): boolean {
@@ -78,10 +84,15 @@ export class ScheduleContext<TPayload = unknown>
   }
 
   progress(percent: number, label?: string): void {
+    this._progress = Math.max(0, Math.min(100, percent));
     if (this._onProgress) {
-      this._onProgress(percent, label);
+      this._onProgress(this._progress, label);
     } else {
-      this.logger.debug("Progress updated", { percent, label, runId: this.id });
+      this.logger.debug("Progress updated", { percent: this._progress, label, runId: this.id });
     }
+  }
+
+  getProgress(): number {
+    return this._progress;
   }
 }

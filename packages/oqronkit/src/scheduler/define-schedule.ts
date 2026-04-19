@@ -62,11 +62,17 @@ export type DefineScheduleOptions<TPayload> = {
   disabledBehavior?: DisabledBehavior;
 };
 
+/** Minimal interface for the attached ScheduleEngine instance. */
+interface IScheduleEngineRef {
+  registerDynamic(def: ScheduleDefinition): Promise<void>;
+  cancel(name: string): Promise<void>;
+}
+
 // Global reference that the engine will attach at boot time
 // so that `trigger()` and `schedule()` work.
-const engineRef: { current: any } = { current: null };
+const engineRef: { current: IScheduleEngineRef | null } = { current: null };
 
-export function _attachScheduleEngine(engine: any) {
+export function _attachScheduleEngine(engine: IScheduleEngineRef | null) {
   engineRef.current = engine;
 }
 

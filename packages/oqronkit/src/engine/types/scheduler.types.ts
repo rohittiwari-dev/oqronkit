@@ -38,14 +38,24 @@ export interface ScheduleHooks<TPayload = unknown> {
 }
 
 export interface IScheduleContext<TPayload = unknown> {
-  name: string;
-  firedAt: Date;
-  payload: TPayload;
-  duration: number;
-  environment?: string;
-  project?: string;
+  /** Unique run identifier */
+  readonly id: string;
+  /** Schedule definition name */
+  readonly name: string;
+  /** @alias name — backward compat with ICronContext */
+  readonly scheduleName: string;
+  readonly firedAt: Date;
+  readonly payload: TPayload;
+  readonly duration: number;
+  /** Abort signal — allows cooperative cancellation */
+  readonly signal: AbortSignal;
+  /** Whether the signal has been aborted */
+  readonly aborted: boolean;
+  readonly environment?: string;
+  readonly project?: string;
   log(level: string, message: string, meta?: Record<string, unknown>): void;
   progress(percent: number, label?: string): void;
+  getProgress(): number;
 }
 
 export interface ScheduleDefinition<TPayload = unknown> {

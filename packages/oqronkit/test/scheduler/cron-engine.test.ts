@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
-import { SchedulerModule } from "../../src/scheduler/cron-engine.js";
+import { CronEngine } from "../../src/scheduler/cron-engine.js";
 import { MemoryStore } from "../../src/engine/memory/memory-store.js";
 import { MemoryLock } from "../../src/engine/memory/memory-lock.js";
 import { createLogger, OqronEventBus } from "../../src/engine/index.js";
@@ -24,7 +24,7 @@ describe("CronEngine", () => {
 
   describe("Lifecycle and init()", () => {
     it("initializes schedules and computes nextRunAt", async () => {
-      const module = new SchedulerModule(
+      const module = new CronEngine(
         [
           {
             name: "test-cron",
@@ -54,7 +54,7 @@ describe("CronEngine", () => {
         nextRunAt: future,
       });
 
-      const module = new SchedulerModule(
+      const module = new CronEngine(
         [
           {
             name: "existing",
@@ -78,7 +78,7 @@ describe("CronEngine", () => {
 
   describe("tick() logic", () => {
     it("skips tick if disabled", async () => {
-      const module = new SchedulerModule([], logger, "test", "default", {}, container);
+      const module = new CronEngine([], logger, "test", "default", {}, container);
       await module.init();
       module.enabled = false;
       const tickSpy = vi.spyOn(module as any, "handleLeaderInit");
@@ -88,7 +88,7 @@ describe("CronEngine", () => {
     });
 
     it("runs handleLeaderInit on first tick", async () => {
-      const module = new SchedulerModule([], logger, "test", "default", { leaderElection: false }, container);
+      const module = new CronEngine([], logger, "test", "default", { leaderElection: false }, container);
       const initSpy = vi.spyOn(module as any, "handleLeaderInit");
       
       await (module as any).tick();
@@ -99,7 +99,7 @@ describe("CronEngine", () => {
     });
 
     it("checks cluster stalls occasionally", async () => {
-      const module = new SchedulerModule([], logger, "test", "default", { leaderElection: false }, container);
+      const module = new CronEngine([], logger, "test", "default", { leaderElection: false }, container);
       const stallSpy = vi.spyOn(module as any, "detectClusterStalls");
       
       // Deterministic: fires every 10th tick
@@ -122,7 +122,7 @@ describe("CronEngine", () => {
       });
 
       let fired = false;
-      const module = new SchedulerModule(
+      const module = new CronEngine(
         [
           {
             name: "due-cron",
@@ -161,7 +161,7 @@ describe("CronEngine", () => {
       });
 
       let fired = false;
-      const module = new SchedulerModule(
+      const module = new CronEngine(
         [
           {
             name: "hold-cron",
@@ -189,7 +189,7 @@ describe("CronEngine", () => {
 
   describe("fire() execution", () => {
     it("handles handler success and saves telemetry", async () => {
-      const module = new SchedulerModule(
+      const module = new CronEngine(
         [
           {
             name: "success-cron",
@@ -233,7 +233,7 @@ describe("CronEngine", () => {
         },
       };
 
-      const module = new SchedulerModule([def], logger, "test", "default", {}, container);
+      const module = new CronEngine([def], logger, "test", "default", {}, container);
 
       // Fire first one and let it acquire the lock and register in activeJobs
       const p1 = (module as any).fire(def);
@@ -266,7 +266,7 @@ describe("CronEngine", () => {
         },
       };
 
-      const module = new SchedulerModule([def], logger, "test", "default", {}, container);
+      const module = new CronEngine([def], logger, "test", "default", {}, container);
 
       const firePromise = (module as any).fire(def);
       
@@ -307,7 +307,7 @@ describe("CronEngine", () => {
         },
       };
 
-      const module = new SchedulerModule([def], logger, "test", "default", {}, container);
+      const module = new CronEngine([def], logger, "test", "default", {}, container);
 
       const p1 = (module as any).fire(def);
       await Promise.resolve();
@@ -335,7 +335,7 @@ describe("CronEngine", () => {
         },
       };
 
-      const module = new SchedulerModule([def], logger, "test", "default", {}, container);
+      const module = new CronEngine([def], logger, "test", "default", {}, container);
 
       void (module as any).fire(def);
       await Promise.resolve();
@@ -368,7 +368,7 @@ describe("CronEngine", () => {
         },
       };
 
-      const module = new SchedulerModule([def], logger, "test", "default", {}, container);
+      const module = new CronEngine([def], logger, "test", "default", {}, container);
       void (module as any).fire(def);
       
       await Promise.resolve();
@@ -393,7 +393,7 @@ describe("CronEngine", () => {
         },
       };
 
-      const module = new SchedulerModule([def], logger, "test", "default", {}, container);
+      const module = new CronEngine([def], logger, "test", "default", {}, container);
       void (module as any).fire(def);
       
       await Promise.resolve();
@@ -416,7 +416,7 @@ describe("CronEngine", () => {
         handler: async () => {},
       };
 
-      const module = new SchedulerModule([def], logger, "test", "default", {}, container);
+      const module = new CronEngine([def], logger, "test", "default", {}, container);
       
       const workerStartSpy = vi.spyOn((module as any).di.lock, "acquire");
       
@@ -434,7 +434,7 @@ describe("CronEngine", () => {
 
   describe("stop() and hooks", () => {
     it("stop() cleans up timers and jobs", async () => {
-        const module = new SchedulerModule([], logger, "test", "default", {}, container);
+        const module = new CronEngine([], logger, "test", "default", {}, container);
         await module.start();
         expect(module["tickTimer"]).toBeDefined();
         await module.stop();
@@ -446,7 +446,7 @@ describe("CronEngine", () => {
           intervalMs: 10000,
           handler: async () => {},
         };
-        const module = new SchedulerModule([def], logger, "test", "default", {}, container);
+        const module = new CronEngine([def], logger, "test", "default", {}, container);
         const fired = await module.triggerManual("manual-cron");
         expect(fired).toBe(true);
         const noExist = await module.triggerManual("unknown");
@@ -454,7 +454,7 @@ describe("CronEngine", () => {
     });
 
     it("enable() and disable() functions", async () => {
-       const module = new SchedulerModule([], logger, "test", "default", {}, container);
+       const module = new CronEngine([], logger, "test", "default", {}, container);
        await module.disable();
        expect(module.enabled).toBe(false);
        await module.enable();

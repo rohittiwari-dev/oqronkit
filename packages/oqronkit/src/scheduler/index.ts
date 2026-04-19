@@ -1,4 +1,7 @@
-export { SchedulerModule } from "./cron-engine.js";
+export { CronEngine, CronEngine as SchedulerModule } from "./cron-engine.js";
+export { BaseSchedulerEngine } from "./base-scheduler-engine.js";
+export type { ActiveJobEntry, BaseDefinition, BaseSchedulerConfig } from "./base-scheduler-engine.js";
+export * from "./constants.js";
 export type { DefineCronOptions } from "./define-cron.js";
 export { cron } from "./define-cron.js";
 export type {
@@ -12,4 +15,11 @@ export {
   _drainPendingSchedules,
   _registerSchedule,
 } from "./registry-schedule.js";
+export {
+  createCronModule,
+  createScheduleModule,
+  type SchedulerFactoryConfig,
+  type CronModuleFactoryConfig,
+  type ScheduleModuleFactoryConfig,
+} from "./registry-factory.js";
 export { ScheduleEngine } from "./schedule-engine.js";
