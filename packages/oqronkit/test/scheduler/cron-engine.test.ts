@@ -206,6 +206,124 @@ describe("CronEngine", () => {
     });
   });
 
+  describe("G3: Priority ordering", () => {
+    it("fires higher priority (lower number) schedules first", async () => {
+      const now = Date.now();
+      const past = new Date(now - 1000);
+      
+      await storage.save("cron_schedules", "low-pri", {
+        name: "low-pri",
+        nextRunAt: past,
+      });
+      await storage.save("cron_schedules", "high-pri", {
+        name: "high-pri",
+        nextRunAt: past,
+      });
+
+      const fireOrder: string[] = [];
+      const module = new CronEngine(
+        [
+          {
+            name: "low-pri",
+            expression: "0 0 * * *",
+            priority: 10,
+            handler: async () => { fireOrder.push("low-pri"); },
+          },
+          {
+            name: "high-pri",
+            expression: "0 0 * * *",
+            priority: 1,
+            handler: async () => { fireOrder.push("high-pri"); },
+          },
+        ],
+        logger,
+        "test",
+        "default",
+        { leaderElection: false },
+        container,
+      );
+
+      await (module as any).tick();
+      // Flush microtasks
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(fireOrder[0]).toBe("high-pri");
+    });
+  });
+
+  describe("G5: Jitter", () => {
+    it("applies random jitter to nextRunAt when jitterMs is set", async () => {
+      const now = Date.now();
+      const past = new Date(now - 1000);
+
+      await storage.save("cron_schedules", "jitter-cron", {
+        name: "jitter-cron",
+        nextRunAt: past,
+      });
+
+      const module = new CronEngine(
+        [
+          {
+            name: "jitter-cron",
+            intervalMs: 60_000,
+            jitterMs: 5_000,
+            handler: async () => {},
+          },
+        ],
+        logger,
+        "test",
+        "default",
+        { leaderElection: false },
+        container,
+      );
+
+      await (module as any).tick();
+
+      const saved = await storage.get<any>("cron_schedules", "jitter-cron");
+      const nextRunTime = new Date(saved.nextRunAt).getTime();
+      // Without jitter: exactly now + 60000
+      // With jitter: now + 60000 + [0, 5000)
+      // So nextRunAt should be >= now + 60000 and < now + 65000
+      expect(nextRunTime).toBeGreaterThanOrEqual(now + 60_000 - 2000); // small tolerance for tick timing
+      expect(nextRunTime).toBeLessThan(now + 65_000 + 2000);
+    });
+
+    it("does not apply jitter when jitterMs is not set", async () => {
+      const now = Date.now();
+      const past = new Date(now - 1000);
+
+      await storage.save("cron_schedules", "no-jitter", {
+        name: "no-jitter",
+        nextRunAt: past,
+      });
+
+      const module = new CronEngine(
+        [
+          {
+            name: "no-jitter",
+            intervalMs: 60_000,
+            handler: async () => {},
+          },
+        ],
+        logger,
+        "test",
+        "default",
+        { leaderElection: false },
+        container,
+      );
+
+      await (module as any).tick();
+
+      const saved = await storage.get<any>("cron_schedules", "no-jitter");
+      const nextRunTime = new Date(saved.nextRunAt).getTime();
+      // Without jitter: exactly now + 60000 (within tick timing tolerance)
+      expect(nextRunTime).toBeGreaterThanOrEqual(now + 59_000);
+      expect(nextRunTime).toBeLessThanOrEqual(now + 61_000);
+    });
+  });
+
   describe("fire() execution", () => {
     it("handles handler success and saves telemetry", async () => {
       const module = new CronEngine(

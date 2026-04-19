@@ -67,6 +67,10 @@ export interface BaseDefinition {
 	disabledBehavior?: DisabledBehavior;
 	status?: string;
 	payload?: unknown;
+	/**  Execution priority when multiple schedules fire simultaneously. Lower = higher priority. Default: 0. */
+	priority?: number;
+	/**  Random jitter in ms added to nextRunAt to prevent thundering herd. Default: 0. */
+	jitterMs?: number;
 }
 
 export interface BaseSchedulerConfig {
@@ -381,6 +385,13 @@ export abstract class BaseSchedulerEngine<
 				},
 			);
 
+			//  Sort due schedules by priority (lower number = higher priority)
+			due.sort((a: any, b: any) => {
+				const aPri = this.getDefinition(a.name)?.priority ?? 0;
+				const bPri = this.getDefinition(b.name)?.priority ?? 0;
+				return aPri - bPri;
+			});
+
 			for (const record of due) {
 				const def = this.getDefinition(record.name);
 				if (!def) continue;
@@ -430,7 +441,13 @@ export abstract class BaseSchedulerEngine<
 					continue;
 				}
 
-				const nextRun = this.computeNextRun(def, now);
+				let nextRun = this.computeNextRun(def, now);
+
+				//  Apply jitter to prevent thundering herd
+				if (nextRun && def.jitterMs && def.jitterMs > 0) {
+					const jitter = Math.floor(Math.random() * def.jitterMs);
+					nextRun = new Date(nextRun.getTime() + jitter);
+				}
 				if (!nextRun) {
 					this.logger.error(
 						"Cannot compute next run — suspending to prevent runaway loop",

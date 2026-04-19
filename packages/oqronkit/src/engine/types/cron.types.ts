@@ -54,6 +54,10 @@ export interface CronDefinition {
    * @default "hold"
    */
   disabledBehavior?: DisabledBehavior;
+  /**  Execution priority when multiple schedules fire simultaneously. Lower = higher priority. Default: 0. */
+  priority?: number;
+  /**  Random jitter in ms added to nextRunAt to prevent thundering herd. Default: 0. */
+  jitterMs?: number;
 }
 
 export interface JobRecord {
