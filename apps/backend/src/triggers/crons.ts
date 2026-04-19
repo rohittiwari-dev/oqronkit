@@ -18,6 +18,11 @@
  *  ✓ Lifecycle hooks (beforeRun, afterRun, onError, onMissedFire)
  *  ✓ History retention controls (keepHistory, keepFailedHistory)
  *  ✓ Environment/project awareness
+ *  ✓ [NEW] Schedule versioning (version field)
+ *  ✓ [NEW] Priority ordering (priority field)
+ *  ✓ [NEW] Thundering herd prevention (jitterMs field)
+ *  ✓ [NEW] Per-schedule rate limiting (rateLimiter field)
+ *  ✓ [NEW] Expression validation at construction (auto — throws on bad cron)
  */
 
 import type { ICronContext } from "oqronkit";
@@ -25,25 +30,29 @@ import { cron } from "oqronkit";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. DAILY ANALYTICS REPORT
-//    Cron expression • Progress tracking • Timeout • Hooks • Tags
+//    Cron expression • Priority (P0 — runs first) • Progress • Hooks
 // ─────────────────────────────────────────────────────────────────────────────
 export const dailyAnalyticsReport = cron({
   name: "daily-analytics-report",
-  expression: "0 8 * * *", // Every day at 8:00 AM
+  expression: "0 8 * * *", // Every day at 8:00 AM (validated at boot!)
   timezone: "Asia/Kolkata",
 
-  // If the server was down at 8 AM, run once when it restarts
+  // ── NEW: Schema versioning ──
+  // Bump this when you change cron config to trigger controlled migration.
+  // OqronKit preserves runCount/paused state but recomputes nextRunAt.
+  version: 2,
+
+  // ── NEW: Priority ──
+  // Lower number = fires first when multiple crons are due simultaneously.
+  // Analytics reports should run before cache warmups.
+  priority: 1,
+
   missedFire: "run-once",
-
-  // Don't stack runs — skip if the previous day's report is still running
   overlap: "skip",
-
-  // Kill the handler if it runs > 2 minutes
   timeout: 120_000,
 
   tags: ["analytics", "reporting", "daily"],
 
-  // Keep only the last 30 successful runs, keep ALL failures for debugging
   keepHistory: 30,
   keepFailedHistory: true,
   guaranteedWorker: true,
@@ -74,21 +83,17 @@ export const dailyAnalyticsReport = cron({
   },
 
   handler: async (ctx: ICronContext) => {
-    // Step 1: Extract
     ctx.progress(10, "Querying raw event data from clickhouse");
     await new Promise((r) => setTimeout(r, 200));
 
-    // Step 2: Transform
     ctx.progress(40, "Aggregating metrics by tenant");
     await new Promise((r) => setTimeout(r, 200));
 
-    // Respect cancellation signal (e.g., during graceful shutdown)
     if (ctx.signal.aborted) {
       ctx.log.warn("Report aborted mid-flight");
       return { aborted: true };
     }
 
-    // Step 3: Load
     ctx.progress(80, "Writing to data warehouse");
     await new Promise((r) => setTimeout(r, 200));
 
@@ -103,38 +108,37 @@ export const dailyAnalyticsReport = cron({
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 2. WEEKLY DATABASE MAINTENANCE
-//    Cron expression • Abort-safe • History pruning • Skip overlap
+//    Cron expression • Low priority • Abort-safe • History pruning
 // ─────────────────────────────────────────────────────────────────────────────
 export const weeklyDbCleanup = cron({
   name: "weekly-db-cleanup",
   expression: "0 2 * * 0", // Every Sunday at 2 AM
 
-  missedFire: "skip", // Don't backfill missed cleanups
+  // ── NEW: Low priority ──
+  // DB cleanup runs after billing/analytics if they happen to fire together.
+  priority: 50,
+
+  missedFire: "skip",
   overlap: "skip",
   tags: ["maintenance", "database", "weekly"],
 
-  // Only keep the last 10 cleanup runs, discard failed ones entirely
   keepHistory: 10,
   keepFailedHistory: false,
 
   handler: async (ctx: ICronContext) => {
     ctx.log.info("🗄️  Starting weekly DB maintenance");
 
-    // Phase 1: Vacuum expired sessions
     ctx.progress(25, "Vacuuming expired sessions");
     await new Promise((r) => setTimeout(r, 100));
 
-    // Always check signal between long operations
     if (ctx.signal.aborted) {
       ctx.log.warn("Cleanup interrupted by shutdown signal");
       return;
     }
 
-    // Phase 2: Archive old audit logs
     ctx.progress(50, "Archiving audit logs older than 90 days");
     await new Promise((r) => setTimeout(r, 100));
 
-    // Phase 3: Rebuild indexes
     ctx.progress(75, "Analyzing and rebuilding indexes");
     await new Promise((r) => setTimeout(r, 100));
 
@@ -146,19 +150,27 @@ export const weeklyDbCleanup = cron({
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 3. HEALTH CHECK HEARTBEAT
-//    `every` interval • Overlap:run (allow concurrent) • Lightweight
+//    `every` interval • Jitter (thundering herd prevention) • Lightweight
 // ─────────────────────────────────────────────────────────────────────────────
 export const healthCheckPing = cron({
   name: "health-check-ping",
   every: { seconds: 10 },
 
-  missedFire: "skip", // Health checks are ephemeral
-  overlap: "run", // Allow concurrent pings (non-blocking)
+  // ── NEW: Jitter ──
+  // In a cluster of 50 nodes, all health checks fire at the same instant
+  // without jitter, creating a thundering herd against the health API.
+  // jitterMs adds a random 0–3s offset to each nextRunAt, spreading load.
+  jitterMs: 3_000,
+
+  // ── Low priority — never block critical crons ──
+  priority: 100,
+
+  missedFire: "skip",
+  overlap: "run",
   tags: ["health", "monitoring", "infra"],
 
-  // Don't persist any history — this is purely a telemetry emitter
   keepHistory: false,
-  keepFailedHistory: 5, // But track the last 5 failures for debugging
+  keepFailedHistory: 5,
 
   handler: async (ctx: ICronContext) => {
     const checks = {
@@ -174,23 +186,52 @@ export const healthCheckPing = cron({
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 4. INVENTORY SYNC WITH RETRIES
-//    `every` interval • Exponential retry • Timeout • Error hooks
+// 4. INVENTORY SYNC — RATE LIMITED
+//    `every` interval • Per-schedule rate limiting • Retry • Error hooks
 // ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * ── NEW: Rate limiter integration ──
+ * Compose any IRateLimiter (or any object with check() → { allowed })
+ * with the scheduler. If the rate limiter says "no", the fire is skipped
+ * and the pointer advances normally. If the limiter throws (Redis down),
+ * the fire proceeds anyway (fail-open).
+ *
+ * In production, you'd use:
+ *   import { defineRateLimit } from "oqronkit";
+ *   const supplierApiLimiter = defineRateLimit({ ... });
+ *
+ * For this example, we use a simple inline mock:
+ */
+const supplierApiLimiter = {
+  async check(_ctx: { name: string }) {
+    // Real implementation: sliding window against Redis
+    return { allowed: true };
+  },
+};
+
 export const inventorySync = cron({
   name: "inventory-sync",
   every: { minutes: 15 },
 
   overlap: "skip",
-  timeout: 300_000, // 5 minute ceiling
+  timeout: 300_000,
+
+  // ── NEW: Per-schedule rate limiting ──
+  // If the supplier API has a 100-request/hour limit, gate fires through
+  // the rate limiter to prevent burning the quota with automated syncs.
+  rateLimiter: supplierApiLimiter,
+
+  // ── Jitter ──
+  // Spread sync across 30s window if running on multiple worker nodes.
+  jitterMs: 30_000,
 
   tags: ["inventory", "sync", "ecommerce"],
 
-  // Retry up to 3 times with exponential backoff if the supplier API flakes
   retries: {
     max: 3,
     strategy: "exponential",
-    baseDelay: 2000, // 2s → 4s → 8s
+    baseDelay: 2000,
   },
 
   hooks: {
@@ -220,7 +261,7 @@ export const inventorySync = cron({
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 5. MONTHLY BILLING — CRASH-SAFE
+// 5. MONTHLY BILLING — CRASH-SAFE + HIGHEST PRIORITY
 //    Cron expression • guaranteedWorker • HeartbeatWorker • Lock TTL
 //    This is the GOLD STANDARD for critical financial operations.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -228,22 +269,24 @@ export const billingCron = cron({
   name: "monthly-billing",
   expression: "0 0 1 * *", // Midnight on the 1st of each month
 
+  // ── NEW: Version — bump when changing config ──
+  version: 3,
+
+  // ── NEW: Highest priority — fires before everything else ──
+  priority: 0,
+
   // ── Crash Safety ──
-  // If this process dies mid-billing (OOMKill, SIGKILL, power loss),
-  // the HeartbeatWorker lock TTL expires, and the StallDetector on
-  // a sibling node automatically reclaims and re-executes the job.
   guaranteedWorker: true,
-  heartbeatMs: 5_000, // Renew lock every 5 seconds
-  lockTtlMs: 20_000, // Lock expires 20 seconds after last heartbeat
+  heartbeatMs: 5_000,
+  lockTtlMs: 20_000,
 
   // ── Execution Policy ──
-  missedFire: "run-once", // Billing must happen even if missed
-  overlap: "skip", // NEVER double-bill
-  maxConcurrent: 1, // Absolute single-execution guarantee
+  missedFire: "run-once",
+  overlap: "skip",
+  maxConcurrent: 1,
 
   tags: ["billing", "finance", "critical"],
 
-  // Fixed retry — wait exactly 30 seconds then try again
   retries: {
     max: 2,
     strategy: "fixed",
@@ -283,7 +326,6 @@ export const billingCron = cron({
     ctx.progress(30, "Calculating prorated charges for 1,247 tenants");
     await new Promise((r) => setTimeout(r, 200));
 
-    // Check abort signal between expensive phases
     if (ctx.signal.aborted) {
       ctx.log.warn("Billing aborted during proration phase");
       throw new Error("Billing aborted by shutdown signal");
@@ -307,7 +349,7 @@ export const billingCron = cron({
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 6. EMAIL DIGEST — CONCURRENCY LIMITED
-//    `every` interval • maxConcurrent • Progress • Tags
+//    Cron expression • maxConcurrent • Progress • Tags
 // ─────────────────────────────────────────────────────────────────────────────
 export const emailDigest = cron({
   name: "email-digest-sender",
@@ -316,10 +358,9 @@ export const emailDigest = cron({
   overlap: "skip",
   missedFire: "skip",
 
-  // Allow up to 3 concurrent digest batches if they overlap
   maxConcurrent: 3,
-
-  timeout: 600_000, // 10 minutes max
+  timeout: 600_000,
+  priority: 5,
 
   tags: ["email", "notifications", "digest"],
 
@@ -341,22 +382,25 @@ export const emailDigest = cron({
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 7. CACHE WARMUP — EVERY 30 SECONDS
-//    `every` interval • Short-lived • overlap: run
+// 7. CACHE WARMUP — EVERY 30 SECONDS + JITTER
+//    `every` interval • Jitter • Low priority • overlap: run
 // ─────────────────────────────────────────────────────────────────────────────
 export const cacheWarmup = cron({
   name: "cache-warmup",
   every: { seconds: 30 },
 
+  // ── NEW: Jitter + low priority ──
+  jitterMs: 5_000,  // Spread across 5s window
+  priority: 99,     // Runs last among concurrent due crons
+
   missedFire: "skip",
-  overlap: "run", // These are fast — allow overlap
+  overlap: "run",
 
   tags: ["cache", "performance"],
-  keepHistory: false, // Ephemeral — don't persist runs
+  keepHistory: false,
 
   handler: async (ctx: ICronContext) => {
     ctx.log.debug("🔥 Warming hot cache keys");
-    // Simulate refreshing top-100 product cache
     await new Promise((r) => setTimeout(r, 50));
     return { keysWarmed: 100 };
   },

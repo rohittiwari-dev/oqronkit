@@ -42,6 +42,14 @@ export type DefineCronOptions = CronScheduleConfig & {
    * @default "hold"
    */
   disabledBehavior?: DisabledBehavior;
+  /** Schema version — bump to trigger config migration while preserving operational state. */
+  version?: number;
+  /** Execution priority. Lower = fires first when multiple crons are due simultaneously. @default 0 */
+  priority?: number;
+  /** Random jitter (ms) added to nextRunAt to prevent thundering herd. @default 0 */
+  jitterMs?: number;
+  /** Optional rate limiter. If check() returns { allowed: false }, fire is skipped. */
+  rateLimiter?: { check(ctx: any): Promise<{ allowed: boolean }> };
 };
 
 // ── Helpers ─────────────────────────────────────────────────────────────────────
@@ -115,6 +123,10 @@ export const cron = (options: DefineCronOptions): CronDefinition => {
     maxConcurrent: options.maxConcurrent,
     status: options.status,
     disabledBehavior: options.disabledBehavior,
+    version: options.version,
+    priority: options.priority,
+    jitterMs: options.jitterMs,
+    rateLimiter: options.rateLimiter,
   };
 
   // Auto-register: no need for manual array wiring

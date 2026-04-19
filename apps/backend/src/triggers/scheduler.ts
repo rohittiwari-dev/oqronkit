@@ -26,21 +26,32 @@
  *  ✓ Full lifecycle hooks (beforeRun, afterRun, onError, onMissedFire)
  *  ✓ Timeout enforcement
  *  ✓ Cancel support
+ *  ✓ [NEW] Schedule versioning (version field)
+ *  ✓ [NEW] Priority ordering (priority field)
+ *  ✓ [NEW] Thundering herd prevention (jitterMs field)
+ *  ✓ [NEW] Per-schedule rate limiting (rateLimiter field)
  */
 
 import { type IScheduleContext, schedule } from "oqronkit";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 1. ONE-OFF EXECUTION — Data Migration
-//    runAt (absolute time) • Progress • Exponential retry • Hooks
+//    runAt (absolute time) • Version • Priority • Hooks
 // ─────────────────────────────────────────────────────────────────────────────
 export const dataMigration = schedule({
   name: "data-migration-v2",
 
-  // Execute exactly 5 seconds from now (simulating a future deployment window)
   runAt: new Date(Date.now() + 5_000),
 
   timezone: "America/Chicago",
+
+  // ── NEW: Schema version ──
+  // Bump when config changes. OqronKit preserves operational state
+  // (runCount, paused) but recomputes nextRunAt on version upgrade.
+  version: 2,
+
+  // ── NEW: Critical priority ──
+  priority: 0,
 
   retries: {
     max: 3,
@@ -49,7 +60,7 @@ export const dataMigration = schedule({
   },
   guaranteedWorker: true,
 
-  timeout: 120_000, // 2 minute maximum
+  timeout: 120_000,
 
   tags: ["migration", "database", "one-off"],
 
@@ -95,7 +106,7 @@ export const dataMigration = schedule({
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 2. RECURRING — Quarterly Financial Review
-//    Object-based recurring • Timezone • Conditional execution
+//    Object-based recurring • Conditional execution • Priority
 // ─────────────────────────────────────────────────────────────────────────────
 export const quarterlyReview = schedule({
   name: "quarterly-financial-review",
@@ -103,18 +114,24 @@ export const quarterlyReview = schedule({
   recurring: {
     frequency: "monthly",
     dayOfMonth: 1,
-    at: { hour: 9, minute: 0 }, // 9:00 AM
-    months: [1, 4, 7, 10], // Jan, Apr, Jul, Oct (quarterly)
+    at: { hour: 9, minute: 0 },
+    months: [1, 4, 7, 10],
   },
 
   timezone: "Europe/London",
+
+  // ── NEW: High priority ──
+  // Financial reports should fire before cleanup or cache jobs.
+  priority: 2,
+
+  // ── NEW: Version ──
+  version: 1,
 
   overlap: "skip",
   missedFire: "run-once",
 
   tags: ["finance", "quarterly", "reporting"],
 
-  // Only run if it's a business day (skip weekends)
   condition: async (ctx) => {
     const day = new Date().getDay();
     const isWeekday = day > 0 && day < 6;
@@ -148,15 +165,34 @@ export const quarterlyReview = schedule({
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 3. RRULE — Payroll Processing
-//    RFC 5545 rrule string • Crash-safe • Hooks
+//    RFC 5545 rrule string • Crash-safe • Rate limited • Hooks
 // ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * ── NEW: Rate limiter for payroll ──
+ * In a multi-node deployment, gate payroll through a rate limiter
+ * to ensure only 1 fire/hour even if leader failover causes re-fires.
+ */
+const payrollRateLimiter = {
+  async check(_ctx: { name: string }) {
+    // Real: defineRateLimit({ name: "payroll", tiers: [{ name: "global", ... }] })
+    return { allowed: true };
+  },
+};
+
 export const payrollRun = schedule({
   name: "payroll-processing",
 
   // Last Friday of every month (RFC 5545 standard)
   rrule: "FREQ=MONTHLY;BYDAY=-1FR",
 
-  // Critical financial operation — HeartbeatWorker ensures crash recoverability
+  // ── NEW: Rate limiter ──
+  rateLimiter: payrollRateLimiter,
+
+  // ── NEW: Highest priority + version ──
+  priority: 0,
+  version: 2,
+
   guaranteedWorker: true,
   heartbeatMs: 5_000,
   lockTtlMs: 30_000,
@@ -199,23 +235,28 @@ export const payrollRun = schedule({
 });
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 4. CONDITIONAL EXECUTION — Alert Escalation
-//    `every` interval • Condition function • Dynamic threshold
+// 4. CONDITIONAL + JITTER — Alert Escalation
+//    `every` interval • Condition function • Jitter • Medium priority
 // ─────────────────────────────────────────────────────────────────────────────
 export const alertEscalation = schedule({
   name: "alert-escalation-check",
 
   every: { minutes: 2 },
 
+  // ── NEW: Jitter ──
+  // Spread alert checks across a 10s window across cluster nodes.
+  jitterMs: 10_000,
+
+  // ── NEW: Medium priority ──
+  priority: 10,
+
   overlap: "skip",
   missedFire: "skip",
 
   tags: ["alerts", "monitoring", "sre"],
 
-  // Only fire if the error rate exceeds threshold
   condition: async (ctx) => {
-    // Simulate checking a metrics API
-    const errorRate = Math.random() * 10; // Simulated 0-10% error rate
+    const errorRate = Math.random() * 10;
     const threshold = 5.0;
 
     if (errorRate < threshold) {
@@ -258,7 +299,6 @@ export const onboardingEmailJob = schedule<{
   name: "onboarding-email",
 
   // No `every`/`runAt`/`recurring` — this is a TEMPLATE.
-  // It sits dormant until .schedule() or .trigger() is called.
 
   timeout: 30_000,
 
@@ -310,26 +350,26 @@ export async function scheduleOnboardingDrip(
   userName: string,
   email: string,
 ) {
-  // Email 1: Welcome — fires 5 seconds after signup (simulated; real: 0 delay)
+  // Email 1: Welcome — fires immediately
   await onboardingEmailJob.trigger({
     payload: { userId, template: "welcome", userName, email },
   });
 
-  // Email 2: Getting Started Tips — fires 3 days after signup (simulated: 10s)
+  // Email 2: Getting Started Tips — fires 3 days later (simulated: 10s)
   await onboardingEmailJob.schedule({
     nameSuffix: `${userId}-tips`,
     runAfter: { seconds: 10 },
     payload: { userId, template: "day3-getting-started", userName, email },
   });
 
-  // Email 3: Feature Highlight — fires 7 days after signup (simulated: 20s)
+  // Email 3: Feature Highlight — fires 7 days later (simulated: 20s)
   await onboardingEmailJob.schedule({
     nameSuffix: `${userId}-features`,
     runAfter: { seconds: 20 },
     payload: { userId, template: "day7-feature-highlight", userName, email },
   });
 
-  // Email 4: Feedback Request — fires 14 days after signup (simulated: 30s)
+  // Email 4: Feedback Request — fires 14 days later (simulated: 30s)
   await onboardingEmailJob.schedule({
     nameSuffix: `${userId}-feedback`,
     runAfter: { seconds: 30 },
@@ -339,8 +379,21 @@ export async function scheduleOnboardingDrip(
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 6. DYNAMIC TEMPLATE — Invoice Generation
-//    Template pattern • Typed payload • Crash-safe • .trigger()
+//    Typed payload • Crash-safe • Rate limited • .trigger()
 // ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * ── NEW: Rate limit invoice generation ──
+ * Prevent burst generation (e.g., checkout storm) from overwhelming
+ * the PDF rendering pipeline.
+ */
+const invoiceRateLimiter = {
+  async check(_ctx: { name: string }) {
+    // Real: sliding-window limiter, 50 invoices per minute
+    return { allowed: true };
+  },
+};
+
 export const invoiceGenerationJob = schedule<{
   orderId: string;
   customerId: string;
@@ -349,7 +402,10 @@ export const invoiceGenerationJob = schedule<{
 }>({
   name: "invoice-generation",
 
-  // Crash-safe — if we die mid-PDF-generation, another node picks it up
+  // ── NEW: Rate limiter + version ──
+  rateLimiter: invoiceRateLimiter,
+  version: 1,
+
   guaranteedWorker: true,
   heartbeatMs: 3_000,
   lockTtlMs: 15_000,
@@ -404,7 +460,6 @@ export const trialExpirationJob = schedule<{
 }>({
   name: "trial-expiration",
 
-  // Template — scheduled dynamically when trial starts
   timeout: 30_000,
   tags: ["trials", "lifecycle", "billing"],
 
@@ -415,15 +470,12 @@ export const trialExpirationJob = schedule<{
       plan: planName,
     });
 
-    // Step 1: Downgrade to free tier
     ctx.progress(33, "Downgrading tenant to free tier");
     await new Promise((r) => setTimeout(r, 100));
 
-    // Step 2: Send notification
     ctx.progress(66, `Sending expiration email to ${adminEmail}`);
     await new Promise((r) => setTimeout(r, 100));
 
-    // Step 3: Schedule follow-up nudge
     ctx.progress(100, "Trial expiration processed");
     return { downgraded: true, notified: true };
   },
@@ -440,19 +492,23 @@ export async function startTrial(
 ) {
   await trialExpirationJob.schedule({
     nameSuffix: tenantId,
-    runAfter: { seconds: 15 }, // Real: { days: 14 }
+    runAfter: { seconds: 15 },
     payload: { tenantId, planName, adminEmail },
   });
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 8. EVERY INTERVAL — Metrics Aggregation Pipeline
-//    `every` • Progress • Overlap skip
+//    `every` • Jitter • Priority • Overlap skip
 // ─────────────────────────────────────────────────────────────────────────────
 export const metricsAggregation = schedule({
   name: "metrics-aggregation",
 
   every: { minutes: 5 },
+
+  // ── NEW: Jitter + priority ──
+  jitterMs: 15_000,  // Spread across 15s window in cluster
+  priority: 20,      // Medium priority — after billing, before cache
 
   overlap: "skip",
   missedFire: "skip",

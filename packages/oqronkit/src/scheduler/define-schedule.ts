@@ -65,6 +65,14 @@ export type DefineScheduleOptions<TPayload> = {
    * @default "hold"
    */
   disabledBehavior?: DisabledBehavior;
+  /** Schema version — bump to trigger config migration while preserving operational state. */
+  version?: number;
+  /** Execution priority. Lower = fires first when multiple schedules are due simultaneously. @default 0 */
+  priority?: number;
+  /** Random jitter (ms) added to nextRunAt to prevent thundering herd. @default 0 */
+  jitterMs?: number;
+  /** Optional rate limiter. If check() returns { allowed: false }, fire is skipped. */
+  rateLimiter?: { check(ctx: any): Promise<{ allowed: boolean }> };
 };
 
 /** Minimal interface for the attached ScheduleEngine instance. */
@@ -113,6 +121,10 @@ export const schedule = <TPayload = unknown>(
     maxConcurrent: options.maxConcurrent,
     status: options.status,
     disabledBehavior: options.disabledBehavior,
+    version: options.version,
+    priority: options.priority,
+    jitterMs: options.jitterMs,
+    rateLimiter: options.rateLimiter,
   };
 
   _registerSchedule(def as ScheduleDefinition<unknown>);
