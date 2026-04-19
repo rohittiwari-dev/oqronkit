@@ -1,4 +1,4 @@
-import type { IStorageEngine, ListOptions } from "../types/engine.js";
+import type { IStorageEngine, ListOptions, WhereCondition } from "../types/engine.js";
 
 /**
  * Memory-based implementation of the Storage Engine.
@@ -45,6 +45,13 @@ export class MemoryStore implements IStorageEngine {
       });
     }
 
+    // E1: Apply comparison conditions
+    if (opts?.where) {
+      results = results.filter((item: any) =>
+        this.matchesWhere(item, opts.where!),
+      );
+    }
+
     // Sort by createdAt descending (newest first)
     results.sort((a: any, b: any) => {
       const aTime = a.createdAt?.getTime?.() ?? 0;
@@ -68,18 +75,24 @@ export class MemoryStore implements IStorageEngine {
   async count(
     namespace: string,
     filter?: Record<string, any>,
+    where?: WhereCondition[],
   ): Promise<number> {
     const map = this.getNamespaceMap(namespace);
-    if (!filter) return map.size;
+    if (!filter && !where) return map.size;
 
     let count = 0;
     for (const item of map.values()) {
       let matches = true;
-      for (const [key, val] of Object.entries(filter)) {
-        if (item[key] !== val) {
-          matches = false;
-          break;
+      if (filter) {
+        for (const [key, val] of Object.entries(filter)) {
+          if (item[key] !== val) {
+            matches = false;
+            break;
+          }
         }
+      }
+      if (matches && where) {
+        matches = this.matchesWhere(item, where);
       }
       if (matches) count++;
     }
@@ -118,5 +131,30 @@ export class MemoryStore implements IStorageEngine {
     }
 
     return prunedCount;
+  }
+
+  // ── Where condition helpers ──────────────────────────────────────────────
+
+  /** Evaluates an item against all WhereConditions (AND semantics) */
+  private matchesWhere(item: any, conditions: WhereCondition[]): boolean {
+    for (const cond of conditions) {
+      const raw = item[cond.field];
+      // Null/undefined fields never match comparison operators
+      if (raw === null || raw === undefined) return false;
+
+      const a = raw instanceof Date ? raw.getTime() : raw;
+      const b = cond.value instanceof Date
+        ? (cond.value as Date).getTime()
+        : cond.value;
+
+      switch (cond.op) {
+        case "$lt":  if (!(a < (b as any))) return false; break;
+        case "$lte": if (!(a <= (b as any))) return false; break;
+        case "$gt":  if (!(a > (b as any))) return false; break;
+        case "$gte": if (!(a >= (b as any))) return false; break;
+        case "$ne":  if (!(a !== b)) return false; break;
+      }
+    }
+    return true;
   }
 }

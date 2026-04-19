@@ -1,5 +1,5 @@
 import type { Redis } from "ioredis";
-import type { IStorageEngine, ListOptions } from "../types/engine.js";
+import type { IStorageEngine, ListOptions, WhereCondition } from "../types/engine.js";
 
 /**
  * Redis implementation of the universal Storage Engine.
@@ -101,6 +101,13 @@ export class RedisStore implements IStorageEngine {
       });
     }
 
+    // E1: Apply comparison conditions in memory
+    if (opts?.where) {
+      entities = entities.filter((item: any) =>
+        this.matchesWhere(item, opts.where!),
+      );
+    }
+
     return entities;
   }
 
@@ -150,5 +157,27 @@ export class RedisStore implements IStorageEngine {
       }
       return v;
     });
+  }
+
+  /** E1: Evaluates an item against all WhereConditions (AND semantics) */
+  private matchesWhere(item: any, conditions: WhereCondition[]): boolean {
+    for (const cond of conditions) {
+      const raw = item[cond.field];
+      if (raw === null || raw === undefined) return false;
+
+      const a = raw instanceof Date ? raw.getTime() : raw;
+      const b = cond.value instanceof Date
+        ? (cond.value as Date).getTime()
+        : cond.value;
+
+      switch (cond.op) {
+        case "$lt":  if (!(a < (b as any))) return false; break;
+        case "$lte": if (!(a <= (b as any))) return false; break;
+        case "$gt":  if (!(a > (b as any))) return false; break;
+        case "$gte": if (!(a >= (b as any))) return false; break;
+        case "$ne":  if (!(a !== b)) return false; break;
+      }
+    }
+    return true;
   }
 }

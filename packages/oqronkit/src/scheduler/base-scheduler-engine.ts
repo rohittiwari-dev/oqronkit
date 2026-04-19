@@ -370,9 +370,15 @@ export abstract class BaseSchedulerEngine<
 			}
 
 			const now = new Date();
-			const allSchedules = await this.di.storage.list<any>(this.storageNamespace);
-			const due = allSchedules.filter(
-				(s: any) => s.nextRunAt && new Date(s.nextRunAt) <= now,
+			// E1: Fetch only due schedules instead of scanning all
+			const due = await this.di.storage.list<any>(
+				this.storageNamespace,
+				undefined,
+				{
+					where: [
+						{ field: "nextRunAt", op: "$lte", value: now },
+					],
+				},
 			);
 
 			for (const record of due) {

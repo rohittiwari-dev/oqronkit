@@ -1,8 +1,25 @@
+/** Comparison operators for filtered queries */
+export type WhereOp = "$lt" | "$lte" | "$gt" | "$gte" | "$ne";
+
+export interface WhereCondition {
+  /** The field name to compare (top-level key in the record) */
+  field: string;
+  /** Comparison operator */
+  op: WhereOp;
+  /** The value to compare against */
+  value: unknown;
+}
+
 export interface ListOptions {
   /** Maximum number of records to return. Defaults to all. */
   limit?: number;
   /** Number of records to skip (for pagination). Defaults to 0. */
   offset?: number;
+  /**
+   * Comparison conditions applied AFTER exact-match filter.
+   * Fields with null/undefined values are excluded from comparison matches.
+   */
+  where?: WhereCondition[];
 }
 
 /** Job ordering strategy for broker queues */

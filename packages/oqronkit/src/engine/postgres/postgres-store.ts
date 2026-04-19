@@ -103,17 +103,34 @@ export class PostgresStore implements IStorageEngine {
       // Build JSONB @> containment query for exact match filtering
       const filterJson = JSON.stringify(filter);
       query = `SELECT data FROM ${this.tableName}
-               WHERE namespace = $1 AND data @> $2::jsonb
-               ORDER BY created_at DESC
-               LIMIT $3 OFFSET $4`;
-      params.push(filterJson, limit, offset);
+               WHERE namespace = $1 AND data @> $2::jsonb`;
+      params.push(filterJson);
     } else {
       query = `SELECT data FROM ${this.tableName}
-               WHERE namespace = $1
-               ORDER BY created_at DESC
-               LIMIT $2 OFFSET $3`;
-      params.push(limit, offset);
+               WHERE namespace = $1`;
     }
+
+    // E1: Append WHERE conditions for comparison operators
+    if (opts?.where) {
+      for (const cond of opts.where) {
+        const sqlOp = { $lt: '<', $lte: '<=', $gt: '>', $gte: '>=', $ne: '!=' }[cond.op];
+        const paramIdx = params.length + 1;
+
+        if (cond.value instanceof Date) {
+          // Date values stored as { __type: "Date", __val: "ISO" } wrapper
+          query += ` AND (data->'${cond.field}'->>'__val')::timestamptz ${sqlOp} $${paramIdx}::timestamptz`;
+          params.push(cond.value.toISOString());
+        } else {
+          query += ` AND (data->>'${cond.field}')::text ${sqlOp} $${paramIdx}::text`;
+          params.push(String(cond.value));
+        }
+      }
+    }
+
+    const limitIdx = params.length + 1;
+    const offsetIdx = params.length + 2;
+    query += ` ORDER BY created_at DESC LIMIT $${limitIdx} OFFSET $${offsetIdx}`;
+    params.push(limit, offset);
 
     const result = await this.pool.query(query, params);
     return result.rows.map((row: any) => this.deserialize(row.data));

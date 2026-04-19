@@ -62,6 +62,10 @@ export type {
   ListOptions,
 } from "./types/engine.js";
 export type {
+  WhereCondition,
+  WhereOp,
+} from "./types/engine.js";
+export type {
   FlowJobNode,
   JobFilter,
   JobLogEntry,
