@@ -6,6 +6,17 @@ export type OqronEventMap = {
   "job:progress": [queueName: string, jobId: string, value: number];
   "job:success": [queueName: string, jobId: string];
   "job:fail": [queueName: string, jobId: string, error: Error];
+  "job:cancelled": [queueName: string, jobId: string];
+  "job:stalled": [queueName: string, jobId: string];
+  "job:retried": [jobId: string, retryId: string];
+
+  // ── Module lifecycle ──────────────────────────────────────────────────────
+  "module:enabled": [moduleName: string];
+  "module:disabled": [moduleName: string];
+
+  // ── Schedule instance lifecycle ───────────────────────────────────────────
+  "schedule:paused": [scheduleName: string];
+  "schedule:resumed": [scheduleName: string];
 
   // ── System ───────────────────────────────────────────────────────────────
   "system:ready": [];

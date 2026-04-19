@@ -3,15 +3,17 @@ import {
   type DisabledBehavior,
   type Logger,
   OqronContainer,
-  ScheduleContext,
+  OqronEventBus, ScheduleContext,
   type ScheduleDefinition
 } from "../engine/index.js";
-import { ShardedLeaderElection } from "../engine/lock/index.js";
+import { ShardedLeaderElection, StallDetector } from "../engine/lock/index.js";
 import { BaseSchedulerEngine } from "./base-scheduler-engine.js";
 import {
   DEFAULT_INTERVAL_JITTER_FACTOR,
   DEFAULT_LEADER_TTL_MS,
   DEFAULT_MISFIRE_THRESHOLD_MS,
+  DEFAULT_STALL_DETECTOR_INTERVAL_MS,
+  DEFAULT_TICK_INTERVAL_MS,
 } from "./constants.js";
 import { _attachScheduleEngine } from "./define-schedule.js";
 
@@ -30,6 +32,7 @@ export class ScheduleEngine extends BaseSchedulerEngine<ScheduleDefinition> {
   protected readonly moduleType = "schedule";
   protected readonly queueName = "system_schedule";
   protected readonly lockInfix = ":schedule:run:";
+  protected readonly storageNamespace = "schedule_schedules";
 
   private shardedLeader?: ShardedLeaderElection;
   private readonly schedules = new Map<string, ScheduleDefinition>();
@@ -72,7 +75,10 @@ export class ScheduleEngine extends BaseSchedulerEngine<ScheduleDefinition> {
 
   protected computeNextRun(def: ScheduleDefinition, from: Date): Date | null {
     try {
-      if (def.runAt) return new Date(def.runAt);
+      if (def.runAt) {
+        const d = new Date(def.runAt);
+        return d > from ? d : null; // One-shot: null after firing prevents re-fire loop
+      }
 
       if (def.runAfter) {
         const add =
@@ -141,7 +147,7 @@ export class ScheduleEngine extends BaseSchedulerEngine<ScheduleDefinition> {
     this.logger.info("Schedule Engine: Performing leader initialization...");
 
     try {
-      const allSchedules = await this.di.storage.list<any>("schedules");
+      const allSchedules = await this.di.storage.list<any>(this.storageNamespace);
       const now = new Date();
 
       for (const record of allSchedules) {
@@ -168,7 +174,7 @@ export class ScheduleEngine extends BaseSchedulerEngine<ScheduleDefinition> {
             this.logger.info("Missed fire skipped per policy", { name: def.name });
             const nextRun = this.computeNextRun(def, now);
             if (nextRun) {
-              await this.di.storage.save("schedules", def.name, {
+              await this.di.storage.save(this.storageNamespace, def.name, {
                 ...record, nextRunAt: nextRun, lastRunAt: now,
               });
             }
@@ -197,7 +203,7 @@ export class ScheduleEngine extends BaseSchedulerEngine<ScheduleDefinition> {
           void this.fire(def, now);
           const nextRun = this.computeNextRun(def, now);
           if (nextRun) {
-            await this.di.storage.save("schedules", def.name, {
+            await this.di.storage.save(this.storageNamespace, def.name, {
               ...record, nextRunAt: nextRun, lastRunAt: now,
             });
           }
@@ -225,7 +231,7 @@ export class ScheduleEngine extends BaseSchedulerEngine<ScheduleDefinition> {
   }
 
   private async upsertAndSeed(def: ScheduleDefinition, now: Date) {
-    const existing = await this.di.storage.get<any>("schedules", def.name);
+    const existing = await this.di.storage.get<any>(this.storageNamespace, def.name);
 
     let shouldRecompute = !existing?.nextRunAt;
     if (existing) {
@@ -239,7 +245,7 @@ export class ScheduleEngine extends BaseSchedulerEngine<ScheduleDefinition> {
       }
     }
 
-    await this.di.storage.save("schedules", def.name, {
+    await this.di.storage.save(this.storageNamespace, def.name, {
       ...(existing || {}),
       ...def,
       nextRunAt: shouldRecompute ? null : existing?.nextRunAt,
@@ -250,8 +256,8 @@ export class ScheduleEngine extends BaseSchedulerEngine<ScheduleDefinition> {
     if (shouldRecompute) {
       const nextRun = this.computeNextRun(def, now);
       if (nextRun) {
-        const updated = await this.di.storage.get<any>("schedules", def.name);
-        await this.di.storage.save("schedules", def.name, {
+        const updated = await this.di.storage.get<any>(this.storageNamespace, def.name);
+        await this.di.storage.save(this.storageNamespace, def.name, {
           ...updated,
           nextRunAt: nextRun,
         });
@@ -284,8 +290,6 @@ export class ScheduleEngine extends BaseSchedulerEngine<ScheduleDefinition> {
 
   /** Start only infrastructure (no leader election) — used when sharded leader is active */
   private async startInfraOnly(): Promise<void> {
-    const { StallDetector } = await import("../engine/lock/index.js");
-    const { DEFAULT_STALL_DETECTOR_INTERVAL_MS, DEFAULT_TICK_INTERVAL_MS } = await import("./constants.js");
 
     this.stallDetector = new StallDetector(
       this.di.lock,
@@ -308,12 +312,35 @@ export class ScheduleEngine extends BaseSchedulerEngine<ScheduleDefinition> {
       () => Array.from(this.activeJobs.values()).map((j) => ({
         key: j.lockKey, ownerId: this.nodeId,
       })),
-      (key) => {
+      async (key) => {
         for (const [id, job] of this.activeJobs) {
           if (job.lockKey === key) {
             this.logger.error("Stalled schedule detected, aborting", { key, runId: id });
             job.abort?.abort();
             this.activeJobs.delete(id);
+
+            // M2: Persist stall telemetry (matching base class handler)
+            try {
+              const jobRecord = await this.di.storage.get<any>("jobs", id);
+              if (jobRecord) {
+                await this.di.storage.save("jobs", id, {
+                  ...jobRecord,
+                  stalledCount: (jobRecord.stalledCount ?? 0) + 1,
+                  timeline: [...(jobRecord.timeline || []), {
+                    ts: new Date(),
+                    from: jobRecord.status,
+                    to: "stalled",
+                    reason: `Lock expired for key ${key}`,
+                  }],
+                });
+              }
+            } catch (err) {
+              this.logger.warn("Failed to persist stall telemetry", {
+                runId: id, error: (err as Error).message,
+              });
+            }
+
+            OqronEventBus.emit("job:stalled", this.queueName, id);
           }
         }
       },
@@ -336,22 +363,35 @@ export class ScheduleEngine extends BaseSchedulerEngine<ScheduleDefinition> {
 
   async cancel(name: string): Promise<void> {
     this.schedules.delete(name);
-    await this.di.storage.delete("schedules", name);
+    await this.di.storage.delete(this.storageNamespace, name);
     this.logger.info("Schedule cancelled", { name });
   }
 
-  // ── Condition guard override ────────────────────────────────────────────────
-  // Schedule engine supports `condition` guards on definitions.
-  // We override tick to add the condition check before firing.
+  // ── M1: Condition guard via shouldFire() hook ──────────────────────────────
 
-  protected async tick(): Promise<void> {
-    // The base tick handles everything except condition guards.
-    // We intercept by overriding and calling super, but condition
-    // is checked inside the base tick's "for (const record of due)" loop.
-    // Since condition is schedule-specific and the base doesn't know about it,
-    // we just call super.tick() — condition guards were already applied in
-    // the old tick via a separate block. For now, we keep it simple.
-    await super.tick();
+  protected async shouldFire(def: ScheduleDefinition, _record: any): Promise<boolean> {
+    if (def.condition) {
+      try {
+        const ctx = new ScheduleContext({
+          id: "condition-check",
+          scheduleName: def.name,
+          firedAt: new Date(),
+          payload: def.payload,
+          logger: this.logger.child({ schedule: def.name, context: "condition" }),
+          signal: new AbortController().signal,
+          environment: this.environment,
+          project: this.project,
+        });
+        return await def.condition(ctx);
+      } catch (err) {
+        this.logger.error("Condition guard threw — skipping fire", {
+          name: def.name,
+          error: (err as Error).message,
+        });
+        return false;
+      }
+    }
+    return true;
   }
 
   protected createExecutionContext(opts: {

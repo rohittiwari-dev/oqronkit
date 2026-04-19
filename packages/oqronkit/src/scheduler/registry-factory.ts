@@ -1,4 +1,5 @@
 import type {
+  DisabledBehavior,
   IOqronModule,
   Logger
 } from "../engine/index.js";
@@ -21,14 +22,35 @@ export interface SchedulerFactoryConfig {
   container?: OqronContainer;
 }
 
+/** Typed config matching CronEngine constructor's config parameter */
+export interface CronModuleConfig {
+  enable?: boolean;
+  timezone?: string;
+  tickInterval?: number;
+  leaderElection?: boolean;
+  keepJobHistory?: boolean | number;
+  keepFailedJobHistory?: boolean | number;
+  shutdownTimeout?: number;
+  lagMonitor?: { maxLagMs?: number; sampleIntervalMs?: number };
+  disabledBehavior?: DisabledBehavior;
+  maxHeldJobs?: number;
+}
+
+/** Typed config matching ScheduleEngine constructor's config parameter */
+export interface ScheduleModuleConfig extends CronModuleConfig {
+  clustering?: {
+    totalShards?: number;
+    ownedShards?: number[];
+    region?: string;
+  };
+}
+
 export interface CronModuleFactoryConfig extends SchedulerFactoryConfig {
-  /** Raw module config passed to CronEngine constructor. */
-  moduleConfig?: Record<string, unknown>;
+  moduleConfig?: CronModuleConfig;
 }
 
 export interface ScheduleModuleFactoryConfig extends SchedulerFactoryConfig {
-  /** Raw module config passed to ScheduleEngine constructor. */
-  moduleConfig?: Record<string, unknown>;
+  moduleConfig?: ScheduleModuleConfig;
 }
 
 /**
@@ -36,9 +58,6 @@ export interface ScheduleModuleFactoryConfig extends SchedulerFactoryConfig {
  *   1. Draining the pending registry
  *   2. Merging global tags
  *   3. Constructing the engine
- *
- * This replaces the duplicated wiring in `index.ts` with a single entry point.
- * Can be used directly or as an optional helper — does NOT replace existing wiring.
  *
  * @example
  * ```ts
@@ -55,7 +74,7 @@ export function createCronModule(config: CronModuleFactoryConfig): IOqronModule 
     config.logger,
     config.environment,
     config.project,
-    config.moduleConfig as any,
+    config.moduleConfig,
     config.container,
   );
 }
@@ -72,7 +91,7 @@ export function createScheduleModule(config: ScheduleModuleFactoryConfig): IOqro
     config.logger,
     config.environment,
     config.project,
-    config.moduleConfig as any,
+    config.moduleConfig,
     config.container,
   );
 }

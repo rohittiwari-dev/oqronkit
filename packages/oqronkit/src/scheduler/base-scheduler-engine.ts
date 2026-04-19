@@ -140,6 +140,8 @@ export abstract class BaseSchedulerEngine<
 	protected abstract readonly queueName: string;
 	/** Lock key infix (e.g. ":run:", ":schedule:run:") */
 	protected abstract readonly lockInfix: string;
+	/** Storage namespace for schedule records (e.g. "cron_schedules", "schedule_schedules") — G1 fix */
+	protected abstract readonly storageNamespace: string;
 
 	/** Resolve a definition by name */
 	protected abstract getDefinition(name: string): TDef | undefined;
@@ -159,9 +161,20 @@ export abstract class BaseSchedulerEngine<
 		localTimeline: Array<{ ts: Date; from: string; to: string; reason: string }>;
 	}): any;
 
+	/**
+	 * Hook for subclasses to add pre-fire checks (e.g. condition guards).
+	 * Return false to skip firing this definition. Default: always fire.
+	 */
+	protected async shouldFire(_def: TDef, _record: any): Promise<boolean> {
+		return true;
+	}
+
 	// ── Lifecycle (shared) ────────────────────────────────────────────────────
 
 	async start(): Promise<void> {
+		// B3: Idempotent — skip if already running
+		if (this.tickTimer) return;
+
 		if (this.baseConfig?.leaderElection !== false) {
 			this.leader = new LeaderElection(
 				this.di.lock,
@@ -290,10 +303,51 @@ export abstract class BaseSchedulerEngine<
 		if (!this.tickTimer) {
 			await this.start();
 		}
+		OqronEventBus.emit("module:enabled", this.name);
 	}
 
 	async disable(): Promise<void> {
 		this.enabled = false;
+		// B2: Stop timers and monitors to avoid wasted CPU
+		if (this.tickTimer) {
+			clearInterval(this.tickTimer);
+			this.tickTimer = undefined;
+		}
+		this.stallDetector?.stop();
+		this.lagMonitor.stop();
+		OqronEventBus.emit("module:disabled", this.name);
+	}
+
+	// ── C4: Cancel a running job by ID ──────────────────────────────────────
+
+	async cancelActiveJob(jobId: string): Promise<boolean> {
+		const entry = this.activeJobs.get(jobId);
+		if (!entry) return false;
+
+		entry.abort?.abort();
+		if (entry.worker) {
+			await entry.worker.stop();
+		} else {
+			await this.di.lock.release(entry.lockKey, this.nodeId).catch(() => {});
+		}
+		this.activeJobs.delete(jobId);
+
+		// Persist cancelled status
+		const job = await this.di.storage.get<any>("jobs", jobId);
+		if (job) {
+			await this.di.storage.save("jobs", jobId, {
+				...job,
+				status: "cancelled",
+				finishedAt: new Date(),
+				timeline: [...(job.timeline || []), {
+					ts: new Date(), from: job.status, to: "cancelled", reason: "Cancelled via admin API",
+				}],
+			});
+		}
+
+		OqronEventBus.emit("job:cancelled", this.queueName, jobId);
+		this.logger.info("Active job cancelled", { jobId });
+		return true;
 	}
 
 	// ── Tick (shared structure) ───────────────────────────────────────────────
@@ -318,7 +372,7 @@ export abstract class BaseSchedulerEngine<
 			}
 
 			const now = new Date();
-			const allSchedules = await this.di.storage.list<any>("schedules");
+			const allSchedules = await this.di.storage.list<any>(this.storageNamespace);
 			const due = allSchedules.filter(
 				(s: any) => s.nextRunAt && new Date(s.nextRunAt) <= now,
 			);
@@ -336,10 +390,11 @@ export abstract class BaseSchedulerEngine<
 
 					const nextRun = this.computeNextRun(def, now);
 					if (nextRun) {
-						await this.di.storage.save("schedules", def.name, {
+						await this.di.storage.save(this.storageNamespace, def.name, {
 							...record,
 							nextRunAt: nextRun,
 							lastRunAt: now,
+							type: this.moduleType,
 						});
 					}
 
@@ -365,23 +420,31 @@ export abstract class BaseSchedulerEngine<
 				}
 
 				// CRITICAL: Advance pointer BEFORE firing
+				// M1: Condition guard hook
+				if (!(await this.shouldFire(def, record))) {
+					this.logger.debug("Skipping fire — condition guard returned false", { name: def.name });
+					continue;
+				}
+
 				const nextRun = this.computeNextRun(def, now);
 				if (!nextRun) {
 					this.logger.error(
 						"Cannot compute next run — suspending to prevent runaway loop",
 						{ name: def.name },
 					);
-					await this.di.storage.save("schedules", def.name, {
+					await this.di.storage.save(this.storageNamespace, def.name, {
 						...record,
 						nextRunAt: null,
+						type: this.moduleType,
 					});
 					continue;
 				}
 
-				await this.di.storage.save("schedules", def.name, {
+				await this.di.storage.save(this.storageNamespace, def.name, {
 					...record,
 					nextRunAt: nextRun,
 					lastRunAt: now,
+					type: this.moduleType,
 				});
 
 				void this.fire(def, now);
@@ -809,6 +872,28 @@ export abstract class BaseSchedulerEngine<
 				new Error(error ?? "Unknown error"),
 			);
 		}
+
+		// F2+F3: Enrich schedule record with aggregate counters and last-run info
+		try {
+			const schedRecord = await this.di.storage.get<any>(this.storageNamespace, def.name);
+			if (schedRecord) {
+				await this.di.storage.save(this.storageNamespace, def.name, {
+					...schedRecord,
+					runCount: (schedRecord.runCount ?? 0) + 1,
+					successCount: (schedRecord.successCount ?? 0) + (status === "completed" ? 1 : 0),
+					failCount: (schedRecord.failCount ?? 0) + (status === "failed" ? 1 : 0),
+					lastStatus: status,
+					lastDurationMs: finishedAt.getTime() - startedAt.getTime(),
+					lastError: status === "failed" ? error : undefined,
+					lastRunId: runId,
+				});
+			}
+		} catch (enrichErr) {
+			this.logger.warn("Failed to enrich schedule record", {
+				name: def.name,
+				error: (enrichErr as Error).message,
+			});
+		}
 	}
 
 	// ── Shared progress/log callback factory ──────────────────────────────────
@@ -851,10 +936,17 @@ export abstract class BaseSchedulerEngine<
 		runId: string,
 		localLogs: Array<{ level: string; msg: string; ts: Date }>,
 	): (level: string, msg: string) => void {
+		const loggerMethods: Record<string, ((msg: string, meta?: Record<string, unknown>) => void) | undefined> = {
+			trace: this.logger.trace?.bind(this.logger),
+			debug: this.logger.debug?.bind(this.logger),
+			info: this.logger.info?.bind(this.logger),
+			warn: this.logger.warn?.bind(this.logger),
+			error: this.logger.error?.bind(this.logger),
+			fatal: this.logger.fatal?.bind(this.logger),
+		};
+
 		return (level, msg) => {
-			(this.logger as any)[level]?.(`[${this.moduleType}:${defName}] ${msg}`, {
-				runId,
-			});
+			loggerMethods[level]?.(`[${this.moduleType}:${defName}] ${msg}`, { runId });
 			localLogs.push({ level, msg, ts: new Date() });
 		};
 	}

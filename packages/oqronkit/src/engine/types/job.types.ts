@@ -24,6 +24,7 @@ export type JobTriggerSource =
   | "api"
   | "manual"
   | "retry"
+  | "rerun"
   | "flow";
 
 export type JobStatus =

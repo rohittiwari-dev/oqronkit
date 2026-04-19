@@ -48,6 +48,8 @@ export type DefineCronOptions = CronScheduleConfig & {
 
 function everyToIntervalMs(every: EveryConfig): number {
   let ms = 0;
+  if (every.weeks) ms += every.weeks * 604_800_000;
+  if (every.days) ms += every.days * 86_400_000;
   if (every.seconds) ms += every.seconds * 1_000;
   if (every.minutes) ms += every.minutes * 60_000;
   if (every.hours) ms += every.hours * 3_600_000;

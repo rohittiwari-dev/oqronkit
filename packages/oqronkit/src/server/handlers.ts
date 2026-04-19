@@ -265,11 +265,73 @@ export async function handleAdminJob(
       };
     return { status: 200, body: { ok: true, retryId } };
   }
+  if (action === "rerun") {
+    const rerunId = await mgr.rerunJob(id);
+    if (!rerunId)
+      return { status: 400, body: { ok: false, error: "Job not found" } };
+    return { status: 200, body: { ok: true, rerunId } };
+  }
+  if (action === "chain") {
+    const chain = await mgr.getRetryChain(id);
+    return { status: 200, body: { ok: true, chain } };
+  }
   if (req.method === "DELETE") {
     await mgr.cancelJob(id);
     return { status: 200, body: { ok: true } };
   }
   return { status: 400, body: { ok: false, error: "Unknown operation" } };
+}
+
+// ── Schedule Handlers ────────────────────────────────────────────────────
+
+export async function handleAdminSchedules(
+  req: MonitorRequest,
+): Promise<MonitorResponse> {
+  const mgr = getManager();
+  if (!mgr)
+    return { status: 503, body: { ok: false, error: "Manager not initialized" } };
+
+  const { name } = req.params;
+
+  // GET /admin/schedules/:name/history
+  if (name && req.params.subResource === "history") {
+    const limit = Number(req.query.limit ?? 50);
+    const offset = Number(req.query.offset ?? 0);
+    const status = req.query.status as any;
+    const result = await mgr.getJobHistory(name, { status, limit, offset });
+    return { status: 200, body: { ok: true, ...result } };
+  }
+
+  // GET /admin/schedules/:name — single schedule detail
+  if (name) {
+    const detail = await mgr.getScheduleDetail(name);
+    if (!detail)
+      return { status: 404, body: { ok: false, error: "Schedule not found" } };
+    return { status: 200, body: { ok: true, schedule: detail } };
+  }
+
+  // GET /admin/schedules — list all
+  const type = req.query.type as "cron" | "schedule" | undefined;
+  const schedules = await mgr.listSchedules(type ? { type } : undefined);
+  return { status: 200, body: { ok: true, schedules } };
+}
+
+export async function handleAdminJobsQuery(
+  req: MonitorRequest,
+): Promise<MonitorResponse> {
+  const mgr = getManager();
+  if (!mgr)
+    return { status: 503, body: { ok: false, error: "Manager not initialized" } };
+
+  const result = await mgr.queryJobs({
+    type: req.query.type as any,
+    status: req.query.status as any,
+    queueName: req.query.queue,
+    scheduleId: req.query.schedule,
+    limit: Number(req.query.limit ?? 50),
+    offset: Number(req.query.offset ?? 0),
+  });
+  return { status: 200, body: { ok: true, ...result } };
 }
 
 // ── Rate Limiter Handlers ───────────────────────────────────────────────
@@ -448,10 +510,35 @@ export async function dispatch(req: MonitorRequest): Promise<MonitorResponse> {
     return handleAdminInstance(req);
   }
 
+  // GET  /admin/jobs?type=cron&status=failed — query jobs
+  if (method === "GET" && path === "/admin/jobs") {
+    return handleAdminJobsQuery(req);
+  }
+
+  // GET  /admin/schedules
+  if (method === "GET" && path === "/admin/schedules") {
+    req.params = { ...req.params };
+    return handleAdminSchedules(req);
+  }
+
+  // GET  /admin/schedules/:name
+  const schedDetailMatch = path.match(/^\/admin\/schedules\/([^/]+)$/);
+  if (schedDetailMatch && method === "GET") {
+    req.params = { ...req.params, name: schedDetailMatch[1] };
+    return handleAdminSchedules(req);
+  }
+
+  // GET  /admin/schedules/:name/history
+  const schedHistoryMatch = path.match(/^\/admin\/schedules\/([^/]+)\/history$/);
+  if (schedHistoryMatch && method === "GET") {
+    req.params = { ...req.params, name: schedHistoryMatch[1], subResource: "history" };
+    return handleAdminSchedules(req);
+  }
+
   // GET  /admin/jobs/:id
-  // POST /admin/jobs/:id/retry
+  // POST /admin/jobs/:id/(retry|rerun|chain)
   // DELETE /admin/jobs/:id
-  const jobMatch = path.match(/^\/admin\/jobs\/([^/]+)(?:\/(retry))?$/);
+  const jobMatch = path.match(/^\/admin\/jobs\/([^/]+)(?:\/(retry|rerun|chain))?$/);
   if (jobMatch) {
     req.params = { ...req.params, id: jobMatch[1], action: jobMatch[2] ?? "" };
     return handleAdminJob(req);

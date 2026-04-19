@@ -41,14 +41,14 @@ describe("ScheduleEngine", () => {
 
       await module.init();
 
-      const saved = await storage.get<any>("schedules", "test-cron");
+      const saved = await storage.get<any>("schedule_schedules", "test-cron");
       expect(saved).toBeDefined();
       expect(saved.nextRunAt).toBeDefined();
     });
 
     it("does not overwrite nextRunAt if it already exists", async () => {
       const future = new Date(Date.now() + 100000);
-      await storage.save("schedules", "existing", {
+      await storage.save("schedule_schedules", "existing", {
         name: "existing",
         every: { minutes: 5 },
         nextRunAt: future,
@@ -71,7 +71,7 @@ describe("ScheduleEngine", () => {
 
       await module.init();
 
-      const saved = await storage.get<any>("schedules", "existing");
+      const saved = await storage.get<any>("schedule_schedules", "existing");
       expect(new Date(saved.nextRunAt).getTime()).toBe(future.getTime());
     });
   });
@@ -106,7 +106,7 @@ describe("ScheduleEngine", () => {
       const now = Date.now();
       const past = new Date(now - 1000);
       
-      await storage.save("schedules", "due-cron", {
+      await storage.save("schedule_schedules", "due-cron", {
         name: "due-cron",
         nextRunAt: past,
       });
@@ -133,7 +133,7 @@ describe("ScheduleEngine", () => {
       await (module as any).tick();
 
       // The nextRunAt pointer should already be advanced (synchronously in tick)
-      const saved = await storage.get<any>("schedules", "due-cron");
+      const saved = await storage.get<any>("schedule_schedules", "due-cron");
       expect(new Date(saved.nextRunAt).getTime()).toBeGreaterThan(past.getTime());
 
       // tick() fires via detached `void this.fire()`. The fire() creates a promise chain
@@ -156,7 +156,7 @@ describe("ScheduleEngine", () => {
       const now = Date.now();
       const past = new Date(now - 1000);
       
-      await storage.save("schedules", "hold-cron", {
+      await storage.save("schedule_schedules", "hold-cron", {
         name: "hold-cron",
         nextRunAt: past,
         paused: true,

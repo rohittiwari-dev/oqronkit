@@ -21,11 +21,14 @@ export class CronEngine extends BaseSchedulerEngine<CronDefinition> {
 	protected readonly moduleType = "cron";
 	protected readonly queueName = "system_cron";
 	protected readonly lockInfix = ":run:";
+	protected readonly storageNamespace = "cron_schedules";
 
 	private readonly missedFireHandler: MissedFireHandler;
 
+	private readonly schedules = new Map<string, CronDefinition>();
+
 	constructor(
-		private readonly schedules: CronDefinition[],
+		staticSchedules: CronDefinition[],
 		logger?: Logger,
 		environment?: string,
 		project?: string,
@@ -44,13 +47,16 @@ export class CronEngine extends BaseSchedulerEngine<CronDefinition> {
 		container?: OqronContainer,
 	) {
 		super(logger, environment, project, config, container);
+		for (const def of staticSchedules) {
+			this.schedules.set(def.name, def);
+		}
 		this.missedFireHandler = new MissedFireHandler(this.logger);
 	}
 
 	// ── Abstract implementations ──────────────────────────────────────────────
 
 	protected getDefinition(name: string): CronDefinition | undefined {
-		return this.schedules.find((s) => s.name === name);
+		return this.schedules.get(name);
 	}
 
 	protected computeNextRun(def: CronDefinition, from: Date): Date | null {
@@ -81,11 +87,11 @@ export class CronEngine extends BaseSchedulerEngine<CronDefinition> {
 	protected async handleLeaderInit(): Promise<void> {
 		this.logger.info("Performing leader initialization...");
 
-		const knownSchedules = await this.di.storage.list<any>("schedules");
+		const knownSchedules = await this.di.storage.list<any>(this.storageNamespace);
 		const now = new Date();
 
 		for (const record of knownSchedules) {
-			const def = this.schedules.find((s) => s.name === record.name);
+			const def = this.schedules.get(record.name);
 			if (!def) continue;
 
 			const result = await this.missedFireHandler.checkMissed(
@@ -110,7 +116,7 @@ export class CronEngine extends BaseSchedulerEngine<CronDefinition> {
 
 				const nextRun = this.computeNextRun(def, now);
 				if (nextRun) {
-					await this.di.storage.save("schedules", def.name, {
+					await this.di.storage.save(this.storageNamespace, def.name, {
 						...record,
 						nextRunAt: nextRun,
 						lastRunAt: now,
@@ -123,12 +129,12 @@ export class CronEngine extends BaseSchedulerEngine<CronDefinition> {
 	async init(): Promise<void> {
 		this.logger.info("Initializing scheduler (Unified Model)", {
 			nodeId: this.nodeId,
-			count: this.schedules.length,
+			count: this.schedules.size,
 		});
 
-		for (const def of this.schedules) {
+		for (const def of this.schedules.values()) {
 			const existing = await this.di.storage.get<any>(
-				"schedules",
+				this.storageNamespace,
 				def.name,
 			);
 
@@ -137,7 +143,7 @@ export class CronEngine extends BaseSchedulerEngine<CronDefinition> {
 				(existing.expression !== def.expression ||
 					existing.intervalMs !== def.intervalMs);
 
-			await this.di.storage.save("schedules", def.name, {
+			await this.di.storage.save(this.storageNamespace, def.name, {
 				...(existing || {}),
 				...def,
 				nextRunAt: shouldRecompute ? null : existing?.nextRunAt,
@@ -147,19 +153,19 @@ export class CronEngine extends BaseSchedulerEngine<CronDefinition> {
 		}
 
 		// Seed initial nextRunAt
-		const existing = await this.di.storage.list<any>("schedules");
+		const existing = await this.di.storage.list<any>(this.storageNamespace);
 		const now = new Date();
 
 		for (const record of existing) {
 			if (record.nextRunAt !== null && record.nextRunAt !== undefined)
 				continue;
 
-			const def = this.schedules.find((s) => s.name === record.name);
+			const def = this.schedules.get(record.name);
 			if (!def) continue;
 
 			const nextRun = this.computeNextRun(def, now);
 			if (nextRun) {
-				await this.di.storage.save("schedules", def.name, {
+				await this.di.storage.save(this.storageNamespace, def.name, {
 					...record,
 					nextRunAt: nextRun,
 				});

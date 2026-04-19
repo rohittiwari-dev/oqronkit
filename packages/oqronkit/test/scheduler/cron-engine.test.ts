@@ -41,14 +41,14 @@ describe("CronEngine", () => {
 
       await module.init();
 
-      const saved = await storage.get<any>("schedules", "test-cron");
+      const saved = await storage.get<any>("cron_schedules", "test-cron");
       expect(saved).toBeDefined();
       expect(saved.nextRunAt).toBeDefined();
     });
 
     it("does not overwrite nextRunAt if it already exists", async () => {
       const future = new Date(Date.now() + 100000);
-      await storage.save("schedules", "existing", {
+      await storage.save("cron_schedules", "existing", {
         name: "existing",
         expression: "*/5 * * * *",
         nextRunAt: future,
@@ -71,7 +71,7 @@ describe("CronEngine", () => {
 
       await module.init();
 
-      const saved = await storage.get<any>("schedules", "existing");
+      const saved = await storage.get<any>("cron_schedules", "existing");
       expect(new Date(saved.nextRunAt).getTime()).toBe(future.getTime());
     });
   });
@@ -116,7 +116,7 @@ describe("CronEngine", () => {
       const now = Date.now();
       const past = new Date(now - 1000);
       
-      await storage.save("schedules", "due-cron", {
+      await storage.save("cron_schedules", "due-cron", {
         name: "due-cron",
         nextRunAt: past,
       });
@@ -145,7 +145,7 @@ describe("CronEngine", () => {
       await Promise.resolve();
 
       expect(fired).toBe(true);
-      const saved = await storage.get<any>("schedules", "due-cron");
+      const saved = await storage.get<any>("cron_schedules", "due-cron");
       // nextRunAt should have advanced
       expect(new Date(saved.nextRunAt).getTime()).toBeGreaterThan(past.getTime());
     });
@@ -154,7 +154,7 @@ describe("CronEngine", () => {
       const now = Date.now();
       const past = new Date(now - 1000);
       
-      await storage.save("schedules", "hold-cron", {
+      await storage.save("cron_schedules", "hold-cron", {
         name: "hold-cron",
         nextRunAt: past,
         paused: true,
@@ -204,7 +204,7 @@ describe("CronEngine", () => {
         container,
       );
 
-      await (module as any).fire(module["schedules"][0]);
+      await (module as any).fire(module["schedules"].get("success-cron"));
       
       // Since fire() wraps the promise and leaves it active, we wait for it
       const activeJobs = module["activeJobs"].values();

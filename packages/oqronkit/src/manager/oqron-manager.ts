@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { Broker, OqronRegistry, Storage } from "../engine/index.js";
+import { Broker, OqronEventBus, OqronRegistry, Storage } from "../engine/index.js";
 import type { OqronConfig } from "../engine/types/config.types.js";
 import type {
   JobFilter,
@@ -160,10 +160,14 @@ export class OqronManager {
       return true;
     }
     if (type === "cron" || type === "schedule") {
-      const def = await Storage.get<any>("schedules", name);
+      const ns = type === "cron" ? "cron_schedules" : "schedule_schedules";
+      const def = await Storage.get<any>(ns, name)
+        ?? await Storage.get<any>(type === "cron" ? "schedule_schedules" : "cron_schedules", name);
       if (def) {
+        const actualNs = def.type === "cron" ? "cron_schedules" : "schedule_schedules";
         def.paused = false;
-        await Storage.save("schedules", name, def);
+        await Storage.save(actualNs, name, def);
+        OqronEventBus.emit("schedule:resumed", name);
         return true;
       }
     }
@@ -182,10 +186,14 @@ export class OqronManager {
       return true;
     }
     if (type === "cron" || type === "schedule") {
-      const def = await Storage.get<any>("schedules", name);
+      const ns = type === "cron" ? "cron_schedules" : "schedule_schedules";
+      const def = await Storage.get<any>(ns, name)
+        ?? await Storage.get<any>(type === "cron" ? "schedule_schedules" : "cron_schedules", name);
       if (def) {
+        const actualNs = def.type === "cron" ? "cron_schedules" : "schedule_schedules";
         def.paused = true;
-        await Storage.save("schedules", name, def);
+        await Storage.save(actualNs, name, def);
+        OqronEventBus.emit("schedule:paused", name);
         return true;
       }
     }
@@ -193,6 +201,30 @@ export class OqronManager {
       return this.disableRateLimiter(name);
     }
     return false;
+  }
+  // ── C2: Schedule Instance Listing ───────────────────────────────────────────
+
+  /**
+   * List all registered cron and schedule instances with their current state.
+   * Merges both namespaces and optionally filters by type.
+   */
+  async listSchedules(opts?: { type?: "cron" | "schedule" }): Promise<any[]> {
+    const [cronRecords, schedRecords] = await Promise.all([
+      opts?.type === "schedule" ? [] : Storage.list<any>("cron_schedules"),
+      opts?.type === "cron" ? [] : Storage.list<any>("schedule_schedules"),
+    ]);
+    return [...cronRecords, ...schedRecords];
+  }
+
+  // ── C3: Single Schedule Detail ─────────────────────────────────────────────
+
+  /**
+   * Get the full state of a single schedule/cron instance by name.
+   * Checks both namespaces.
+   */
+  async getScheduleDetail(name: string): Promise<any | null> {
+    return (await Storage.get<any>("cron_schedules", name))
+      ?? (await Storage.get<any>("schedule_schedules", name));
   }
 
   // ── Rate Limiter Management ─────────────────────────────────────────────
@@ -317,18 +349,28 @@ export class OqronManager {
   }
 
   /**
-   * Retry a failed job by creating a NEW job record with a `retriedFromId`
-   * memoization link to the original. The original job's status is updated
-   * to indicate it has been retried.
-   *
-   * This ensures full audit trail — the original failure record is preserved,
-   * and the new retry record can be independently tracked.
+   * D2: Retry a failed job. For scheduler jobs (cron/schedule), triggers
+   * the schedule directly instead of publishing to the Broker.
+   * For queue/task jobs, creates a new job record with memoization link.
    */
   async retryJob(jobId: string): Promise<string | undefined> {
     const job = await Storage.get<OqronJob>("jobs", jobId);
     if (!job || job.status !== "failed") return undefined;
 
-    // Create a new job record linked to the original
+    // D2: Scheduler jobs don't use Broker — trigger via engine
+    if (job.type === "cron" || job.type === "schedule") {
+      const targetName = job.scheduleId ?? job.moduleName;
+      if (!targetName) return undefined;
+
+      const triggered = await this.triggerModule(targetName);
+      if (triggered) {
+        OqronEventBus.emit("job:retried", jobId, `triggered:${targetName}`);
+        return `triggered:${targetName}`;
+      }
+      return undefined;
+    }
+
+    // Queue/task jobs: create new record + Broker
     const retryId = randomUUID();
     const retryJob: OqronJob = {
       ...job,
@@ -357,19 +399,65 @@ export class OqronManager {
       stalledCount: undefined,
     };
 
-    // Save the new retry job
     await Storage.save("jobs", retryId, retryJob);
-
-    // Mark original as "retried" in retryReason for audit
     await Storage.save("jobs", jobId, {
       ...job,
       retryReason: `Retried as ${retryId}`,
     });
-
-    // Publish to broker for processing
     await Broker.publish(retryJob.queueName, retryId, retryJob.opts.delay);
 
+    OqronEventBus.emit("job:retried", jobId, retryId);
     return retryId;
+  }
+
+  /**
+   * D3: Rerun any job regardless of status (completed, failed, etc.).
+   * For scheduler jobs: triggers the schedule engine directly.
+   * For queue/task jobs: creates a new job record via Broker.
+   */
+  async rerunJob(jobId: string): Promise<string | undefined> {
+    const job = await Storage.get<OqronJob>("jobs", jobId);
+    if (!job) return undefined;
+
+    if (job.type === "cron" || job.type === "schedule") {
+      const targetName = job.scheduleId ?? job.moduleName;
+      if (!targetName) return undefined;
+      const triggered = await this.triggerModule(targetName);
+      return triggered ? `triggered:${targetName}` : undefined;
+    }
+
+    // Queue/task: clone as new waiting job
+    const rerunId = randomUUID();
+    const rerunJob: OqronJob = {
+      ...job,
+      id: rerunId,
+      status: "waiting",
+      attemptMade: 0,
+      error: undefined,
+      stacktrace: undefined,
+      returnValue: undefined,
+      retriedFromId: jobId,
+      triggeredBy: "rerun",
+      createdAt: new Date(),
+      startedAt: undefined,
+      finishedAt: undefined,
+      durationMs: undefined,
+      latencyMs: undefined,
+      memoryUsageMb: undefined,
+      processedOn: undefined,
+      queuedAt: new Date(),
+      logs: undefined,
+      timeline: undefined,
+      steps: undefined,
+      progressPercent: 0,
+      progressLabel: undefined,
+      workerId: undefined,
+      stalledCount: undefined,
+    };
+
+    await Storage.save("jobs", rerunId, rerunJob);
+    await Broker.publish(rerunJob.queueName, rerunId, rerunJob.opts.delay);
+    return rerunId;
   }
 
   async cancelJob(jobId: string): Promise<void> {

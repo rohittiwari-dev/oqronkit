@@ -11,6 +11,11 @@ import type {
 import type { DisabledBehavior } from "../engine/types/config.types.js";
 import { _registerSchedule } from "./registry-schedule.js";
 
+/** Internal extension for dynamic definitions that carry a baseName */
+interface InternalScheduleDefinition extends ScheduleDefinition {
+  baseName?: string;
+}
+
 type EnqueueOptions<TPayload> = {
   runAt?: Date;
   runAfter?: ScheduleRunAfter;
@@ -123,7 +128,7 @@ export const schedule = <TPayload = unknown>(
       );
     }
 
-    const dynamicDef = { ...def } as any;
+    const dynamicDef: InternalScheduleDefinition = { ...def } as InternalScheduleDefinition;
     if (opts) {
       if (opts.runAt) dynamicDef.runAt = opts.runAt;
       if (opts.runAfter) dynamicDef.runAfter = opts.runAfter;

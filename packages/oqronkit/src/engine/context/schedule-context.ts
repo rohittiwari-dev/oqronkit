@@ -1,6 +1,10 @@
 import type { Logger } from "../logger/index.js";
 import type { IScheduleContext } from "../types/index.js";
 
+const VALID_LOG_LEVELS: ReadonlySet<string> = new Set([
+  "trace", "debug", "info", "warn", "error", "fatal",
+]);
+
 export interface ScheduleContextOptions<TPayload> {
   id: string;
   scheduleName: string;
@@ -62,15 +66,7 @@ export class ScheduleContext<TPayload = unknown>
   }
 
   log(level: string, message: string, meta?: Record<string, unknown>): void {
-    const validLevels: ReadonlySet<string> = new Set([
-      "trace",
-      "debug",
-      "info",
-      "warn",
-      "error",
-      "fatal",
-    ]);
-    if (this.logger && validLevels.has(level)) {
+    if (this.logger && VALID_LOG_LEVELS.has(level)) {
       type LogLevel = "trace" | "debug" | "info" | "warn" | "error" | "fatal";
       const fn = this.logger[level as LogLevel];
       if (typeof fn === "function") {
