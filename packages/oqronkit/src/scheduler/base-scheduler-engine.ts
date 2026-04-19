@@ -8,6 +8,7 @@ import {
 	OqronContainer,
 	OqronEventBus,
 } from "../engine/index.js";
+import { SchedulerMetrics, type SchedulerMetricsSnapshot, type ScheduleMetrics } from "./scheduler-metrics.js";
 import {
 	HeartbeatWorker,
 	LeaderElection,
@@ -153,12 +154,18 @@ export abstract class BaseSchedulerEngine<
 
 	/** Resolve a definition by name */
 	protected abstract getDefinition(name: string): TDef | undefined;
+	/** Add or replace a definition in the in-memory map (subclass-specific) */
+	protected abstract setDefinition(name: string, def: TDef): void;
+	/** Remove a definition from the in-memory map (subclass-specific) */
+	protected abstract removeDefinition(name: string): void;
 	/** Compute the next run date for a definition */
 	protected abstract computeNextRun(def: TDef, from: Date): Date | null;
 	/** Perform leader-init logic (missed-fire recovery, etc.) */
 	protected abstract handleLeaderInit(): Promise<void>;
 	/** Initialize definitions in storage on boot */
 	abstract init(): Promise<void>;
+	/** Validate a definition before upsert (e.g., cron expression validation). Override in subclass. */
+	protected validateDefinition(_def: TDef): void { /* no-op by default */ }
 	/** Create the execution context for a handler invocation */
 	protected abstract createExecutionContext(opts: {
 		def: TDef;
@@ -212,6 +219,7 @@ export abstract class BaseSchedulerEngine<
 		});
 
 		this.lagMonitor.start();
+		this.metrics.start();
 		this.stallDetector.start(
 			() =>
 				Array.from(this.activeJobs.values()).map((j) => ({
@@ -264,6 +272,7 @@ export abstract class BaseSchedulerEngine<
 		if (this.leader) await this.leader.stop();
 		this.stallDetector.stop();
 		this.lagMonitor.stop();
+		this.metrics.stop();
 
 		const activePromises = Array.from(this.activeJobs.values())
 			.map((job) => job.promise)
@@ -358,6 +367,116 @@ export abstract class BaseSchedulerEngine<
 		return true;
 	}
 
+	// ── Metrics (G6) ─────────────────────────────────────────────────────────
+
+	protected readonly metrics = new SchedulerMetrics();
+
+	/** Get a full metrics snapshot for all tracked schedules in this engine. */
+	getMetrics(): SchedulerMetricsSnapshot {
+		return this.metrics.getMetrics();
+	}
+
+	/** Get metrics for a single schedule by name. */
+	getMetricsForSchedule(name: string): ScheduleMetrics | undefined {
+		return this.metrics.getMetricsForSchedule(name);
+	}
+
+	// ── Dynamic CRUD (G1) ───────────────────────────────────────────────────
+
+	/**
+	 * Create or update a schedule definition at runtime.
+	 * If the schedule already exists, its config is updated and nextRunAt is recomputed.
+	 * If it's new, it's registered and seeded immediately.
+	 *
+	 * Emits `schedule:created` or `schedule:updated` on the EventBus.
+	 */
+	async upsert(def: TDef): Promise<void> {
+		// Validate (subclass may throw for invalid cron expressions etc.)
+		this.validateDefinition(def);
+
+		const existing = this.getDefinition(def.name);
+		const isNew = !existing;
+
+		// Update in-memory map
+		this.setDefinition(def.name, def);
+
+		// Persist to storage
+		const now = new Date();
+		const existingRecord = await this.di.storage.get<any>(this.storageNamespace, def.name);
+
+		const nextRun = this.computeNextRun(def, now);
+		await this.di.storage.save(this.storageNamespace, def.name, {
+			...(existingRecord || {}),
+			...def,
+			version: (def as any).version ?? existingRecord?.version ?? 0,
+			nextRunAt: nextRun,
+			lastRunAt: existingRecord?.lastRunAt,
+			paused: existingRecord?.paused ?? ((def as any).status === "paused"),
+			runCount: existingRecord?.runCount ?? 0,
+			successCount: existingRecord?.successCount ?? 0,
+			failCount: existingRecord?.failCount ?? 0,
+			type: this.moduleType,
+		});
+
+		const eventType = this.moduleType as "cron" | "schedule";
+		if (isNew) {
+			OqronEventBus.emit("schedule:created", def.name, eventType);
+			this.logger.info("Dynamic schedule created", { name: def.name, type: eventType });
+		} else {
+			OqronEventBus.emit("schedule:updated", def.name, eventType);
+			this.logger.info("Dynamic schedule updated", { name: def.name, type: eventType });
+		}
+	}
+
+	/**
+	 * Remove a schedule definition by name.
+	 * Stops future fires and cancels any active jobs for this schedule.
+	 *
+	 * Emits `schedule:deleted` on the EventBus.
+	 */
+	async remove(name: string): Promise<void> {
+		const existing = this.getDefinition(name);
+		if (!existing) {
+			this.logger.warn("Attempted to remove non-existent schedule", { name });
+			return;
+		}
+
+		// Cancel any active jobs for this schedule
+		for (const [runId, entry] of this.activeJobs.entries()) {
+			if (entry.lockKey.includes(name)) {
+				entry.abort?.abort();
+				if (entry.worker) {
+					await entry.worker.stop();
+				}
+				this.activeJobs.delete(runId);
+			}
+		}
+
+		// Remove from in-memory map and storage
+		this.removeDefinition(name);
+		await this.di.storage.delete(this.storageNamespace, name);
+
+		const eventType = this.moduleType as "cron" | "schedule";
+		OqronEventBus.emit("schedule:deleted", name, eventType);
+		this.logger.info("Schedule removed", { name, type: eventType });
+	}
+
+	/**
+	 * Get the stored state of a schedule by name.
+	 * Returns the full persisted record including nextRunAt, runCount, etc.
+	 */
+	async get(name: string): Promise<any | null> {
+		return this.di.storage.get<any>(this.storageNamespace, name);
+	}
+
+	/**
+	 * List all schedule records in this engine's namespace.
+	 * Returns the full persisted state of each schedule.
+	 */
+	async list(): Promise<any[]> {
+		return this.di.storage.list<any>(this.storageNamespace);
+	}
+
 	// ── Tick (shared structure) ───────────────────────────────────────────────
 
 	protected async tick(): Promise<void> {
@@ -450,12 +569,10 @@ export abstract class BaseSchedulerEngine<
 				//  Per-schedule rate limiting
 				if (def.rateLimiter) {
 					try {
-						const rlResult = await def.rateLimiter.check({ name: def.name });
-						if (!rlResult.allowed) {
-							this.logger.info("Rate limited — skipping fire", { name: def.name });
-							OqronEventBus.emit("schedule:rate-limited" as any, {
+						const result = await def.rateLimiter.check({ name: def.name });
+						if (!result.allowed) {
+							this.logger.debug(`Rate limited — skipping fire`, {
 								name: def.name,
-								module: this.moduleType,
 							});
 							// Still advance the pointer to prevent re-firing
 							const rlNext = this.computeNextRun(def, now);
@@ -720,6 +837,7 @@ export abstract class BaseSchedulerEngine<
 
 		// ── Execute handler (non-blocking) ──
 		OqronEventBus.emit("job:start", this.queueName, runId, def.name);
+		OqronEventBus.emit("schedule:fire:start", def.name, runId, this.moduleType as "cron" | "schedule");
 		entry.promise = this.executeHandler(def, runId, lockKey, startedAt, worker, abort);
 	}
 
@@ -916,12 +1034,17 @@ export abstract class BaseSchedulerEngine<
 			filterValue: def.name,
 		});
 
+		const durationMs = finishedAt.getTime() - startedAt.getTime();
+
 		this.logger.info("Job finished", {
 			name: def.name,
 			runId,
 			status,
 			attempts,
+			durationMs,
 		});
+
+		OqronEventBus.emit("schedule:fire:complete", def.name, runId, status, durationMs);
 
 		if (status === "completed") {
 			OqronEventBus.emit("job:success", this.queueName, runId);

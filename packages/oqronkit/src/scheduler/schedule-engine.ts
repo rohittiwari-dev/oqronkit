@@ -73,6 +73,14 @@ export class ScheduleEngine extends BaseSchedulerEngine<ScheduleDefinition> {
     return this.schedules.get(name);
   }
 
+  protected setDefinition(name: string, def: ScheduleDefinition): void {
+    this.schedules.set(name, def);
+  }
+
+  protected removeDefinition(name: string): void {
+    this.schedules.delete(name);
+  }
+
   protected computeNextRun(def: ScheduleDefinition, from: Date): Date | null {
     try {
       if (def.runAt) {
@@ -413,19 +421,16 @@ export class ScheduleEngine extends BaseSchedulerEngine<ScheduleDefinition> {
     await super.stop();
   }
 
-  // ── Dynamic registration ────────────────────────────────────────────────────
+  // ── Dynamic registration (legacy compat — delegates to base CRUD) ──────────
 
+  /** @deprecated Use `upsert(def)` instead. Kept for backward compatibility. */
   async registerDynamic(def: ScheduleDefinition): Promise<void> {
-    this.schedules.set(def.name, def);
-    const now = new Date();
-    await this.upsertAndSeed(def, now);
-    this.logger.info("Dynamic schedule registered", { name: def.name });
+    await this.upsert(def);
   }
 
+  /** @deprecated Use `remove(name)` instead. Kept for backward compatibility. */
   async cancel(name: string): Promise<void> {
-    this.schedules.delete(name);
-    await this.di.storage.delete(this.storageNamespace, name);
-    this.logger.info("Schedule cancelled", { name });
+    await this.remove(name);
   }
 
   // ──  Condition guard via shouldFire() hook ──────────────────────────────

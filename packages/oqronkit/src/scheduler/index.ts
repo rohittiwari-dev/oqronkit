@@ -23,3 +23,5 @@ export {
   type ScheduleModuleFactoryConfig,
 } from "./registry-factory.js";
 export { ScheduleEngine } from "./schedule-engine.js";
+export { SchedulerMetrics } from "./scheduler-metrics.js";
+export type { ScheduleMetrics, SchedulerMetricsSnapshot } from "./scheduler-metrics.js";

@@ -71,6 +71,27 @@ export class CronEngine extends BaseSchedulerEngine<CronDefinition> {
 		return this.schedules.get(name);
 	}
 
+	protected setDefinition(name: string, def: CronDefinition): void {
+		this.schedules.set(name, def);
+	}
+
+	protected removeDefinition(name: string): void {
+		this.schedules.delete(name);
+	}
+
+	protected validateDefinition(def: CronDefinition): void {
+		if (def.expression) {
+			try {
+				validateExpression(def.expression);
+			} catch (err: any) {
+				throw new OqronError(
+					"ERR_INVALID_CRON",
+					`Invalid cron expression for schedule "${def.name}": ${def.expression}. Error: ${err.message}`,
+				);
+			}
+		}
+	}
+
 	protected computeNextRun(def: CronDefinition, from: Date): Date | null {
 		if (def.expression) {
 			try {

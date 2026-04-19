@@ -19,6 +19,16 @@ export type OqronEventMap = {
   "schedule:resumed": [scheduleName: string];
   "schedule:version-upgraded": [scheduleName: string, fromVersion: number, toVersion: number];
 
+  // ── Schedule CRUD (G1) ─────────────────────────────────────────────────────
+  "schedule:created": [scheduleName: string, type: "cron" | "schedule"];
+  "schedule:updated": [scheduleName: string, type: "cron" | "schedule"];
+  "schedule:deleted": [scheduleName: string, type: "cron" | "schedule"];
+
+  // ── Schedule Fire Lifecycle (G6 — Metrics) ─────────────────────────────────
+  "schedule:fire:start": [scheduleName: string, runId: string, type: "cron" | "schedule"];
+  "schedule:fire:complete": [scheduleName: string, runId: string, status: "completed" | "failed", durationMs: number];
+  "schedule:rate-limited": [scheduleName: string];
+
   // ── System ───────────────────────────────────────────────────────────────
   "system:ready": [];
   "system:stop": [];
