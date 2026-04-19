@@ -29,9 +29,7 @@ import {
 	DEFAULT_RETRY_BASE_DELAY_MS,
 	DEFAULT_SHUTDOWN_TIMEOUT_MS,
 	DEFAULT_STALL_DETECTOR_INTERVAL_MS,
-	DEFAULT_TICK_INTERVAL_MS,
-	MAX_HELD_JOBS_QUERY_LIMIT,
-	STALL_GRACE_MS,
+	DEFAULT_TICK_INTERVAL_MS, STALL_GRACE_MS
 } from "./constants.js";
 
 // ── Shared types ─────────────────────────────────────────────────────────────
@@ -440,6 +438,14 @@ export abstract class BaseSchedulerEngine<
 					continue;
 				}
 
+				// G4: Re-check leader status before critical pointer advance
+				if (this.leader && !this.leader.isLeader) {
+					this.logger.warn("Leader demoted mid-tick — skipping pointer advance", {
+						name: def.name,
+					});
+					continue;
+				}
+
 				await this.di.storage.save(this.storageNamespace, def.name, {
 					...record,
 					nextRunAt: nextRun,
@@ -529,27 +535,23 @@ export abstract class BaseSchedulerEngine<
 			createdAt: now,
 		});
 
-		// Prune excess held jobs
+		// E3: Count-first pruning — only fetch excess records instead of all held jobs
 		const maxHeld = this.baseConfig?.maxHeldJobs ?? DEFAULT_MAX_HELD_JOBS;
-		const heldJobs = await this.di.storage.list<any>(
-			"jobs",
-			{
-				moduleName: def.name,
-				status: "paused",
-				pausedReason: "disabled-hold",
-			},
-			{ limit: MAX_HELD_JOBS_QUERY_LIMIT },
-		);
+		const heldFilter = {
+			moduleName: def.name,
+			status: "paused",
+			pausedReason: "disabled-hold",
+		};
+		const heldCount = await this.di.storage.count("jobs", heldFilter);
 
-		heldJobs.sort(
-			(a: any, b: any) =>
-				new Date(a.createdAt).getTime() -
-				new Date(b.createdAt).getTime(),
-		);
-
-		if (heldJobs.length > maxHeld) {
-			const toRemove = heldJobs.slice(0, heldJobs.length - maxHeld);
-			for (const old of toRemove) {
+		if (heldCount > maxHeld) {
+			const excess = heldCount - maxHeld;
+			const oldest = await this.di.storage.list<any>(
+				"jobs",
+				heldFilter,
+				{ limit: excess },
+			);
+			for (const old of oldest) {
 				await this.di.storage.delete("jobs", old.id);
 			}
 		}

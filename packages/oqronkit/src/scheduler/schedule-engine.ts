@@ -188,10 +188,16 @@ export class ScheduleEngine extends BaseSchedulerEngine<ScheduleDefinition> {
           if (def.hooks?.onMissedFire) {
             try {
               const missedAt = new Date(record.nextRunAt);
-              const ctx = {
-                name: def.name, firedAt: now, payload: def.payload,
-                duration: 0, log: () => {}, progress: () => {},
-              } as any;
+              const ctx = new ScheduleContext({
+                id: `missed-${def.name}-${now.getTime()}`,
+                scheduleName: def.name,
+                firedAt: now,
+                payload: def.payload,
+                logger: this.logger.child({ schedule: def.name, scope: "missed-fire" }),
+                signal: new AbortController().signal,
+                environment: this.environment,
+                project: this.project,
+              });
               await def.hooks.onMissedFire(ctx, missedAt);
             } catch (hookErr) {
               this.logger.error("onMissedFire hook threw", {
@@ -233,6 +239,60 @@ export class ScheduleEngine extends BaseSchedulerEngine<ScheduleDefinition> {
   private async upsertAndSeed(def: ScheduleDefinition, now: Date) {
     const existing = await this.di.storage.get<any>(this.storageNamespace, def.name);
 
+    const codeVersion = def.version ?? 0;
+    const dbVersion = existing?.version ?? 0;
+
+    // F1: Downgrade protection
+    if (existing && codeVersion < dbVersion) {
+      this.logger.warn("Code version is older than DB — skipping overwrite", {
+        name: def.name,
+        codeVersion,
+        dbVersion,
+      });
+      return;
+    }
+
+    // F1: Version bump — controlled migration
+    if (existing && codeVersion > dbVersion) {
+      this.logger.info("Schedule version upgraded", {
+        name: def.name,
+        from: dbVersion,
+        to: codeVersion,
+      });
+
+      await this.di.storage.save(this.storageNamespace, def.name, {
+        ...def,
+        version: codeVersion,
+        // Preserve operational state
+        paused: existing.paused ?? (def.status === "paused"),
+        runCount: existing.runCount ?? 0,
+        successCount: existing.successCount ?? 0,
+        failCount: existing.failCount ?? 0,
+        lastRunId: existing.lastRunId,
+        lastStatus: existing.lastStatus,
+        lastError: existing.lastError,
+        lastDurationMs: existing.lastDurationMs,
+        // Force recompute
+        nextRunAt: null,
+        lastRunAt: existing.lastRunAt,
+        type: this.moduleType,
+      });
+
+      OqronEventBus.emit("schedule:version-upgraded", def.name, dbVersion, codeVersion);
+
+      // Immediately compute new nextRunAt
+      const nextRun = this.computeNextRun(def, now);
+      if (nextRun) {
+        const updated = await this.di.storage.get<any>(this.storageNamespace, def.name);
+        await this.di.storage.save(this.storageNamespace, def.name, {
+          ...updated,
+          nextRunAt: nextRun,
+        });
+      }
+      return;
+    }
+
+    // Same version: standard upsert (preserve nextRunAt if config unchanged)
     let shouldRecompute = !existing?.nextRunAt;
     if (existing) {
       const cmp = (a: any, b: any) => JSON.stringify(a) === JSON.stringify(b);
@@ -248,6 +308,7 @@ export class ScheduleEngine extends BaseSchedulerEngine<ScheduleDefinition> {
     await this.di.storage.save(this.storageNamespace, def.name, {
       ...(existing || {}),
       ...def,
+      version: codeVersion,
       nextRunAt: shouldRecompute ? null : existing?.nextRunAt,
       lastRunAt: existing?.lastRunAt,
       paused: existing?.paused ?? (def.status === "paused"),

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
 import { ScheduleEngine } from "../../src/scheduler/schedule-engine.js";
 import { MemoryStore } from "../../src/engine/memory/memory-store.js";
 import { MemoryLock } from "../../src/engine/memory/memory-lock.js";
-import { createLogger, OqronEventBus } from "../../src/engine/index.js";
+import { createLogger } from "../../src/engine/index.js";
 
 const logger = createLogger({ level: "error" }, { module: "schedule-engine-test" });
 
@@ -463,6 +463,99 @@ describe("ScheduleEngine", () => {
        expect(module.enabled).toBe(false);
        await module.enable();
        expect(module.enabled).toBe(true);
+    });
+  });
+
+  // ── F1: Schedule Versioning ──────────────────────────────────────────────
+
+  describe("F1: Schedule versioning", () => {
+    it("version bump preserves paused state but recomputes nextRunAt", async () => {
+      await storage.save("schedule_schedules", "versioned-sched", {
+        name: "versioned-sched",
+        every: { minutes: 5 },
+        version: 1,
+        paused: true,
+        runCount: 10,
+        successCount: 9,
+        failCount: 1,
+        nextRunAt: new Date(Date.now() + 300_000),
+        lastRunAt: new Date(Date.now() - 60_000),
+      });
+
+      const module = new ScheduleEngine(
+        [{
+          name: "versioned-sched",
+          version: 2,
+          every: { minutes: 10 },
+          handler: async () => {},
+        }],
+        logger, "test", "default", {}, container,
+      );
+
+      await module.init();
+
+      const saved = await storage.get<any>("schedule_schedules", "versioned-sched");
+      expect(saved.version).toBe(2);
+      expect(saved.every.minutes).toBe(10);
+      // Operational state preserved
+      expect(saved.paused).toBe(true);
+      expect(saved.runCount).toBe(10);
+      expect(saved.successCount).toBe(9);
+      expect(saved.failCount).toBe(1);
+      // nextRunAt was recomputed
+      expect(saved.nextRunAt).toBeDefined();
+    });
+
+    it("same version does not overwrite nextRunAt", async () => {
+      const future = new Date(Date.now() + 500_000);
+      await storage.save("schedule_schedules", "stable-sched", {
+        name: "stable-sched",
+        every: { minutes: 5 },
+        version: 1,
+        nextRunAt: future,
+        lastRunAt: new Date(),
+      });
+
+      const module = new ScheduleEngine(
+        [{
+          name: "stable-sched",
+          version: 1,
+          every: { minutes: 5 },
+          handler: async () => {},
+        }],
+        logger, "test", "default", {}, container,
+      );
+
+      await module.init();
+
+      const saved = await storage.get<any>("schedule_schedules", "stable-sched");
+      expect(saved.version).toBe(1);
+      expect(new Date(saved.nextRunAt).getTime()).toBe(future.getTime());
+    });
+
+    it("downgrade (code < DB) skips overwrite", async () => {
+      await storage.save("schedule_schedules", "downgrade-sched", {
+        name: "downgrade-sched",
+        every: { minutes: 10 },
+        version: 5,
+        nextRunAt: new Date(Date.now() + 100_000),
+      });
+
+      const module = new ScheduleEngine(
+        [{
+          name: "downgrade-sched",
+          version: 3,
+          every: { minutes: 1 },
+          handler: async () => {},
+        }],
+        logger, "test", "default", {}, container,
+      );
+
+      await module.init();
+
+      const saved = await storage.get<any>("schedule_schedules", "downgrade-sched");
+      expect(saved.version).toBe(5);
+      expect(saved.every.minutes).toBe(10);
     });
   });
 });

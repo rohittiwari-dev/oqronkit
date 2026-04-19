@@ -60,6 +60,8 @@ export interface IScheduleContext<TPayload = unknown> {
 
 export interface ScheduleDefinition<TPayload = unknown> {
   name: string;
+  /** Schema version — bump when changing schedule config to trigger a controlled migration. */
+  version?: number;
 
   // Schedule configurations
   runAt?: Date;
@@ -98,3 +100,4 @@ export interface ScheduleDefinition<TPayload = unknown> {
    */
   disabledBehavior?: DisabledBehavior;
 }
+

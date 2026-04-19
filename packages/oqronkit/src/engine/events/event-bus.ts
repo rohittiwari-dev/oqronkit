@@ -17,6 +17,7 @@ export type OqronEventMap = {
   // ── Schedule instance lifecycle ───────────────────────────────────────────
   "schedule:paused": [scheduleName: string];
   "schedule:resumed": [scheduleName: string];
+  "schedule:version-upgraded": [scheduleName: string, fromVersion: number, toVersion: number];
 
   // ── System ───────────────────────────────────────────────────────────────
   "system:ready": [];
@@ -51,3 +52,4 @@ class OqronEventBusClass extends EventEmitter<OqronEventMap> {
 }
 
 export const OqronEventBus = OqronEventBusClass.getInstance();
+

@@ -461,4 +461,102 @@ describe("CronEngine", () => {
        expect(module.enabled).toBe(true);
     });
   });
+
+  // ── F1: Schedule Versioning ──────────────────────────────────────────────
+
+  describe("F1: Schedule versioning", () => {
+    it("version bump preserves paused state but recomputes nextRunAt", async () => {
+      // Seed DB with v1 definition that is paused
+      await storage.save("cron_schedules", "versioned-cron", {
+        name: "versioned-cron",
+        expression: "*/5 * * * *",
+        version: 1,
+        paused: true,
+        runCount: 42,
+        successCount: 40,
+        failCount: 2,
+        nextRunAt: new Date(Date.now() + 300_000),
+        lastRunAt: new Date(Date.now() - 60_000),
+      });
+
+      // Boot with v2 (changed expression)
+      const module = new CronEngine(
+        [{
+          name: "versioned-cron",
+          version: 2,
+          expression: "*/10 * * * *",
+          handler: async () => {},
+        }],
+        logger, "test", "default", {}, container,
+      );
+
+      await module.init();
+
+      const saved = await storage.get<any>("cron_schedules", "versioned-cron");
+      expect(saved.version).toBe(2);
+      expect(saved.expression).toBe("*/10 * * * *");
+      // Operational state preserved
+      expect(saved.paused).toBe(true);
+      expect(saved.runCount).toBe(42);
+      expect(saved.successCount).toBe(40);
+      expect(saved.failCount).toBe(2);
+      // nextRunAt was force-recomputed (null then seeded)
+      expect(saved.nextRunAt).toBeDefined();
+    });
+
+    it("same version does not overwrite operational state", async () => {
+      const future = new Date(Date.now() + 500_000);
+      await storage.save("cron_schedules", "stable-cron", {
+        name: "stable-cron",
+        expression: "*/5 * * * *",
+        version: 1,
+        paused: false,
+        nextRunAt: future,
+        lastRunAt: new Date(),
+      });
+
+      const module = new CronEngine(
+        [{
+          name: "stable-cron",
+          version: 1,
+          expression: "*/5 * * * *",
+          handler: async () => {},
+        }],
+        logger, "test", "default", {}, container,
+      );
+
+      await module.init();
+
+      const saved = await storage.get<any>("cron_schedules", "stable-cron");
+      expect(saved.version).toBe(1);
+      // nextRunAt preserved (config unchanged)
+      expect(new Date(saved.nextRunAt).getTime()).toBe(future.getTime());
+    });
+
+    it("downgrade (code < DB) logs warning and skips overwrite", async () => {
+      await storage.save("cron_schedules", "downgrade-cron", {
+        name: "downgrade-cron",
+        expression: "*/10 * * * *",
+        version: 3,
+        nextRunAt: new Date(Date.now() + 100_000),
+      });
+
+      const module = new CronEngine(
+        [{
+          name: "downgrade-cron",
+          version: 2,
+          expression: "*/5 * * * *",
+          handler: async () => {},
+        }],
+        logger, "test", "default", {}, container,
+      );
+
+      await module.init();
+
+      const saved = await storage.get<any>("cron_schedules", "downgrade-cron");
+      // DB version and expression preserved — code did not overwrite
+      expect(saved.version).toBe(3);
+      expect(saved.expression).toBe("*/10 * * * *");
+    });
+  });
 });

@@ -1,11 +1,39 @@
 import { randomUUID } from "node:crypto";
 import type { CronDefinition, Logger } from "../engine/index.js";
+import type { ICronContext } from "../engine/context/cron-context.interface.js";
 import { cronParser } from "./cron-compat.js";
 
 export interface MissedFireResult {
   missed: boolean;
   /** The specific dates that were missed. For "run-all", contains all occurrences. */
   missedDates: Date[];
+}
+
+/** L2: Lightweight context for missed-fire hooks — satisfies ICronContext without full engine wiring */
+function createMissedFireContext(
+  defName: string,
+  logger: Logger,
+  now: Date,
+): ICronContext {
+  const startedAt = Date.now();
+  const childLogger = logger.child({ schedule: defName, scope: "missed-fire" });
+  const signal = new AbortController().signal;
+  let _progress = 0;
+
+  return {
+    id: randomUUID(),
+    name: defName,
+    scheduleName: defName,
+    log: childLogger,
+    signal,
+    get aborted() { return signal.aborted; },
+    firedAt: now,
+    get duration() { return Date.now() - startedAt; },
+    environment: undefined,
+    project: undefined,
+    progress(value: number, _label?: string) { _progress = Math.max(0, Math.min(100, value)); },
+    getProgress() { return _progress; },
+  };
 }
 
 export class MissedFireHandler {
@@ -81,21 +109,7 @@ export class MissedFireHandler {
 
         if (def.hooks?.onMissedFire) {
           try {
-            const ctx = {
-              id: randomUUID(),
-              log: this.logger.child({
-                schedule: def.name,
-                scope: "missed-fire",
-              }),
-              logger: this.logger.child({
-                schedule: def.name,
-                scope: "missed-fire",
-              }),
-              signal: new AbortController().signal,
-              firedAt: now,
-              scheduleName: def.name,
-              progress: () => {},
-            } as any;
+            const ctx = createMissedFireContext(def.name, this.logger, now);
             await def.hooks.onMissedFire(ctx, lastRunAt);
           } catch (err) {
             this.logger.error("onMissedFire hook threw", {

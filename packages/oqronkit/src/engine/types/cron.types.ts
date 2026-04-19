@@ -27,6 +27,8 @@ export interface CronHooks {
 
 export interface CronDefinition {
   name: string;
+  /** Schema version — bump when changing cron config to trigger a controlled migration. */
+  version?: number;
   expression?: string; // cron expression  (mutually exclusive with intervalMs)
   intervalMs?: number; // interval in ms   (resolved from `every` config)
   timezone?: string;
