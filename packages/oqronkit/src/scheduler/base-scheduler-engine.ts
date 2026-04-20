@@ -477,6 +477,86 @@ export abstract class BaseSchedulerEngine<
 		return this.di.storage.list<any>(this.storageNamespace);
 	}
 
+	// ── Per-Instance Pause/Resume API ─────────────────────────────────────────
+
+	/**
+	 * Pause a specific schedule/cron instance by name.
+	 *
+	 * The instance's `paused` flag is persisted to storage. On the next tick,
+	 * the tick loop will see `record.paused === true` and apply the
+	 * `disabledBehavior` policy (hold/skip/reject).
+	 *
+	 * Emits `schedule:paused` on the EventBus.
+	 *
+	 * @example
+	 * ```ts
+	 * await cronEngine.pauseInstance("daily-report");
+	 * ```
+	 */
+	async pauseInstance(name: string): Promise<void> {
+		const record = await this.di.storage.get<any>(this.storageNamespace, name);
+		if (!record) {
+			this.logger.warn("Attempted to pause non-existent instance", { name });
+			return;
+		}
+		if (record.paused) {
+			this.logger.debug("Instance already paused", { name });
+			return;
+		}
+
+		record.paused = true;
+		record.pausedAt = new Date();
+		await this.di.storage.save(this.storageNamespace, name, record);
+
+		OqronEventBus.emit("schedule:paused", name);
+		this.logger.info("Instance paused", { name, type: this.moduleType });
+	}
+
+	/**
+	 * Resume a previously paused schedule/cron instance by name.
+	 *
+	 * Clears the `paused` flag in storage. If held jobs exist (from
+	 * `disabledBehavior: "hold"`), they remain in storage and can be
+	 * replayed via `triggerManual()` or will be naturally picked up
+	 * if the definition's next fire is due.
+	 *
+	 * Emits `schedule:resumed` on the EventBus.
+	 *
+	 * @example
+	 * ```ts
+	 * await cronEngine.resumeInstance("daily-report");
+	 * ```
+	 */
+	async resumeInstance(name: string): Promise<void> {
+		const record = await this.di.storage.get<any>(this.storageNamespace, name);
+		if (!record) {
+			this.logger.warn("Attempted to resume non-existent instance", { name });
+			return;
+		}
+		if (!record.paused) {
+			this.logger.debug("Instance already active", { name });
+			return;
+		}
+
+		record.paused = false;
+		record.resumedAt = new Date();
+		delete record.pausedAt;
+		await this.di.storage.save(this.storageNamespace, name, record);
+
+		OqronEventBus.emit("schedule:resumed", name);
+		this.logger.info("Instance resumed", { name, type: this.moduleType });
+	}
+
+	/**
+	 * Check if a specific schedule/cron instance is currently paused.
+	 *
+	 * @returns `true` if paused, `false` if active or not found.
+	 */
+	async isPaused(name: string): Promise<boolean> {
+		const record = await this.di.storage.get<any>(this.storageNamespace, name);
+		return record?.paused === true;
+	}
+
 	// ── Tick (shared structure) ───────────────────────────────────────────────
 
 	protected async tick(): Promise<void> {
