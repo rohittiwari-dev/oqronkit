@@ -123,6 +123,16 @@ export interface QueueModuleConfig {
 	 * @default 100
 	 */
 	maxHeldJobs?: number;
+	/**
+	 * Enable cross-node stall scanning to recover orphaned jobs from crashed nodes.
+	 * When enabled, this node periodically scans ALL active jobs in storage and
+	 * reclaims any whose heartbeat lock has expired.
+	 * Set to `true` for defaults, or pass `{ intervalMs }` to customize.
+	 * @default false
+	 */
+	crossNodeStallScanner?: boolean | { intervalMs?: number; maxStalledCount?: number };
+	/** Event-loop lag monitor thresholds. Pauses job claiming when CPU is stalled. */
+	lagMonitor?: { maxLagMs?: number; sampleIntervalMs?: number };
 }
 
 export interface WebhookModuleConfig {
@@ -213,6 +223,13 @@ export interface WorkerModuleConfig {
 	/** Default auto-remove configuration */
 	removeOnComplete?: import("./engine/types/job.types.js").RemoveOnConfig;
 	removeOnFail?: import("./engine/types/job.types.js").RemoveOnConfig;
+	/**
+	 * Enable cross-node stall scanning to recover orphaned jobs from crashed nodes.
+	 * @default false
+	 */
+	crossNodeStallScanner?: boolean | { intervalMs?: number; maxStalledCount?: number };
+	/** Event-loop lag monitor thresholds. Pauses job claiming when CPU is stalled. */
+	lagMonitor?: { maxLagMs?: number; sampleIntervalMs?: number };
 }
 
 export type WorkerModuleDef = {

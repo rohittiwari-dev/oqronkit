@@ -2,7 +2,9 @@ import { randomUUID } from "node:crypto";
 import type { IOqronModule, Logger } from "../engine/index.js";
 import { OqronContainer, OqronEventBus } from "../engine/index.js";
 import { HeartbeatWorker } from "../engine/lock/heartbeat-worker.js";
+import { CrossNodeStallScanner } from "../engine/lock/cross-node-stall-scanner.js";
 import { StallDetector } from "../engine/lock/stall-detector.js";
+import { LagMonitor } from "../engine/lag-monitor.js";
 import type { OqronConfig } from "../engine/types/config.types.js";
 import type { BrokerStrategy } from "../engine/types/engine.js";
 import type { OqronJob } from "../engine/types/job.types.js";
@@ -32,6 +34,10 @@ export class WorkerEngine implements IOqronModule {
 	private pausedTopics = new Set<string>();
 	/** Per-topic timers for cleanup on deregister */
 	private topicTimers = new Map<string, NodeJS.Timeout>();
+	/** Cross-node stall scanner — recovers orphaned jobs from crashed nodes */
+	private crossNodeScanner: CrossNodeStallScanner | null = null;
+	/** Event-loop lag monitor — pauses job claiming when CPU is stalled */
+	private lagMonitor: LagMonitor | null = null;
 
 	constructor(
 		private readonly config: OqronConfig,
@@ -123,6 +129,39 @@ export class WorkerEngine implements IOqronModule {
 				await this.handleStalledJob(jobId);
 			},
 		);
+
+		// Start cross-node stall scanner (F9) — recovers orphaned jobs from crashed nodes
+		const scannerConfig = this.workerModuleConfig?.crossNodeStallScanner;
+		if (scannerConfig) {
+			const scannerOpts = typeof scannerConfig === "object" ? scannerConfig : {};
+			this.crossNodeScanner = new CrossNodeStallScanner(
+				this.di.storage,
+				this.di.lock,
+				this.logger,
+				{
+					intervalMs: scannerOpts.intervalMs ?? 60_000,
+					lockPrefix: "worker",
+					maxStalledCount: scannerOpts.maxStalledCount ?? 3,
+				},
+			);
+			this.crossNodeScanner.start(async (job) => {
+				OqronEventBus.emit("job:stalled", job.queueName, job.id);
+				if (job.status !== "failed") {
+					await this.di.broker.nack(job.queueName, job.id);
+				}
+			});
+		}
+
+		// Start event-loop lag monitor
+		const lagConfig = this.workerModuleConfig?.lagMonitor;
+		if (lagConfig) {
+			this.lagMonitor = new LagMonitor(
+				this.logger,
+				lagConfig.maxLagMs ?? 500,
+				lagConfig.sampleIntervalMs ?? 50,
+			);
+			this.lagMonitor.start();
+		}
 	}
 
 	async enable(): Promise<void> {
@@ -197,6 +236,14 @@ export class WorkerEngine implements IOqronModule {
 
 		this.stallDetector?.stop();
 		this.stallDetector = null;
+
+		// Stop cross-node scanner
+		this.crossNodeScanner?.stop();
+		this.crossNodeScanner = null;
+
+		// Stop lag monitor
+		this.lagMonitor?.stop();
+		this.lagMonitor = null;
 
 		// Abort all active jobs
 		for (const controller of this.abortControllers.values()) {
@@ -344,6 +391,8 @@ export class WorkerEngine implements IOqronModule {
 		if (!this.running || !this.enabled) return;
 		if (this.pausedTopics.has(w.topic)) return;
 		if (this.isPolling.has(w.topic)) return;
+		// Circuit breaker: skip polling if event loop is stalled
+		if (this.lagMonitor?.isCircuitTripped) return;
 
 		this.isPolling.add(w.topic);
 		try {

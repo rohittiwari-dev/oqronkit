@@ -12,15 +12,22 @@ describe("calculateBackoff()", () => {
     expect(calculateBackoff(opts, 100, 60000)).toBe(2000);
   });
 
-  it("should return exponentially growing delays for exponential strategy", () => {
+  it("should return exponentially growing delays with jitter for exponential strategy", () => {
     const opts = { type: "exponential" as const, delay: 1000 };
     const d1 = calculateBackoff(opts, 1, 60000);
     const d2 = calculateBackoff(opts, 2, 60000);
     const d3 = calculateBackoff(opts, 3, 60000);
 
-    expect(d1).toBe(1000); // 1000 * 2^0
-    expect(d2).toBe(2000); // 1000 * 2^1
-    expect(d3).toBe(4000); // 1000 * 2^2
+    // With ±20% jitter: base * 2^(n-1) * [0.8..1.2]
+    // d1: 1000 * 1 * [0.8..1.2] = [800..1200]
+    expect(d1).toBeGreaterThanOrEqual(800);
+    expect(d1).toBeLessThanOrEqual(1200);
+    // d2: 1000 * 2 * [0.8..1.2] = [1600..2400]
+    expect(d2).toBeGreaterThanOrEqual(1600);
+    expect(d2).toBeLessThanOrEqual(2400);
+    // d3: 1000 * 4 * [0.8..1.2] = [3200..4800]
+    expect(d3).toBeGreaterThanOrEqual(3200);
+    expect(d3).toBeLessThanOrEqual(4800);
   });
 
   it("should cap exponential delay at maxDelay", () => {

@@ -32,11 +32,12 @@ const builtinStrategies: Record<string, (delay: number) => BackoffStrategy> = {
   fixed: (delay: number) => () => delay,
 
   /**
-   * Exponential backoff: delay * 2^(attempt - 1).
-   * Attempt 1 → delay, Attempt 2 → delay*2, Attempt 3 → delay*4, ...
+   * Exponential backoff with jitter: delay * 2^(attempt - 1) * (0.8..1.2).
+   * Attempt 1 → ~delay, Attempt 2 → ~delay*2, Attempt 3 → ~delay*4, ...
+   * The ±20% random jitter prevents thundering herds when many jobs retry simultaneously.
    */
   exponential: (delay: number) => (attemptsMade: number) =>
-    Math.round(2 ** (attemptsMade - 1) * delay),
+    Math.round(2 ** (attemptsMade - 1) * delay * (0.8 + Math.random() * 0.4)),
 };
 
 /**

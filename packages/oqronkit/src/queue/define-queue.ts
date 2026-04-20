@@ -194,8 +194,7 @@ export function queue<T = any, R = any>(
       const di = OqronContainer.get();
       const query: any = { queueName: config.name };
       if (status) query.status = status;
-      const jobs = await di.storage.list("jobs", query, { limit: 100_000 });
-      return jobs.length;
+      return di.storage.count("jobs", query);
     },
 
     pause: async () => {
