@@ -295,7 +295,10 @@ export class WorkerEngine implements IOqronModule {
 
 	private startPolling(w: WorkerConfig) {
 		// W4: Use pollIntervalMs if set, fall back to heartbeatMs
-		const pollIntervalMs = w.pollIntervalMs ?? w.heartbeatMs ?? this.workerModuleConfig.heartbeatMs ?? 5000;
+		const basePollMs = w.pollIntervalMs ?? w.heartbeatMs ?? this.workerModuleConfig.heartbeatMs ?? 5000;
+		// F10: Add random jitter to prevent thundering herd on multi-worker startup
+		const jitter = w.jitterMs ? Math.round(Math.random() * w.jitterMs) : 0;
+		const pollIntervalMs = basePollMs + jitter;
 		const t = setInterval(() => {
 			this.poll(w).catch((e) =>
 				this.logger.error("Worker poll error", {

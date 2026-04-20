@@ -358,8 +358,11 @@ export class QueueEngine implements IOqronModule {
 			return;
 		}
 
-		const pollIntervalMs =
+		const basePollMs =
 			q.pollIntervalMs ?? q.heartbeatMs ?? this.queueConfig?.heartbeatMs ?? 5000;
+		// F10: Add random jitter to prevent thundering herd on multi-worker startup
+		const jitter = q.jitterMs ? Math.round(Math.random() * q.jitterMs) : 0;
+		const pollIntervalMs = basePollMs + jitter;
 		const t = setInterval(() => {
 			this.poll(q).catch((e) =>
 				this.logger.error(`Queue poller crashed for ${q.name}`, e),

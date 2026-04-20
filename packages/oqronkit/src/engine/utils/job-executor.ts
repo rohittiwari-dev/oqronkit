@@ -31,9 +31,11 @@ export interface JobHandlerConfig {
   /** Retry configuration */
   retries?: {
     max?: number;
-    strategy?: "fixed" | "exponential";
+    strategy?: "fixed" | "exponential" | "custom";
     baseDelay?: number;
     maxDelay?: number;
+    /** F7: Custom backoff function. Only used when strategy is "custom". */
+    backoffFn?: (attempt: number, baseDelay: number) => number;
   };
   /** Pre-execution rate limiter */
   rateLimiter?: { check(ctx: any): Promise<{ allowed: boolean }> };
@@ -47,6 +49,10 @@ export interface JobHandlerConfig {
     beforeRun?: (ctx: QueueJobContext) => Promise<void> | void;
     onSuccess?: (job: OqronJob, result: any) => Promise<void> | void;
     onFail?: (job: OqronJob, error: Error) => Promise<void> | void;
+    /** DX3: Alias for onSuccess */
+    afterRun?: (job: OqronJob, result: any) => Promise<void> | void;
+    /** DX3: Alias for onFail */
+    onError?: (job: OqronJob, error: Error) => Promise<void> | void;
   };
   /**
    * F6: Pre-execution condition gate.
@@ -227,6 +233,8 @@ export async function executeJob(
     discard: () => {
       internalDiscarded = true;
     },
+    // C3: Return current progress value from job record
+    getProgress: () => job.progressPercent ?? 0,
   };
 
   // Update state to active
@@ -344,6 +352,8 @@ export async function executeJob(
       const backoffOpts = job.opts?.backoff ?? {
         type: retryStrategy,
         delay: baseDelay,
+        // F7: Pass through custom backoff function if strategy is "custom"
+        backoffFn: hc.retries?.backoffFn,
       };
       const delay = calculateBackoff(backoffOpts, job.attemptMade, maxDelay);
 
@@ -445,6 +455,14 @@ export async function executeJob(
           logger.error("onSuccess hook failed", { err: String(e) }),
         );
     }
+    // DX3: afterRun alias
+    if (hc.hooks?.afterRun) {
+      void Promise.resolve()
+        .then(() => hc.hooks!.afterRun!(job as OqronJob, result))
+        .catch((e) =>
+          logger.error("afterRun hook failed", { err: String(e) }),
+        );
+    }
   } else {
     const errorObject = new Error(error ?? "Unknown error");
     OqronEventBus.emit("job:fail", job.queueName, job.id, errorObject);
@@ -454,6 +472,14 @@ export async function executeJob(
         .then(() => hc.hooks!.onFail!(job as OqronJob, errorObject))
         .catch((e) =>
           logger.error("onFail hook failed", { err: String(e) }),
+        );
+    }
+    // DX3: onError alias
+    if (hc.hooks?.onError) {
+      void Promise.resolve()
+        .then(() => hc.hooks!.onError!(job as OqronJob, errorObject))
+        .catch((e) =>
+          logger.error("onError hook failed", { err: String(e) }),
         );
     }
 

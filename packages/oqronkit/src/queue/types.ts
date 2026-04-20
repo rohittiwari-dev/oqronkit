@@ -53,6 +53,11 @@ export interface QueueJobContext<T = any> {
    */
   readonly duration: number;
 
+  /**
+   * C3: Returns the current progress percent (0–100) for this job.
+   */
+  getProgress: () => number;
+
   /** The environment context (isolation boundary) */
   environment: string;
 
@@ -99,6 +104,14 @@ export interface QueueConfig<T = any, R = any> {
   pollIntervalMs?: number;
 
   /**
+   * F10: Random jitter added to poll intervals to prevent thundering herd
+   * when multiple workers start simultaneously.
+   * Final interval = pollIntervalMs + Math.random() * jitterMs.
+   * @default 0
+   */
+  jitterMs?: number;
+
+  /**
    * Default priority for all jobs added to this queue.
    * Individual jobs can override this via `OqronJobOptions.priority`.
    * Lower number = higher priority.
@@ -115,9 +128,11 @@ export interface QueueConfig<T = any, R = any> {
   /** Native worker retry logic. Deep-merged with global config. */
   retries?: {
     max?: number;
-    strategy?: "fixed" | "exponential";
+    strategy?: "fixed" | "exponential" | "custom";
     baseDelay?: number;
     maxDelay?: number;
+    /** F7: Custom backoff function. Only used when strategy is "custom". */
+    backoffFn?: (attempt: number, baseDelay: number) => number;
   };
 
   /** DLQ hooks */
@@ -150,8 +165,20 @@ export interface QueueConfig<T = any, R = any> {
   hooks?: {
     /** Called before handler execution. Throw to skip. */
     beforeRun?: (ctx: QueueJobContext) => Promise<void> | void;
+    /** Called when the handler fulfills successfully */
     onSuccess?: (job: OqronJob<T, R>, result: R) => Promise<void> | void;
+    /** Called when the handler rejects with an error */
     onFail?: (job: OqronJob<T, R>, error: Error) => Promise<void> | void;
+    /**
+     * DX3: Alias for onSuccess — called after handler completes successfully.
+     * If both `afterRun` and `onSuccess` are set, both are invoked.
+     */
+    afterRun?: (job: OqronJob<T, R>, result: R) => Promise<void> | void;
+    /**
+     * DX3: Alias for onFail — called after handler rejects.
+     * If both `onError` and `onFail` are set, both are invoked.
+     */
+    onError?: (job: OqronJob<T, R>, error: Error) => Promise<void> | void;
   };
 
   /**

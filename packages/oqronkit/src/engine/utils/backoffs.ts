@@ -2,14 +2,25 @@
  * ═══════════════════════════════════════════════════════════════════════════════
  *  OqronKit — Backoff Strategies
  *
- *  Built-in fixed and exponential backoff calculators for retry logic
+ *  Built-in fixed, exponential, and custom backoff calculators for retry logic
  *  across all OqronKit engine modules.
  * ═══════════════════════════════════════════════════════════════════════════════
  */
 
 export interface BackoffOptions {
-  type: "fixed" | "exponential";
+  type: "fixed" | "exponential" | "custom";
   delay: number;
+  /**
+   * F7: Custom backoff function.
+   * Only used when `type` is `"custom"`.
+   * Receives the attempt number (1-based) and base delay, returns delay in ms.
+   *
+   * @example
+   * ```ts
+   * backoffFn: (attempt, baseDelay) => baseDelay * attempt * attempt // Quadratic
+   * ```
+   */
+  backoffFn?: (attempt: number, baseDelay: number) => number;
 }
 
 type BackoffStrategy = (attemptsMade: number) => number;
@@ -55,16 +66,28 @@ export function calculateBackoff(
 ): number {
   if (!backoff) return 0;
 
-  const strategyFactory = builtinStrategies[backoff.type];
-  if (!strategyFactory) {
-    throw new Error(
-      `[OqronKit] Unknown backoff strategy "${backoff.type}". ` +
-        `Supported: "fixed", "exponential".`,
-    );
-  }
+  let delay: number;
 
-  const strategy = strategyFactory(backoff.delay);
-  const delay = strategy(attemptsMade);
+  // F7: Custom backoff strategy
+  if (backoff.type === "custom") {
+    if (!backoff.backoffFn) {
+      throw new Error(
+        `[OqronKit] Custom backoff strategy requires a "backoffFn" function.`,
+      );
+    }
+    delay = backoff.backoffFn(attemptsMade, backoff.delay);
+  } else {
+    const strategyFactory = builtinStrategies[backoff.type];
+    if (!strategyFactory) {
+      throw new Error(
+        `[OqronKit] Unknown backoff strategy "${backoff.type}". ` +
+          `Supported: "fixed", "exponential", "custom".`,
+      );
+    }
+
+    const strategy = strategyFactory(backoff.delay);
+    delay = strategy(attemptsMade);
+  }
 
   // Cap at maxDelay if specified
   if (maxDelay && delay > maxDelay) {
