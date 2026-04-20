@@ -224,59 +224,6 @@ export class PostgresBroker implements IBrokerEngine {
     return finalClaim.length > 0 ? finalClaim[0] : null;
   }
 
-  /**
-   * Atomic state transition using Postgres transaction.
-   * Combines storage save + broker nack/ack in a single ACID transaction.
-   * Only works when BOTH storage and broker are Postgres (same database).
-   */
-  async atomicTransition(
-    brokerName: string,
-    jobId: string,
-    _jobData: Record<string, any>,
-    action: "nack" | "ack",
-    delayMs?: number,
-  ): Promise<void> {
-    await this.ensureTable();
-    const client = await this.pool.connect();
-
-    try {
-      await client.query("BEGIN");
-
-      // Step 1: Update job in storage
-      // NOTE: This assumes Postgres storage uses an 'oqron_storage' table
-      // with namespace/id/data columns. The actual table name depends on config.
-      // This is a best-effort atomic — if storage uses a different table name,
-      // the ReconciliationEngine catches any orphans.
-
-      // Step 2: Handle broker action
-      if (action === "ack") {
-        await client.query(
-          `DELETE FROM ${this.tableName} WHERE broker_name = $1 AND id = $2`,
-          [brokerName, jobId],
-        );
-      } else {
-        // nack: release lock and re-queue
-        const runAt = delayMs && delayMs > 0
-          ? new Date(Date.now() + delayMs).toISOString()
-          : new Date().toISOString();
-
-        await client.query(
-          `UPDATE ${this.tableName}
-           SET locked_by = NULL, locked_until = NULL, run_at = $1::timestamptz
-           WHERE broker_name = $2 AND id = $3`,
-          [runAt, brokerName, jobId],
-        );
-      }
-
-      await client.query("COMMIT");
-    } catch (err) {
-      await client.query("ROLLBACK");
-      throw err;
-    } finally {
-      client.release();
-    }
-  }
-
   async close(): Promise<void> {
     if (this.pool) await this.pool.end();
   }

@@ -21,7 +21,7 @@ export interface JobHandlerConfig {
   /** The handler function to execute. Optional when processBatch is set. */
   handler?: (ctx: QueueJobContext<any>) => Promise<any>;
   /** Batch handler — receives an array of job contexts. Mutually exclusive with handler. */
-  processBatch?: (jobs: QueueJobContext<any>[]) => Promise<any[]>;
+  processBatch?: (jobs: QueueJobContext<any>[]) => Promise<Array<PromiseSettledResult<any>> | void>;
   /** Enable crash-safe heartbeat locks. @default true */
   guaranteedWorker?: boolean;
   /** Heartbeat polling interval in ms */
@@ -418,14 +418,9 @@ export async function executeJob(
       // Clean up abort controller
       ctx.abortControllers.delete(job.id);
 
-      // v2: Atomic state transition — save + nack in one call when available
       OqronEventBus.emit("job:retried", job.id, `attempt:${job.attemptMade + 1}`);
-      if (di.broker.atomicTransition) {
-        await di.broker.atomicTransition(hc.name, job.id, job as Record<string, any>, "nack", delay);
-      } else {
-        await di.storage.save("jobs", job.id, job);
-        await di.broker.nack(hc.name, job.id, delay);
-      }
+      await di.storage.save("jobs", job.id, job);
+      await di.broker.nack(hc.name, job.id, delay);
       return; // Exit — the job will be re-claimed on the next poll cycle
     }
 
@@ -477,13 +472,8 @@ export async function executeJob(
     reason: status === "failed" ? error : "Finished successfully",
   });
 
-  // v2: Atomic state transition — save + ack in one call when available
-  if (di.broker.atomicTransition) {
-    await di.broker.atomicTransition(hc.name, job.id, job as Record<string, any>, "ack");
-  } else {
-    await di.storage.save("jobs", job.id, job);
-    await di.broker.ack(hc.name, job.id);
-  }
+  await di.storage.save("jobs", job.id, job);
+  await di.broker.ack(hc.name, job.id);
 
   // ── Notify dependent children ────────────────────────────────────
   if (job.childrenIds?.length) {
@@ -587,7 +577,7 @@ function pushTimeline(
 function buildJobContext(
   job: OqronJob,
   ctx: JobExecutionContext,
-): { jobCtx: QueueJobContext; abortController: AbortController } {
+): { jobCtx: QueueJobContext; abortController: AbortController; getDiscarded: () => boolean } {
   const { di, logger, handlerConfig: hc } = ctx;
 
   const abortController = new AbortController();
@@ -666,15 +656,13 @@ function buildJobContext(
     },
   };
 
-  return { jobCtx, abortController };
+  return { jobCtx, abortController, getDiscarded: () => internalDiscarded };
 }
 
 /**
- * Execute a batch of jobs using `processBatch`. All-or-nothing semantics:
- * if the batch handler succeeds, ALL jobs are marked completed.
- * If it throws, ALL jobs fail and retry together.
- *
- * Falls back to parallel individual execution if `processBatch` is not set.
+ * Execute a batch of jobs using `processBatch`.
+ * Supports Partial Responses: jobs can individually succeed, fail, or be discarded.
+ * Falls back to all-or-nothing failure if the handler throws synchronously.
  */
 export async function executeBatch(
   jobs: OqronJob[],
@@ -723,7 +711,7 @@ export async function executeBatch(
   }
 
   // ── Build contexts for all jobs ────────────────────────────────────────
-  const contexts: Array<{ job: OqronJob; jobCtx: QueueJobContext; abortController: AbortController }> = [];
+  const contexts: Array<{ job: OqronJob; jobCtx: QueueJobContext; abortController: AbortController; getDiscarded: () => boolean }> = [];
   for (const job of jobs) {
     job.moduleName = job.moduleName ?? hc.name;
     job.status = "active";
@@ -733,86 +721,81 @@ export async function executeBatch(
     job.processedOn = job.startedAt;
     await di.storage.save("jobs", job.id, job);
 
-    const { jobCtx, abortController } = buildJobContext(job, ctx);
-    contexts.push({ job, jobCtx, abortController });
+    const { jobCtx, abortController, getDiscarded } = buildJobContext(job, ctx);
+    contexts.push({ job, jobCtx, abortController, getDiscarded });
   }
 
-  let status: "completed" | "failed" = "completed";
-  let error: string | undefined;
-  let results: any[] | undefined;
+  let results: Array<PromiseSettledResult<any>> | void | undefined;
+  let topLevelError: Error | undefined;
 
   try {
     results = await hc.processBatch(contexts.map((c) => c.jobCtx));
-    status = "completed";
   } catch (e: any) {
-    error = e.message ?? "Batch processing failed";
-    status = "failed";
-
-    // Check if we should retry ALL jobs
-    const shouldRetry = contexts.some((c) => {
-      const effectiveMax = c.job.opts?.attempts ? c.job.opts.attempts - 1 : maxRetries;
-      return c.job.attemptMade <= effectiveMax;
-    });
-
-    if (shouldRetry) {
-      const backoffOpts = { type: retryStrategy, delay: baseDelay };
-      const delay = calculateBackoff(backoffOpts, contexts[0].job.attemptMade, maxDelay);
-
-      logger.warn("Batch failed, re-queuing all jobs for retry...", {
-        name: hc.name,
-        count: jobs.length,
-        nextIn: `${delay}ms`,
-        error,
-      });
-
-      // Stop heartbeat before nack
-      if (heartbeat) {
-        await heartbeat.stop();
-      }
-
-      for (const { job } of contexts) {
-        job.status = "delayed";
-        job.error = error;
-        OqronEventBus.emit("job:retried", job.id, `batch-attempt:${job.attemptMade + 1}`);
-        if (di.broker.atomicTransition) {
-          await di.broker.atomicTransition(hc.name, job.id, job as Record<string, any>, "nack", delay);
-        } else {
-          await di.storage.save("jobs", job.id, job);
-          await di.broker.nack(hc.name, job.id, delay);
-        }
-      }
-
-      // Clean up
-      for (const { job } of contexts) {
-        ctx.abortControllers.delete(job.id);
-      }
-      return;
-    }
+    topLevelError = e instanceof Error ? e : new Error(e?.message ?? "Batch processing failed");
   }
 
-  // ── Clean up ──────────────────────────────────────────────────────────
+  // ── Stop Heartbeat & Cleanup Controllers ──────────────────────────────
+  if (heartbeat) {
+    await heartbeat.stop();
+  }
   for (const { job } of contexts) {
     ctx.abortControllers.delete(job.id);
   }
 
-  if (heartbeat) {
-    await heartbeat.stop();
-  }
-
-  // ── Finalize all jobs ─────────────────────────────────────────────────
+  // ── Finalize Jobs ─────────────────────────────────────────────────────
   const finishedAt = new Date();
-  for (let i = 0; i < contexts.length; i++) {
-    const { job } = contexts[i];
-    job.status = status;
-    job.finishedAt = finishedAt;
-    job.error = error;
 
-    if (status === "completed") {
-      job.returnValue = results?.[i];
+  // If top-level error occurred, synthesize rejected results for all jobs
+  const resolvedResults: Array<PromiseSettledResult<any>> = results
+    ? (Array.isArray(results) ? results : contexts.map(() => ({ status: "fulfilled", value: undefined })))
+    : contexts.map(() => ({ status: "rejected", reason: topLevelError }));
+
+  for (let i = 0; i < contexts.length; i++) {
+    const { job, getDiscarded } = contexts[i];
+    // In case the returned array is shorter than contexts array, assume rejected with out-of-bounds error
+    const result = resolvedResults[i] ?? { status: "rejected", reason: new Error("processBatch returned fewer results than jobs") };
+
+    let finalStatus: "completed" | "failed" = "completed";
+    let finalError: string | undefined;
+
+    const isDiscarded = getDiscarded();
+
+    if (isDiscarded) {
+      // Discarded jobs silently "complete" but are really just acked and dropped.
+      finalStatus = "completed";
+      job.progressLabel = "Discarded";
+      job.error = "Job discarded via ctx.discard()";
+      // Ensure we don't retry it
+      job.attemptMade = maxRetries + 1;
+    } else if (result.status === "fulfilled") {
+      finalStatus = "completed";
+      job.returnValue = result.value;
       job.progressPercent = 100;
       job.progressLabel = "Completed";
+    } else {
+      finalStatus = "failed";
+      finalError = result.reason instanceof Error ? result.reason.message : String(result.reason);
+      job.error = finalError;
+      
+      const effectiveMax = job.opts?.attempts ? job.opts.attempts - 1 : maxRetries;
+      const shouldRetry = job.attemptMade <= effectiveMax;
+
+      if (shouldRetry) {
+        // Will retry
+        const backoffOpts = { type: retryStrategy, delay: baseDelay };
+        const delay = calculateBackoff(backoffOpts, job.attemptMade, maxDelay);
+        job.status = "delayed";
+        
+        OqronEventBus.emit("job:retried", job.id, `attempt:${job.attemptMade + 1}`);
+        await di.storage.save("jobs", job.id, job);
+        await di.broker.nack(hc.name, job.id, delay);
+        continue; // Skip the standard completion save/ack below
+      }
     }
 
+    // Completion or permanent failure path
+    job.status = finalStatus;
+    job.finishedAt = finishedAt;
     if (job.startedAt) {
       job.durationMs = finishedAt.getTime() - new Date(job.startedAt).getTime();
     }
@@ -821,49 +804,45 @@ export async function executeBatch(
     pushTimeline(job, {
       ts: finishedAt,
       from: "active",
-      to: status,
-      reason: status === "failed" ? error : `Batch completed (${contexts.length} jobs)`,
+      to: finalStatus,
+      reason: isDiscarded ? "Discarded" : (finalStatus === "failed" ? finalError : "Batch completed"),
     });
 
-    // Atomic save + ack
-    if (di.broker.atomicTransition) {
-      await di.broker.atomicTransition(hc.name, job.id, job as Record<string, any>, "ack");
-    } else {
-      await di.storage.save("jobs", job.id, job);
-      await di.broker.ack(hc.name, job.id);
-    }
+    await di.storage.save("jobs", job.id, job);
+    await di.broker.ack(hc.name, job.id);
 
-    // Notify children
-    if (job.childrenIds?.length) {
+    if (job.childrenIds?.length && finalStatus === "completed") {
       await DependencyResolver.notifyChildren(di.storage, di.broker, job.id);
     }
-  }
 
-  // ── EventBus emissions + hooks ─────────────────────────────────────────
-  if (status === "completed") {
-    for (let i = 0; i < contexts.length; i++) {
-      const { job } = contexts[i];
+    // ── Events & Hooks ──────────────────────────────────────────────
+    if (finalStatus === "completed" && !isDiscarded) {
       OqronEventBus.emit("job:success", job.queueName, job.id);
+      if (hc.hooks?.onSuccess) {
+        try { await hc.hooks.onSuccess(job as any, job.returnValue); } catch (e) { logger.error(`Hooks.onSuccess failed: ${e}`); }
+      }
+      if (hc.hooks?.afterRun) {
+        try { await hc.hooks.afterRun(job as any, job.returnValue); } catch (e) { logger.error(`Hooks.afterRun failed: ${e}`); }
+      }
+    } else if (finalStatus === "failed") {
+      const errObj = new Error(finalError ?? "Unknown error");
+      OqronEventBus.emit("job:fail", job.queueName, job.id, errObj);
+      if (hc.hooks?.onFail) {
+        try { await hc.hooks.onFail(job as any, errObj); } catch (e) { logger.error(`Hooks.onFail failed: ${e}`); }
+      }
+      if (hc.hooks?.onError) {
+        try { await hc.hooks.onError(job as any, errObj); } catch (e) { logger.error(`Hooks.onError failed: ${e}`); }
+      }
     }
-  } else {
-    for (const { job } of contexts) {
-      const errorObject = new Error(error ?? "Unknown error");
-      OqronEventBus.emit("job:fail", job.queueName, job.id, errorObject);
-    }
-  }
 
-  // ── Job Retention / Pruning ────────────────────────────────────────────
-  for (const { job } of contexts) {
+    // ── Job Retention / Pruning ─────────────────────────────────────
     await pruneAfterCompletion({
       namespace: "jobs",
       jobId: job.id,
-      status,
-      jobRemoveConfig:
-        status === "completed" ? job.opts?.removeOnComplete : job.opts?.removeOnFail,
-      moduleRemoveConfig:
-        status === "completed" ? hc.removeOnComplete : hc.removeOnFail,
-      globalRemoveConfig:
-        status === "completed" ? md.removeOnComplete : md.removeOnFail,
+      status: finalStatus,
+      jobRemoveConfig: finalStatus === "completed" ? job.opts?.removeOnComplete : job.opts?.removeOnFail,
+      moduleRemoveConfig: finalStatus === "completed" ? hc.removeOnComplete : hc.removeOnFail,
+      globalRemoveConfig: finalStatus === "completed" ? md.removeOnComplete : md.removeOnFail,
       filterKey: "queueName",
       filterValue: hc.name,
     });

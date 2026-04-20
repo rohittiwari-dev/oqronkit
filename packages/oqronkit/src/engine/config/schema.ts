@@ -51,10 +51,13 @@ const DEFAULT_SCHEDULER: Omit<
 
 const DEFAULT_QUEUE: Omit<
 	Required<QueueModuleDef>,
-	"disabledBehavior" | "maxHeldJobs"
+	"disabledBehavior" | "maxHeldJobs" | "lagMonitor" | "crossNodeStallScanner" | "reconciliation"
 > & {
 	disabledBehavior?: QueueModuleDef["disabledBehavior"];
 	maxHeldJobs?: QueueModuleDef["maxHeldJobs"];
+	lagMonitor?: QueueModuleDef["lagMonitor"];
+	crossNodeStallScanner?: QueueModuleDef["crossNodeStallScanner"];
+	reconciliation?: QueueModuleDef["reconciliation"];
 } = {
 	module: "queue",
 	concurrency: 5,
@@ -77,10 +80,13 @@ const DEFAULT_QUEUE: Omit<
 
 const DEFAULT_WORKER: Omit<
 	Required<WorkerModuleDef>,
-	"disabledBehavior" | "maxHeldJobs"
+	"disabledBehavior" | "maxHeldJobs" | "lagMonitor" | "crossNodeStallScanner" | "reconciliation"
 > & {
 	disabledBehavior?: WorkerModuleDef["disabledBehavior"];
 	maxHeldJobs?: WorkerModuleDef["maxHeldJobs"];
+	lagMonitor?: WorkerModuleDef["lagMonitor"];
+	crossNodeStallScanner?: WorkerModuleDef["crossNodeStallScanner"];
+	reconciliation?: WorkerModuleDef["reconciliation"];
 } = {
 	module: "worker",
 	concurrency: 5,

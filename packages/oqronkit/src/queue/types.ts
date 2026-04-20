@@ -232,7 +232,7 @@ export interface QueueConfig<T = any, R = any> {
    *
    * Mutually exclusive with `handler`. If both are set, `processBatch` takes precedence.
    */
-  processBatch?: (jobs: QueueJobContext<T>[]) => Promise<R[]>;
+  processBatch?: (jobs: QueueJobContext<T>[]) => Promise<Array<PromiseSettledResult<R>> | void>;
 
   /**
    * Number of jobs to claim per poll tick when using `processBatch`.

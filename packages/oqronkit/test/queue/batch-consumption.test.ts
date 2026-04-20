@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { OqronKit } from "../../src/index.js";
 import { queue } from "../../src/queue/define-queue.js";
 
@@ -14,7 +14,7 @@ describe("Batch Consumption", () => {
       processBatch: async (jobs) => {
         batchProcessed = true;
         jobCount = jobs.length;
-        return jobs.map(() => "ok");
+        return jobs.map((j) => ({ status: "fulfilled" as const, value: `ok-${j.id}` }));
       },
     });
 
@@ -23,7 +23,7 @@ describe("Batch Consumption", () => {
         environment: "test",
         project: "test",
         modules: ["queue"],
-        triggers: false, // Don't scan filesystem for triggers
+        triggers: false,
       }
     });
   });
@@ -35,15 +35,12 @@ describe("Batch Consumption", () => {
   });
 
   it("should process jobs in a batch all at once", async () => {
-
-
     await q.addBulk([
       { data: 1 },
       { data: 2 },
       { data: 3 },
     ]);
 
-    // Give the polling loop a moment
     await new Promise((r) => setTimeout(r, 200));
 
     expect(batchProcessed).toBe(true);

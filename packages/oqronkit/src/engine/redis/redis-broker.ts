@@ -271,49 +271,4 @@ export class RedisBroker implements IBrokerEngine {
 
     return id;
   }
-
-  /**
-   * Atomic state transition using Redis Lua script.
-   * Combines storage save + broker nack/ack in a single atomic operation.
-   * Only works when BOTH storage and broker are Redis (same database).
-   */
-  async atomicTransition(
-    brokerName: string,
-    jobId: string,
-    jobData: Record<string, any>,
-    action: "nack" | "ack",
-    delayMs?: number,
-  ): Promise<void> {
-    const storageKey = "oqron:storage:jobs"; // Assuming default Redis storage key
-    const lockKey = this.getLockKey(jobId);
-    const qkey = this.getQueueKey(brokerName);
-    const zkey = this.getDelayedKey(brokerName);
-
-    const jobJson = JSON.stringify(jobData);
-    const runAt = delayMs ? Date.now() + delayMs : 0;
-
-    // LUA Script:
-    // KEYS[1] = storage hash, KEYS[2] = lock key, KEYS[3] = queue list, KEYS[4] = delayed zset
-    // ARGV[1] = jobId, ARGV[2] = jobJson, ARGV[3] = action, ARGV[4] = runAt
-    const lua = `
-      redis.call("HSET", KEYS[1], ARGV[1], ARGV[2])
-      redis.call("DEL", KEYS[2])
-      if ARGV[3] == "nack" then
-        local runAt = tonumber(ARGV[4])
-        if runAt > 0 then
-          redis.call("ZADD", KEYS[4], runAt, ARGV[1])
-        else
-          redis.call("LPUSH", KEYS[3], ARGV[1])
-        end
-      end
-      return 1
-    `;
-
-    await this.redis.eval(
-      lua,
-      4,
-      storageKey, lockKey, qkey, zkey,
-      jobId, jobJson, action, runAt.toString()
-    );
-  }
 }

@@ -101,22 +101,6 @@ export interface IBrokerEngine {
     timeoutMs: number,
     strategy?: BrokerStrategy,
   ): Promise<string | null>;
-
-  /**
-   * Atomic state transition — combines storage save + broker nack/ack in a
-   * single atomic operation. Prevents split-brain orphans where DB save
-   * succeeds but broker operation fails (or vice versa).
-   *
-   * Only available when storage and broker are the same engine (Redis+Redis,
-   * Postgres+Postgres). Falls back to 2-step save+nack when not implemented.
-   */
-  atomicTransition?(
-    brokerName: string,
-    jobId: string,
-    jobData: Record<string, any>,
-    action: "nack" | "ack",
-    delayMs?: number,
-  ): Promise<void>;
 }
 
 /**
