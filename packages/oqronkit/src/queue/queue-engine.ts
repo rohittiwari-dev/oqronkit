@@ -5,6 +5,7 @@ import { HeartbeatWorker } from "../engine/lock/heartbeat-worker.js";
 import { CrossNodeStallScanner } from "../engine/lock/cross-node-stall-scanner.js";
 import { StallDetector } from "../engine/lock/stall-detector.js";
 import { LagMonitor } from "../engine/lag-monitor.js";
+import { ReconciliationEngine } from "../engine/utils/reconciliation-engine.js";
 import type { OqronConfig } from "../engine/types/config.types.js";
 import type { BrokerStrategy } from "../engine/types/engine.js";
 import type { OqronJob } from "../engine/types/job.types.js";
@@ -43,6 +44,8 @@ export class QueueEngine implements IOqronModule {
 	private crossNodeScanner: CrossNodeStallScanner | null = null;
 	/** Event-loop lag monitor — pauses job claiming when CPU is stalled */
 	private lagMonitor: LagMonitor | null = null;
+	/** Storage-broker reconciliation engine — recovers orphaned jobs from split-brain crashes */
+	private reconciler: ReconciliationEngine | null = null;
 
 	constructor(
 		private config: OqronConfig,
@@ -211,6 +214,25 @@ export class QueueEngine implements IOqronModule {
 			);
 			this.lagMonitor.start();
 		}
+
+		// Start storage-broker reconciliation engine (Phase 4)
+		const reconConfig = this.queueConfig?.reconciliation;
+		if (reconConfig) {
+			const reconOpts = typeof reconConfig === "object" ? reconConfig : {};
+			this.reconciler = new ReconciliationEngine(
+				this.di.storage,
+				this.di.broker,
+				this.di.lock,
+				this.logger,
+				{
+					intervalMs: reconOpts.intervalMs ?? 120_000,
+					waitingThresholdMs: reconOpts.waitingThresholdMs ?? 300_000,
+					delayedGraceMs: reconOpts.delayedGraceMs ?? 120_000,
+					batchSize: reconOpts.batchSize ?? 500,
+				},
+			);
+			this.reconciler.start();
+		}
 	}
 
 	async triggerManual(id: string): Promise<boolean> {
@@ -294,6 +316,10 @@ export class QueueEngine implements IOqronModule {
 		// Stop lag monitor
 		this.lagMonitor?.stop();
 		this.lagMonitor = null;
+
+		// Stop reconciliation engine
+		this.reconciler?.stop();
+		this.reconciler = null;
 
 		// Abort all active jobs
 		for (const controller of this.abortControllers.values()) {

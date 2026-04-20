@@ -133,6 +133,18 @@ export interface QueueModuleConfig {
 	crossNodeStallScanner?: boolean | { intervalMs?: number; maxStalledCount?: number };
 	/** Event-loop lag monitor thresholds. Pauses job claiming when CPU is stalled. */
 	lagMonitor?: { maxLagMs?: number; sampleIntervalMs?: number };
+	/**
+	 * Enable storage-broker reconciliation to recover orphaned jobs from
+	 * split-brain crashes (DB save succeeded but broker nack failed).
+	 * Set to `true` for defaults, or pass config to customize thresholds.
+	 * @default false
+	 */
+	reconciliation?: boolean | {
+		intervalMs?: number;
+		waitingThresholdMs?: number;
+		delayedGraceMs?: number;
+		batchSize?: number;
+	};
 }
 
 export interface WebhookModuleConfig {
@@ -230,6 +242,16 @@ export interface WorkerModuleConfig {
 	crossNodeStallScanner?: boolean | { intervalMs?: number; maxStalledCount?: number };
 	/** Event-loop lag monitor thresholds. Pauses job claiming when CPU is stalled. */
 	lagMonitor?: { maxLagMs?: number; sampleIntervalMs?: number };
+	/**
+	 * Enable storage-broker reconciliation to recover orphaned jobs.
+	 * @default false
+	 */
+	reconciliation?: boolean | {
+		intervalMs?: number;
+		waitingThresholdMs?: number;
+		delayedGraceMs?: number;
+		batchSize?: number;
+	};
 }
 
 export type WorkerModuleDef = {

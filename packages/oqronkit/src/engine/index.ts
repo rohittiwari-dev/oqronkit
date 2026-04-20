@@ -30,6 +30,9 @@ export { LagMonitor } from "./lag-monitor.js";
 // ── Lock Infrastructure ──────────────────────────────────────────────────────
 export { CrossNodeStallScanner } from "./lock/cross-node-stall-scanner.js";
 
+// ── Reconciliation ───────────────────────────────────────────────────────────
+export { ReconciliationEngine, type ReconciliationConfig } from "./utils/reconciliation-engine.js";
+
 // ── Sandbox ──────────────────────────────────────────────────────────────────
 export { SandboxedProcessor, type SandboxedProcessorConfig, type SandboxResult } from "./sandbox/sandboxed-processor.js";
 
