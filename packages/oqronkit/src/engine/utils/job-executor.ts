@@ -48,6 +48,11 @@ export interface JobHandlerConfig {
     onSuccess?: (job: OqronJob, result: any) => Promise<void> | void;
     onFail?: (job: OqronJob, error: Error) => Promise<void> | void;
   };
+  /**
+   * F6: Pre-execution condition gate.
+   * If condition returns false, the job is nacked with a delay.
+   */
+  condition?: (ctx: QueueJobContext) => Promise<boolean> | boolean;
   /** Auto-remove completed jobs */
   removeOnComplete?: RemoveOnConfig;
   /** Auto-remove failed jobs */
@@ -173,6 +178,25 @@ export async function executeJob(
   // Compute max attempts for context
   const maxAttempts = effectiveMaxRetries + 1;
 
+  // C1: Capture start time for duration getter
+  const executionStartTime = Date.now();
+
+  // C2: Build hybrid function+object log API
+  const logFn = (level: "info" | "warn" | "error", msg: string) => {
+    const method = logger[level] || logger.info;
+    method.call(logger, `[${ctx.lockPrefix}:${hc.name}] ${msg}`, {
+      jobId: job.id,
+    });
+    if (!job.logs) job.logs = [];
+    job.logs.push({ level, msg, ts: new Date() });
+    // Best effort async save for logs without blocking execution
+    di.storage.save("jobs", job.id, job).catch(() => {});
+  };
+  // Attach object-style methods (C2)
+  logFn.info = (msg: string) => logFn("info", msg);
+  logFn.warn = (msg: string) => logFn("warn", msg);
+  logFn.error = (msg: string) => logFn("error", msg);
+
   const jobCtx: QueueJobContext<any> = {
     id: job.id,
     name: hc.name,
@@ -184,6 +208,8 @@ export async function executeJob(
     attempt: (job.attemptMade ?? 0) + 1,
     maxAttempts,
     createdAt: job.createdAt ? new Date(job.createdAt) : new Date(),
+    // C1: Live elapsed time getter
+    get duration() { return Date.now() - executionStartTime; },
     progress: async (percent, label) => {
       job.progressPercent = percent;
       job.progressLabel = label;
@@ -197,16 +223,7 @@ export async function executeJob(
       await di.storage.save("jobs", job.id, job);
       OqronEventBus.emit("job:progress", job.queueName, job.id, percent);
     },
-    log: (level, msg) => {
-      const method = logger[level] || logger.info;
-      method.call(logger, `[${ctx.lockPrefix}:${hc.name}] ${msg}`, {
-        jobId: job.id,
-      });
-      if (!job.logs) job.logs = [];
-      job.logs.push({ level, msg, ts: new Date() });
-      // Best effort async save for logs without blocking execution
-      di.storage.save("jobs", job.id, job).catch(() => {});
-    },
+    log: logFn,
     discard: () => {
       internalDiscarded = true;
     },
@@ -257,6 +274,25 @@ export async function executeJob(
     // ── Pre-execution: beforeRun hook ──────────────────────────────────
     if (hc.hooks?.beforeRun) {
       await hc.hooks.beforeRun(jobCtx);
+    }
+
+    // ── F6: Pre-execution condition gate ─────────────────────────────────
+    if (hc.condition) {
+      const allowed = await Promise.resolve(hc.condition(jobCtx)).catch(() => true);
+      if (!allowed) {
+        logger.info(`Job ${job.id} condition gate returned false, nacking back to broker`);
+        // Stop heartbeat before nack
+        if (heartbeat) {
+          await heartbeat.stop();
+          ctx.heartbeats.delete(job.id);
+        }
+        ctx.abortControllers.delete(job.id);
+        // Restore state
+        job.status = oldStatus;
+        await di.storage.save("jobs", job.id, job);
+        await di.broker.nack(hc.name, job.id, 2000); // Re-queue with 2s delay
+        return;
+      }
     }
 
     let timeoutHandle: any;

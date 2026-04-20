@@ -64,6 +64,19 @@ export interface WorkerConfig<T = any, R = any> {
   pollIntervalMs?: number;
 
   /**
+   * Default priority for all jobs consumed by this worker.
+   * Lower number = higher priority.
+   */
+  priority?: number;
+
+  /**
+   * F6: Pre-execution condition gate.
+   * If the condition returns false, the job is nacked with a delay (re-queued).
+   * Runs after `beforeRun` hook. Useful for circuit-breaker patterns.
+   */
+  condition?: (ctx: import("../queue/types.js").QueueJobContext) => Promise<boolean> | boolean;
+
+  /**
    * Optional override for retry settings for this worker specifically.
    */
   retries?: {

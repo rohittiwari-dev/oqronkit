@@ -43,11 +43,37 @@ export class WorkerEngine implements IOqronModule {
 	}
 
 	async init(): Promise<void> {
+		const ws = getRegisteredWorkers();
 		this.logger.info(
-			`Initialized WorkerEngine covering ${
-				getRegisteredWorkers().length
-			} topics`,
+			`Initialized WorkerEngine covering ${ws.length} topics`,
 		);
+
+		// Version-based config migration (§10.2 parity with schedule-engine)
+		for (const w of ws) {
+			const codeVersion = w.version ?? 0;
+			const existing = await this.di.storage.get<any>("worker_instances", w.topic);
+			const dbVersion = existing?.version ?? 0;
+
+			if (existing && codeVersion > dbVersion) {
+				this.logger.info("Worker config version upgraded", {
+					topic: w.topic,
+					from: dbVersion,
+					to: codeVersion,
+				});
+				await this.di.storage.save("worker_instances", w.topic, {
+					...(existing || {}),
+					version: codeVersion,
+					enabled: existing.enabled ?? true,
+				});
+				OqronEventBus.emit("worker:version-upgraded", w.topic, dbVersion, codeVersion);
+			} else if (!existing) {
+				// First registration — seed the instance record
+				await this.di.storage.save("worker_instances", w.topic, {
+					version: codeVersion,
+					enabled: w.status !== "paused",
+				});
+			}
+		}
 	}
 
 	async start(): Promise<void> {
@@ -448,6 +474,7 @@ export class WorkerEngine implements IOqronModule {
 			rateLimiter: w.rateLimiter,
 			deadLetter: w.deadLetter,
 			hooks: w.hooks,
+			condition: w.condition,
 			removeOnComplete: w.removeOnComplete,
 			removeOnFail: w.removeOnFail,
 		};

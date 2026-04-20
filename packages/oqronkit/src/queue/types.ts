@@ -24,8 +24,16 @@ export interface QueueJobContext<T = any> {
   /** Update the progression of the job, propagated to events */
   progress: (percent: number, label?: string) => Promise<void>;
 
-  /** Log execution telemetry */
-  log: (level: "info" | "warn" | "error", message: string) => void;
+  /**
+   * Log execution telemetry.
+   * Can be called as `ctx.log("info", msg)` or via object API:
+   * `ctx.log.info(msg)`, `ctx.log.warn(msg)`, `ctx.log.error(msg)` (C2).
+   */
+  log: ((level: "info" | "warn" | "error", message: string) => void) & {
+    info: (message: string) => void;
+    warn: (message: string) => void;
+    error: (message: string) => void;
+  };
 
   /** Mark the job as permanently failed without triggering backoff retries */
   discard: () => void;
@@ -38,6 +46,12 @@ export interface QueueJobContext<T = any> {
 
   /** When the job was created/queued */
   createdAt: Date;
+
+  /**
+   * C1: Live elapsed execution time in milliseconds.
+   * Returns `Date.now() - startedAt` — useful for progress-aware handlers.
+   */
+  readonly duration: number;
 
   /** The environment context (isolation boundary) */
   environment: string;
@@ -83,6 +97,20 @@ export interface QueueConfig<T = any, R = any> {
    * @default Uses `heartbeatMs` for backward compatibility.
    */
   pollIntervalMs?: number;
+
+  /**
+   * Default priority for all jobs added to this queue.
+   * Individual jobs can override this via `OqronJobOptions.priority`.
+   * Lower number = higher priority.
+   */
+  priority?: number;
+
+  /**
+   * F6: Pre-execution condition gate.
+   * If the condition returns false, the job is nacked with a delay (re-queued).
+   * Runs after `beforeRun` hook. Useful for circuit-breaker patterns.
+   */
+  condition?: (ctx: QueueJobContext) => Promise<boolean> | boolean;
 
   /** Native worker retry logic. Deep-merged with global config. */
   retries?: {

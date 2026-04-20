@@ -94,6 +94,7 @@ export {
 export { worker } from "./worker/define-worker.js";
 export type { IWorker, WorkerConfig } from "./worker/types.js";
 export { WorkerMetrics, type WorkerMetricEntry, type WorkerMetricsSnapshot } from "./worker/worker-metrics.js";
+export { applyGlobalTags as applyGlobalWorkerTags } from "./worker/registry.js";
 export { queue } from "./queue/define-queue.js";
 export type {
 	IPublisherQueue,
@@ -102,6 +103,7 @@ export type {
 	QueueJobContext,
 } from "./queue/types.js";
 export { QueueMetrics as QueueModuleMetrics, type QueueMetricEntry, type QueueMetricsSnapshot } from "./queue/queue-metrics.js";
+export { applyGlobalTags as applyGlobalQueueTags } from "./queue/registry.js";
 export {
 	cron,
 	type DefineCronOptions,

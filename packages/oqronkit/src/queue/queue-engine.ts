@@ -53,6 +53,33 @@ export class QueueEngine implements IOqronModule {
 		this.logger.info(
 			`Initialized QueueEngine covering ${qs.length} endpoints`,
 		);
+
+		// Version-based config migration (§10.2 parity with schedule-engine)
+		for (const q of qs) {
+			const codeVersion = q.version ?? 0;
+			const existing = await this.di.storage.get<any>("queue_instances", q.name);
+			const dbVersion = existing?.version ?? 0;
+
+			if (existing && codeVersion > dbVersion) {
+				this.logger.info("Queue config version upgraded", {
+					name: q.name,
+					from: dbVersion,
+					to: codeVersion,
+				});
+				await this.di.storage.save("queue_instances", q.name, {
+					...(existing || {}),
+					version: codeVersion,
+					enabled: existing.enabled ?? true,
+				});
+				OqronEventBus.emit("queue:version-upgraded", q.name, dbVersion, codeVersion);
+			} else if (!existing) {
+				// First registration — seed the instance record
+				await this.di.storage.save("queue_instances", q.name, {
+					version: codeVersion,
+					enabled: q.status !== "paused",
+				});
+			}
+		}
 	}
 
 	async start(): Promise<void> {
@@ -442,6 +469,7 @@ export class QueueEngine implements IOqronModule {
 			rateLimiter: q.rateLimiter,
 			deadLetter: q.deadLetter,
 			hooks: q.hooks,
+			condition: q.condition,
 			removeOnComplete: q.removeOnComplete,
 			removeOnFail: q.removeOnFail,
 		};

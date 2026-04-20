@@ -147,12 +147,13 @@ export function queue<T = any, R = any>(
       );
       // Don't publish to broker — job stays in waiting-children until parents finish
     } else if (job.status !== "paused") {
-      // 3. Transport
+      // 3. Transport — apply default priority from config if not specified per-job
+      const effectivePriority = opts?.priority ?? config.priority;
       await di.broker.publish(
         config.name,
         jobId,
         opts?.delay,
-        opts?.priority,
+        effectivePriority,
       );
     }
 

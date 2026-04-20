@@ -57,12 +57,14 @@ export type OqronEventMap = {
   "queue:resumed": [queueName: string];
   "queue:drained": [queueName: string];
   "queue:obliterated": [queueName: string, jobsRemoved: number];
+  "queue:version-upgraded": [queueName: string, fromVersion: number, toVersion: number];
 
   // ── Worker Lifecycle (Phase 4 — Dynamic CRUD) ─────────────────────────────
   "worker:registered": [topic: string];
   "worker:deregistered": [topic: string];
   "worker:paused": [topic: string];
   "worker:resumed": [topic: string];
+  "worker:version-upgraded": [topic: string, fromVersion: number, toVersion: number];
 
   // ── Queue/Worker Metrics Lifecycle (Phase 5 — G6 Parity) ──────────────────
   "queue:job:claimed": [queueName: string, jobId: string];

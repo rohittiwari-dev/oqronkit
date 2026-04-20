@@ -47,3 +47,15 @@ export function deregisterQueue(name: string): boolean {
   }
   return false;
 }
+
+/**
+ * R2: Merge workspace-level tags into every registered queue config.
+ * Matches the cron/schedule `registry-factory.ts` `applyGlobalTags` pattern.
+ * Deduplicates via Set to prevent tag accumulation on HMR reloads.
+ */
+export function applyGlobalTags(tags?: string[]): void {
+  if (!tags?.length) return;
+  for (const q of _getPending()) {
+    q.tags = [...new Set([...(q.tags ?? []), ...tags])];
+  }
+}
