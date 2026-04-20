@@ -161,6 +161,20 @@ export interface QueueConfig<T = any, R = any> {
    */
   removeOnFail?: import("../engine/types/job.types.js").RemoveOnConfig;
 
+  /**
+   * Convenience alias for removeOnComplete — matches cron/schedule API.
+   * `true` = keep all, `false` = remove immediately, `number` = keep N most recent.
+   * If both keepHistory and removeOnComplete are set, removeOnComplete takes precedence.
+   */
+  keepHistory?: boolean | number;
+
+  /**
+   * Convenience alias for removeOnFail — matches cron/schedule API.
+   * `true` = keep all, `false` = remove immediately, `number` = keep N most recent.
+   * If both keepFailedHistory and removeOnFail are set, removeOnFail takes precedence.
+   */
+  keepFailedHistory?: boolean | number;
+
   /** Natively execute direct local callbacks when the monolithic processor succeeds or fails */
   hooks?: {
     /** Called before handler execution. Throw to skip. */

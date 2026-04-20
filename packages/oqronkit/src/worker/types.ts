@@ -138,6 +138,20 @@ export interface WorkerConfig<T = any, R = any> {
   removeOnFail?: RemoveOnConfig;
 
   /**
+   * Convenience alias for removeOnComplete — matches cron/schedule API.
+   * `true` = keep all, `false` = remove immediately, `number` = keep N most recent.
+   * If both keepHistory and removeOnComplete are set, removeOnComplete takes precedence.
+   */
+  keepHistory?: boolean | number;
+
+  /**
+   * Convenience alias for removeOnFail — matches cron/schedule API.
+   * `true` = keep all, `false` = remove immediately, `number` = keep N most recent.
+   * If both keepFailedHistory and removeOnFail are set, removeOnFail takes precedence.
+   */
+  keepFailedHistory?: boolean | number;
+
+  /**
    * Define how this worker behaves if OqronKit or this module is disabled globally.
    * Only useful if you want this specific worker to ignore the `disabled` setting.
    */

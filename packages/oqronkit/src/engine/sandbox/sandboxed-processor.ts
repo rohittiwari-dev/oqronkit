@@ -1,5 +1,4 @@
 import { Worker } from "node:worker_threads";
-import { randomUUID } from "node:crypto";
 import type { Logger } from "../logger/index.js";
 
 /**

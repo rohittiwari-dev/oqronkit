@@ -6,6 +6,7 @@ import { StallDetector } from "../engine/lock/stall-detector.js";
 import type { OqronConfig } from "../engine/types/config.types.js";
 import type { BrokerStrategy } from "../engine/types/engine.js";
 import type { OqronJob } from "../engine/types/job.types.js";
+import { keepHistoryToRemoveConfig } from "../engine/utils/job-retention.js";
 import {
   executeJob,
   type JobExecutionContext,
@@ -54,7 +55,14 @@ export class WorkerEngine implements IOqronModule {
 			const existing = await this.di.storage.get<any>("worker_instances", w.topic);
 			const dbVersion = existing?.version ?? 0;
 
-			if (existing && codeVersion > dbVersion) {
+			// Downgrade protection — don't overwrite newer DB state with older code
+			if (existing && codeVersion < dbVersion) {
+				this.logger.warn("Code version is older than DB — skipping overwrite", {
+					topic: w.topic,
+					codeVersion,
+					dbVersion,
+				});
+			} else if (existing && codeVersion > dbVersion) {
 				this.logger.info("Worker config version upgraded", {
 					topic: w.topic,
 					from: dbVersion,
@@ -72,6 +80,12 @@ export class WorkerEngine implements IOqronModule {
 					version: codeVersion,
 					enabled: w.status !== "paused",
 				});
+			}
+
+			// Load persisted pause state into memory
+			const instanceState = await this.di.storage.get<any>("worker_instances", w.topic);
+			if (instanceState && instanceState.enabled === false) {
+				this.pausedTopics.add(w.topic);
 			}
 		}
 	}
@@ -241,18 +255,30 @@ export class WorkerEngine implements IOqronModule {
 
 	/**
 	 * Pause a worker — stops claiming new jobs for this topic.
+	 * Persists state to storage for crash-safety.
 	 */
-	pauseWorker(topic: string): void {
+	async pauseWorker(topic: string): Promise<void> {
 		this.pausedTopics.add(topic);
+		const existing = await this.di.storage.get<any>("worker_instances", topic);
+		await this.di.storage.save("worker_instances", topic, {
+			...(existing || {}),
+			enabled: false,
+		});
 		OqronEventBus.emit("worker:paused", topic);
 		this.logger.info(`Worker "${topic}" paused`);
 	}
 
 	/**
 	 * Resume a paused worker.
+	 * Persists state to storage for crash-safety.
 	 */
-	resumeWorker(topic: string): void {
+	async resumeWorker(topic: string): Promise<void> {
 		this.pausedTopics.delete(topic);
+		const existing = await this.di.storage.get<any>("worker_instances", topic);
+		await this.di.storage.save("worker_instances", topic, {
+			...(existing || {}),
+			enabled: true,
+		});
 		OqronEventBus.emit("worker:resumed", topic);
 		this.logger.info(`Worker "${topic}" resumed`);
 	}
@@ -443,6 +469,7 @@ export class WorkerEngine implements IOqronModule {
 		await this.di.storage.save("jobs", jobId, job);
 
 		this.logger.info("Re-queueing stalled worker job", { jobId });
+		OqronEventBus.emit("job:stalled", w.topic, jobId);
 		await this.di.broker.nack(w.topic, jobId);
 	}
 
@@ -478,8 +505,8 @@ export class WorkerEngine implements IOqronModule {
 			deadLetter: w.deadLetter,
 			hooks: w.hooks,
 			condition: w.condition,
-			removeOnComplete: w.removeOnComplete,
-			removeOnFail: w.removeOnFail,
+			removeOnComplete: w.removeOnComplete ?? keepHistoryToRemoveConfig(w.keepHistory),
+			removeOnFail: w.removeOnFail ?? keepHistoryToRemoveConfig(w.keepFailedHistory),
 		};
 
 		const execCtx: JobExecutionContext = {

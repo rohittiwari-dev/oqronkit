@@ -208,21 +208,24 @@ export function queue<T = any, R = any>(
       const di = OqronContainer.get();
       await di.storage.save("queue_instances", config.name, { enabled: true });
 
-      // Release held jobs to broker
-      const heldJobs = await di.storage.list<OqronJob>(
-        "jobs",
-        {
-          queueName: config.name,
-          status: "paused",
-          pausedReason: "disabled-hold",
-        },
-        { limit: 10_000 },
-      );
-      for (const held of heldJobs) {
-        held.status = "waiting";
-        held.pausedReason = undefined;
-        await di.storage.save("jobs", held.id, held);
-        await di.broker.publish(config.name, held.id);
+      // Release held jobs to broker in batches to avoid memory pressure (DQ1)
+      while (true) {
+        const batch = await di.storage.list<OqronJob>(
+          "jobs",
+          {
+            queueName: config.name,
+            status: "paused",
+            pausedReason: "disabled-hold",
+          },
+          { limit: 100 },
+        );
+        if (batch.length === 0) break;
+        for (const held of batch) {
+          held.status = "waiting";
+          held.pausedReason = undefined;
+          await di.storage.save("jobs", held.id, held);
+          await di.broker.publish(config.name, held.id);
+        }
       }
 
       OqronEventBus.emit("queue:resumed", config.name);
@@ -238,11 +241,25 @@ export function queue<T = any, R = any>(
     },
 
     drain: async () => {
-      // Pause first to stop accepting new claims
       const di = OqronContainer.get();
+      // 1. Pause to stop new claims
       await di.storage.save("queue_instances", config.name, { enabled: false });
-      // Wait for active jobs — engine will drain them on its own loop
-      // Emit event after completing
+
+      // 2. Poll until no active jobs remain (or timeout after 30s)
+      const drainTimeout = 30_000;
+      const pollInterval = 250;
+      const deadline = Date.now() + drainTimeout;
+
+      while (Date.now() < deadline) {
+        const activeJobs = await di.storage.list<OqronJob>(
+          "jobs",
+          { queueName: config.name, status: "active" },
+          { limit: 1 },
+        );
+        if (activeJobs.length === 0) break;
+        await new Promise((r) => setTimeout(r, pollInterval));
+      }
+
       OqronEventBus.emit("queue:drained", config.name);
     },
 

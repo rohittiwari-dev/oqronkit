@@ -6,6 +6,7 @@ import { StallDetector } from "../engine/lock/stall-detector.js";
 import type { OqronConfig } from "../engine/types/config.types.js";
 import type { BrokerStrategy } from "../engine/types/engine.js";
 import type { OqronJob } from "../engine/types/job.types.js";
+import { keepHistoryToRemoveConfig } from "../engine/utils/job-retention.js";
 import {
   executeJob,
   type JobExecutionContext,
@@ -60,7 +61,14 @@ export class QueueEngine implements IOqronModule {
 			const existing = await this.di.storage.get<any>("queue_instances", q.name);
 			const dbVersion = existing?.version ?? 0;
 
-			if (existing && codeVersion > dbVersion) {
+			// Downgrade protection — don't overwrite newer DB state with older code
+			if (existing && codeVersion < dbVersion) {
+				this.logger.warn("Code version is older than DB — skipping overwrite", {
+					name: q.name,
+					codeVersion,
+					dbVersion,
+				});
+			} else if (existing && codeVersion > dbVersion) {
 				this.logger.info("Queue config version upgraded", {
 					name: q.name,
 					from: dbVersion,
@@ -78,6 +86,12 @@ export class QueueEngine implements IOqronModule {
 					version: codeVersion,
 					enabled: q.status !== "paused",
 				});
+			}
+
+			// Load persisted pause state into memory
+			const instanceState = await this.di.storage.get<any>("queue_instances", q.name);
+			if (instanceState && instanceState.enabled === false) {
+				this.pausedQueues.add(q.name);
 			}
 		}
 	}
@@ -151,6 +165,7 @@ export class QueueEngine implements IOqronModule {
 							}
 						})
 						.finally(() => {
+							OqronEventBus.emit("job:stalled", queueName!, jobId);
 							void this.di.broker.nack(queueName, jobId);
 						});
 				}
@@ -473,8 +488,8 @@ export class QueueEngine implements IOqronModule {
 			deadLetter: q.deadLetter,
 			hooks: q.hooks,
 			condition: q.condition,
-			removeOnComplete: q.removeOnComplete,
-			removeOnFail: q.removeOnFail,
+			removeOnComplete: q.removeOnComplete ?? keepHistoryToRemoveConfig(q.keepHistory),
+			removeOnFail: q.removeOnFail ?? keepHistoryToRemoveConfig(q.keepFailedHistory),
 		};
 
 		const execCtx: JobExecutionContext = {

@@ -380,6 +380,7 @@ export async function executeJob(
       ctx.abortControllers.delete(job.id);
 
       // Nack back to broker with delay — crash-safe
+      OqronEventBus.emit("job:retried", job.id, `attempt:${job.attemptMade + 1}`);
       await di.broker.nack(hc.name, job.id, delay);
       return; // Exit — the job will be re-claimed on the next poll cycle
     }
