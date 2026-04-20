@@ -12,7 +12,7 @@ import {
   type JobHandlerConfig,
 } from "../engine/utils/job-executor.js";
 import type { QueueModuleDef } from "../modules.js";
-import { getRegisteredQueues } from "./registry.js";
+import { deregisterQueue, getRegisteredQueues, registerQueue as registryRegister } from "./registry.js";
 import type { QueueConfig } from "./types.js";
 
 export class QueueEngine implements IOqronModule {
@@ -32,6 +32,10 @@ export class QueueEngine implements IOqronModule {
 	private abortControllers = new Map<string, AbortController>();
 	/** Stall detector — reclaims jobs whose heartbeat locks have expired */
 	private stallDetector: StallDetector | null = null;
+	/** Per-queue pause state — when true, poll is skipped for that queue */
+	private pausedQueues = new Set<string>();
+	/** Per-queue timers for cleanup on deregister */
+	private queueTimers = new Map<string, NodeJS.Timeout>();
 
 	constructor(
 		private config: OqronConfig,
@@ -82,10 +86,11 @@ export class QueueEngine implements IOqronModule {
 				);
 				this.heartbeats.get(jobId)?.stop();
 				this.heartbeats.delete(jobId);
-				// Find the queue name for nack
-				const queueName = qs.find((_q) =>
-					this.activeJobs.has(jobId),
-				)?.name;
+				// Find the queue name for nack by scanning per-queue tracking maps
+				let queueName: string | undefined;
+				for (const [name, jobs] of this.activeJobsByQueue.entries()) {
+					if (jobs.has(jobId)) { queueName = name; break; }
+				}
 				if (queueName) {
 					// Increment stalledCount and update telemetry before returning to broker
 					this.di.storage
@@ -164,6 +169,12 @@ export class QueueEngine implements IOqronModule {
 			this.heartbeats.delete(jobId);
 		}
 
+		// Clean up per-queue and global active job tracking (B5)
+		this.activeJobs.delete(jobId);
+		for (const jobs of this.activeJobsByQueue.values()) {
+			jobs.delete(jobId);
+		}
+
 		// Mark job as failed/cancelled in storage
 		const job = await this.di.storage.get<OqronJob>("jobs", jobId);
 		if (job) {
@@ -222,6 +233,94 @@ export class QueueEngine implements IOqronModule {
 		}
 	}
 
+	// ── Phase 4: Dynamic CRUD Management Methods ────────────────────────────
+
+	/**
+	 * Dynamically register a new queue at runtime.
+	 * Adds to registry, starts polling if handler present.
+	 */
+	registerQueue(config: QueueConfig): void {
+		registryRegister(config);
+		if (this.running && config.handler) {
+			this.startPolling(config);
+		}
+		OqronEventBus.emit("queue:registered", config.name);
+		this.logger.info(`Queue "${config.name}" dynamically registered`);
+	}
+
+	/**
+	 * Remove a queue from the registry. Does NOT drain active jobs.
+	 */
+	deregisterQueue(name: string): boolean {
+		const timer = this.queueTimers.get(name);
+		if (timer) {
+			clearInterval(timer);
+			this.queueTimers.delete(name);
+		}
+		const removed = deregisterQueue(name);
+		if (removed) {
+			OqronEventBus.emit("queue:deregistered", name);
+			this.logger.info(`Queue "${name}" dynamically deregistered`);
+		}
+		return removed;
+	}
+
+	/**
+	 * Pause a queue — stops claiming new jobs but keeps active jobs running.
+	 */
+	async pauseQueue(name: string): Promise<void> {
+		this.pausedQueues.add(name);
+		await this.di.storage.save("queue_instances", name, { enabled: false });
+		OqronEventBus.emit("queue:paused", name);
+		this.logger.info(`Queue "${name}" paused`);
+	}
+
+	/**
+	 * Resume a paused queue — re-enables job claiming.
+	 */
+	async resumeQueue(name: string): Promise<void> {
+		this.pausedQueues.delete(name);
+		await this.di.storage.save("queue_instances", name, { enabled: true });
+		OqronEventBus.emit("queue:resumed", name);
+		this.logger.info(`Queue "${name}" resumed`);
+	}
+
+	/**
+	 * Get the current state of a specific queue.
+	 */
+	getQueueState(name: string): {
+		name: string;
+		enabled: boolean;
+		activeJobs: number;
+		strategy: string;
+	} | undefined {
+		const q = getRegisteredQueues().find((q) => q.name === name);
+		if (!q) return undefined;
+		return {
+			name: q.name,
+			enabled: !this.pausedQueues.has(name),
+			activeJobs: this.activeJobsByQueue.get(name)?.size ?? 0,
+			strategy: q.strategy ?? "fifo",
+		};
+	}
+
+	/**
+	 * List state for all registered queues.
+	 */
+	listQueues(): Array<{
+		name: string;
+		enabled: boolean;
+		activeJobs: number;
+		strategy: string;
+	}> {
+		return getRegisteredQueues().map((q) => ({
+			name: q.name,
+			enabled: !this.pausedQueues.has(q.name),
+			activeJobs: this.activeJobsByQueue.get(q.name)?.size ?? 0,
+			strategy: q.strategy ?? "fifo",
+		}));
+	}
+
 	private startPolling(q: QueueConfig) {
 		// Publisher-only queues have no handler — skip polling entirely.
 		// These queues only push jobs; a separate Worker node consumes them.
@@ -232,20 +331,22 @@ export class QueueEngine implements IOqronModule {
 			return;
 		}
 
-		const heartbeatMs =
-			q.heartbeatMs ?? this.queueConfig?.heartbeatMs ?? 5000;
+		const pollIntervalMs =
+			q.pollIntervalMs ?? q.heartbeatMs ?? this.queueConfig?.heartbeatMs ?? 5000;
 		const t = setInterval(() => {
 			this.poll(q).catch((e) =>
 				this.logger.error(`Queue poller crashed for ${q.name}`, e),
 			);
-		}, heartbeatMs);
+		}, pollIntervalMs);
 		t.unref();
 		this.timers.push(t);
+		this.queueTimers.set(q.name, t);
 		setTimeout(() => this.poll(q), 0);
 	}
 
 	private async poll(q: QueueConfig): Promise<void> {
 		if (!this.running || !this.enabled) return;
+		if (this.pausedQueues.has(q.name)) return;
 		if (this.isPolling.has(q.name)) return;
 
 		this.isPolling.add(q.name);
@@ -301,7 +402,17 @@ export class QueueEngine implements IOqronModule {
 				}
 				this.activeJobsByQueue.get(q.name)!.add(id);
 
-				const p = this.delegateExecuteJob(job, q).finally(() => {
+				// Phase 5: Emit claimed metric
+				OqronEventBus.emit("queue:job:claimed", q.name, id);
+
+				const startTs = Date.now();
+				const p = this.delegateExecuteJob(job, q).then(() => {
+					const durationMs = Date.now() - startTs;
+					OqronEventBus.emit("queue:job:completed", q.name, id, durationMs);
+				}).catch(() => {
+					const durationMs = Date.now() - startTs;
+					OqronEventBus.emit("queue:job:failed", q.name, id, durationMs);
+				}).finally(() => {
 					this.activeJobs.delete(id);
 					this.activeJobsByQueue.get(q.name)?.delete(id);
 				});
@@ -326,7 +437,9 @@ export class QueueEngine implements IOqronModule {
 			heartbeatMs: q.heartbeatMs,
 			lockTtlMs: q.lockTtlMs,
 			timeout: q.timeout,
+			tags: q.tags,
 			retries: q.retries,
+			rateLimiter: q.rateLimiter,
 			deadLetter: q.deadLetter,
 			hooks: q.hooks,
 			removeOnComplete: q.removeOnComplete,

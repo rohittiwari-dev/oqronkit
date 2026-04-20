@@ -49,6 +49,28 @@ export type OqronEventMap = {
   "ratelimit:suggestion": [limiterName: string, tier: string, suggestedMax: number, currentP95: number];
   "ratelimit:circuit-open": [limiterName: string, tier: string, key: string, burstMultiplier: number];
   "ratelimit:circuit-closed": [limiterName: string, tier: string, key: string];
+
+  // ── Queue Lifecycle (Phase 4 — Dynamic CRUD) ──────────────────────────────
+  "queue:registered": [queueName: string];
+  "queue:deregistered": [queueName: string];
+  "queue:paused": [queueName: string];
+  "queue:resumed": [queueName: string];
+  "queue:drained": [queueName: string];
+  "queue:obliterated": [queueName: string, jobsRemoved: number];
+
+  // ── Worker Lifecycle (Phase 4 — Dynamic CRUD) ─────────────────────────────
+  "worker:registered": [topic: string];
+  "worker:deregistered": [topic: string];
+  "worker:paused": [topic: string];
+  "worker:resumed": [topic: string];
+
+  // ── Queue/Worker Metrics Lifecycle (Phase 5 — G6 Parity) ──────────────────
+  "queue:job:claimed": [queueName: string, jobId: string];
+  "queue:job:completed": [queueName: string, jobId: string, durationMs: number];
+  "queue:job:failed": [queueName: string, jobId: string, durationMs: number];
+  "worker:job:claimed": [topic: string, jobId: string];
+  "worker:job:completed": [topic: string, jobId: string, durationMs: number];
+  "worker:job:failed": [topic: string, jobId: string, durationMs: number];
 };
 
 class OqronEventBusClass extends EventEmitter<OqronEventMap> {

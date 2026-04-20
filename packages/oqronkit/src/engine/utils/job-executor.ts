@@ -26,6 +26,8 @@ export interface JobHandlerConfig {
   lockTtlMs?: number;
   /** Execution timeout in ms */
   timeout?: number;
+  /** Tags for categorization */
+  tags?: string[];
   /** Retry configuration */
   retries?: {
     max?: number;
@@ -33,6 +35,8 @@ export interface JobHandlerConfig {
     baseDelay?: number;
     maxDelay?: number;
   };
+  /** Pre-execution rate limiter */
+  rateLimiter?: { check(ctx: any): Promise<{ allowed: boolean }> };
   /** DLQ hooks */
   deadLetter?: {
     enabled?: boolean;
@@ -40,6 +44,7 @@ export interface JobHandlerConfig {
   };
   /** Lifecycle hooks */
   hooks?: {
+    beforeRun?: (ctx: QueueJobContext) => Promise<void> | void;
     onSuccess?: (job: OqronJob, result: any) => Promise<void> | void;
     onFail?: (job: OqronJob, error: Error) => Promise<void> | void;
   };
@@ -91,17 +96,21 @@ export interface JobExecutionContext {
   lockPrefix: string;
 }
 
+/** Maximum timeline entries per job before trimming oldest entries (JE1) */
+const MAX_TIMELINE_ENTRIES = 100;
+
 /**
  * Shared job execution logic used by both QueueEngine and WorkerEngine.
  *
  * This function handles the complete lifecycle of a claimed job:
  * 1. Heartbeat lock acquisition
  * 2. Context construction (progress, log, discard, signal)
- * 3. Handler invocation with timeout support
- * 4. Retry / nack / DLQ logic
- * 5. Finalization (status, duration, timeline)
- * 6. EventBus emissions and hooks
- * 7. Job retention pruning
+ * 3. Hook execution (beforeRun)
+ * 4. Handler invocation with timeout support
+ * 5. Retry / nack / DLQ logic
+ * 6. Finalization (status, duration, latency, timeline)
+ * 7. EventBus emissions and hooks
+ * 8. Job retention pruning
  */
 export async function executeJob(
   job: OqronJob,
@@ -128,6 +137,14 @@ export async function executeJob(
     ? job.opts.attempts - 1
     : maxRetries;
 
+  // ── Set moduleName unconditionally on the job record ───────────────────
+  job.moduleName = job.moduleName ?? hc.name;
+
+  // ── Apply tags from handler config if job tags are empty ───────────────
+  if ((!job.tags || job.tags.length === 0) && hc.tags) {
+    job.tags = [...hc.tags];
+  }
+
   // ── Start HeartbeatWorker for crash-safe lock renewal ─────────────────
   let heartbeat: HeartbeatWorker | null = null;
   if (useGuaranteed) {
@@ -153,19 +170,25 @@ export async function executeJob(
   const abortController = new AbortController();
   ctx.abortControllers.set(job.id, abortController);
 
+  // Compute max attempts for context
+  const maxAttempts = effectiveMaxRetries + 1;
+
   const jobCtx: QueueJobContext<any> = {
     id: job.id,
+    name: hc.name,
     data: job.data,
     signal: abortController.signal,
-    queueName: job.queueName,
-    moduleName: job.moduleName ?? hc.name,
+    get aborted() { return abortController.signal.aborted; },
     environment: job.environment ?? ctx.environment,
     project: job.project ?? ctx.project,
+    attempt: (job.attemptMade ?? 0) + 1,
+    maxAttempts,
+    createdAt: job.createdAt ? new Date(job.createdAt) : new Date(),
     progress: async (percent, label) => {
       job.progressPercent = percent;
       job.progressLabel = label;
       if (!job.timeline) job.timeline = [];
-      job.timeline.push({
+      pushTimeline(job, {
         ts: new Date(),
         from: "active",
         to: "active",
@@ -197,7 +220,7 @@ export async function executeJob(
   job.processedOn = new Date();
   job.attemptMade = (job.attemptMade ?? 0) + 1;
   if (!job.timeline) job.timeline = [];
-  job.timeline.push({
+  pushTimeline(job, {
     ts: job.startedAt,
     from: oldStatus,
     to: "active",
@@ -212,6 +235,30 @@ export async function executeJob(
   let result: any;
 
   try {
+    // ── Pre-execution: rate limiter check ──────────────────────────────
+    if (hc.rateLimiter) {
+      const rlResult = await hc.rateLimiter.check(jobCtx).catch(() => ({ allowed: true }));
+      if (!rlResult.allowed) {
+        logger.info(`Job ${job.id} rate-limited, nacking back to broker`);
+        // Stop heartbeat before nack
+        if (heartbeat) {
+          await heartbeat.stop();
+          ctx.heartbeats.delete(job.id);
+        }
+        ctx.abortControllers.delete(job.id);
+        // Restore state
+        job.status = oldStatus;
+        await di.storage.save("jobs", job.id, job);
+        await di.broker.nack(hc.name, job.id, 1000); // Small delay before retry
+        return;
+      }
+    }
+
+    // ── Pre-execution: beforeRun hook ──────────────────────────────────
+    if (hc.hooks?.beforeRun) {
+      await hc.hooks.beforeRun(jobCtx);
+    }
+
     let timeoutHandle: any;
     const executePromise = hc.handler(jobCtx);
 
@@ -326,8 +373,13 @@ export async function executeJob(
     job.durationMs = finishedAt.getTime() - new Date(job.startedAt).getTime();
   }
 
+  // JE2: Compute latency (time from queued to started)
+  if (job.queuedAt && job.startedAt) {
+    job.latencyMs = new Date(job.startedAt).getTime() - new Date(job.queuedAt).getTime();
+  }
+
   if (!job.timeline) job.timeline = [];
-  job.timeline.push({
+  pushTimeline(job, {
     ts: finishedAt,
     from: "active",
     to: status,
@@ -397,4 +449,19 @@ export async function executeJob(
     filterKey: "queueName",
     filterValue: hc.name,
   });
+}
+
+// ── JE1: Timeline entry helper with cap ─────────────────────────────────────
+
+function pushTimeline(
+  job: OqronJob,
+  entry: { ts: Date; from: string; to: string; reason?: string },
+): void {
+  if (!job.timeline) job.timeline = [];
+  job.timeline.push(entry);
+
+  // Cap timeline entries to prevent unbounded growth
+  if (job.timeline.length > MAX_TIMELINE_ENTRIES) {
+    job.timeline = job.timeline.slice(job.timeline.length - MAX_TIMELINE_ENTRIES);
+  }
 }

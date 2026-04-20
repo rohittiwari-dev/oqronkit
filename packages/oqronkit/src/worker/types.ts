@@ -44,6 +44,25 @@ export interface WorkerConfig<T = any, R = any> {
    */
   strategy?: BrokerStrategy;
 
+  /** Tags for categorization and dashboard filtering */
+  tags?: string[];
+
+  /** Initial status. Use "paused" to register but not process. @default "active" */
+  status?: "active" | "paused";
+
+  /** Schema version — bump to trigger config migration */
+  version?: number;
+
+  /** Pre-execution rate limiter. If check() returns { allowed: false }, job is nacked. */
+  rateLimiter?: { check(ctx: any): Promise<{ allowed: boolean }> };
+
+  /**
+   * Polling interval in ms, separate from heartbeat.
+   * When set, polling uses this interval; heartbeat uses `heartbeatMs`.
+   * @default Uses `heartbeatMs` for backward compatibility.
+   */
+  pollIntervalMs?: number;
+
   /**
    * Optional override for retry settings for this worker specifically.
    */
@@ -66,6 +85,8 @@ export interface WorkerConfig<T = any, R = any> {
    * Hooks run upon completion or failure.
    */
   hooks?: {
+    /** Called before handler execution. Throw to skip. */
+    beforeRun?: (ctx: QueueJobContext) => Promise<void> | void;
     /** Called when the handler fulfills */
     onSuccess?: (job: OqronJob<T, R>, result: R) => Promise<void> | void;
     /** Called when the handler rejects */

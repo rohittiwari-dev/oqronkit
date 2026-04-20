@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { IOqronModule, Logger } from "../engine/index.js";
-import { OqronContainer } from "../engine/index.js";
+import { OqronContainer, OqronEventBus } from "../engine/index.js";
 import { HeartbeatWorker } from "../engine/lock/heartbeat-worker.js";
 import { StallDetector } from "../engine/lock/stall-detector.js";
 import type { OqronConfig } from "../engine/types/config.types.js";
@@ -12,7 +12,7 @@ import {
   type JobHandlerConfig,
 } from "../engine/utils/job-executor.js";
 import type { WorkerModuleDef } from "../modules.js";
-import { getRegisteredWorkers } from "./registry.js";
+import { deregisterWorker, getRegisteredWorkers, registerWorker as registryRegister } from "./registry.js";
 import type { WorkerConfig } from "./types.js";
 
 export class WorkerEngine implements IOqronModule {
@@ -27,6 +27,10 @@ export class WorkerEngine implements IOqronModule {
 	private heartbeats = new Map<string, HeartbeatWorker>();
 	private stallDetector: StallDetector | null = null;
 	private timers: Array<ReturnType<typeof setInterval>> = [];
+	/** Per-topic pause state — when true, poll is skipped for that topic */
+	private pausedTopics = new Set<string>();
+	/** Per-topic timers for cleanup on deregister */
+	private topicTimers = new Map<string, NodeJS.Timeout>();
 
 	constructor(
 		private readonly config: OqronConfig,
@@ -101,6 +105,51 @@ export class WorkerEngine implements IOqronModule {
 		return false;
 	}
 
+	/**
+	 * Cancel an actively running job via AbortController.
+	 * Aborts the handler, stops the heartbeat, and marks the job as failed.
+	 */
+	async cancelActiveJob(jobId: string): Promise<boolean> {
+		const controller = this.abortControllers.get(jobId);
+		if (!controller) return false;
+
+		controller.abort();
+		this.abortControllers.delete(jobId);
+
+		// Stop heartbeat
+		const hb = this.heartbeats.get(jobId);
+		if (hb) {
+			await hb.stop();
+			this.heartbeats.delete(jobId);
+		}
+
+		// Clean up per-topic and global active job tracking
+		this.activeJobs.delete(jobId);
+		for (const jobs of this.activeJobsByTopic.values()) {
+			jobs.delete(jobId);
+		}
+
+		// Mark job as failed/cancelled in storage
+		const job = await this.di.storage.get<OqronJob>("jobs", jobId);
+		if (job) {
+			job.status = "failed";
+			job.error = "Cancelled";
+			job.finishedAt = new Date();
+			await this.di.storage.save("jobs", jobId, job);
+
+			// Ack from broker so it's not re-processed
+			await this.di.broker.ack(job.queueName, jobId);
+			OqronEventBus.emit(
+				"job:fail",
+				job.queueName,
+				jobId,
+				new Error("Cancelled"),
+			);
+		}
+
+		return true;
+	}
+
 	async stop(): Promise<void> {
 		this.running = false;
 		for (const t of this.timers) clearInterval(t);
@@ -120,10 +169,107 @@ export class WorkerEngine implements IOqronModule {
 			await hb.stop().catch(() => {});
 		}
 		this.heartbeats.clear();
+
+		// B3: Graceful drain — wait for active jobs to settle before returning
+		const allActive = Array.from(this.activeJobs.values());
+		if (allActive.length > 0) {
+			const timeout = this.workerModuleConfig.shutdownTimeout ?? 25_000;
+			await Promise.race([
+				Promise.allSettled(allActive),
+				new Promise(r => { const h = setTimeout(r, timeout); h.unref(); }),
+			]);
+		}
+	}
+
+	// ── Phase 4: Dynamic CRUD Management Methods ────────────────────────────
+
+	/**
+	 * Dynamically register a new worker at runtime.
+	 * Adds to registry, starts polling.
+	 */
+	registerWorker(config: WorkerConfig): void {
+		registryRegister(config);
+		if (this.running) {
+			this.startPolling(config);
+		}
+		OqronEventBus.emit("worker:registered", config.topic);
+		this.logger.info(`Worker "${config.topic}" dynamically registered`);
+	}
+
+	/**
+	 * Remove a worker from the registry. Does NOT drain active jobs.
+	 */
+	deregisterWorker(topic: string): boolean {
+		const timer = this.topicTimers.get(topic);
+		if (timer) {
+			clearInterval(timer);
+			this.topicTimers.delete(topic);
+		}
+		const removed = deregisterWorker(topic);
+		if (removed) {
+			OqronEventBus.emit("worker:deregistered", topic);
+			this.logger.info(`Worker "${topic}" dynamically deregistered`);
+		}
+		return removed;
+	}
+
+	/**
+	 * Pause a worker — stops claiming new jobs for this topic.
+	 */
+	pauseWorker(topic: string): void {
+		this.pausedTopics.add(topic);
+		OqronEventBus.emit("worker:paused", topic);
+		this.logger.info(`Worker "${topic}" paused`);
+	}
+
+	/**
+	 * Resume a paused worker.
+	 */
+	resumeWorker(topic: string): void {
+		this.pausedTopics.delete(topic);
+		OqronEventBus.emit("worker:resumed", topic);
+		this.logger.info(`Worker "${topic}" resumed`);
+	}
+
+	/**
+	 * Get the current state of a specific worker.
+	 */
+	getWorkerState(topic: string): {
+		topic: string;
+		enabled: boolean;
+		activeJobs: number;
+		concurrency: number;
+	} | undefined {
+		const w = getRegisteredWorkers().find((cw) => cw.topic === topic);
+		if (!w) return undefined;
+		return {
+			topic: w.topic,
+			enabled: !this.pausedTopics.has(topic),
+			activeJobs: this.activeJobsByTopic.get(topic)?.size ?? 0,
+			concurrency: w.concurrency ?? this.workerModuleConfig.concurrency ?? 5,
+		};
+	}
+
+	/**
+	 * List state for all registered workers.
+	 */
+	listWorkers(): Array<{
+		topic: string;
+		enabled: boolean;
+		activeJobs: number;
+		concurrency: number;
+	}> {
+		return getRegisteredWorkers().map((w) => ({
+			topic: w.topic,
+			enabled: !this.pausedTopics.has(w.topic),
+			activeJobs: this.activeJobsByTopic.get(w.topic)?.size ?? 0,
+			concurrency: w.concurrency ?? this.workerModuleConfig.concurrency ?? 5,
+		}));
 	}
 
 	private startPolling(w: WorkerConfig) {
-		const heartbeatMs = w.heartbeatMs ?? this.workerModuleConfig.heartbeatMs ?? 5000;
+		// W4: Use pollIntervalMs if set, fall back to heartbeatMs
+		const pollIntervalMs = w.pollIntervalMs ?? w.heartbeatMs ?? this.workerModuleConfig.heartbeatMs ?? 5000;
 		const t = setInterval(() => {
 			this.poll(w).catch((e) =>
 				this.logger.error("Worker poll error", {
@@ -131,13 +277,17 @@ export class WorkerEngine implements IOqronModule {
 					err: String(e),
 				}),
 			);
-		}, heartbeatMs);
+		}, pollIntervalMs);
 		t.unref();
 		this.timers.push(t);
+		this.topicTimers.set(w.topic, t);
+		// B4: Immediate first poll so jobs don't wait up to pollIntervalMs
+		setTimeout(() => this.poll(w), 0);
 	}
 
 	private async poll(w: WorkerConfig): Promise<void> {
 		if (!this.running || !this.enabled) return;
+		if (this.pausedTopics.has(w.topic)) return;
 		if (this.isPolling.has(w.topic)) return;
 
 		this.isPolling.add(w.topic);
@@ -157,12 +307,13 @@ export class WorkerEngine implements IOqronModule {
 
 			const strategy: BrokerStrategy =
 				w.strategy ?? this.workerModuleConfig.strategy ?? "fifo";
+			const lockTtlMs = w.lockTtlMs ?? this.workerModuleConfig.lockTtlMs ?? 30_000;
 
 			const claimedIds = await this.di.broker.claim(
 				w.topic, // Broker queue is mapped to worker topic
 				this.workerIdStr,
 				freeSlots,
-				30000,
+				lockTtlMs,
 				strategy,
 			);
 
@@ -197,7 +348,17 @@ export class WorkerEngine implements IOqronModule {
 				}
 				this.activeJobsByTopic.get(w.topic)!.add(id);
 
-				const p = this.delegateExecuteJob(job, w).finally(() => {
+				// Phase 5: Emit claimed metric
+				OqronEventBus.emit("worker:job:claimed", w.topic, id);
+
+				const startTs = Date.now();
+				const p = this.delegateExecuteJob(job, w).then(() => {
+					const durationMs = Date.now() - startTs;
+					OqronEventBus.emit("worker:job:completed", w.topic, id, durationMs);
+				}).catch(() => {
+					const durationMs = Date.now() - startTs;
+					OqronEventBus.emit("worker:job:failed", w.topic, id, durationMs);
+				}).finally(() => {
 					this.activeJobs.delete(id);
 					this.activeJobsByTopic.get(w.topic)?.delete(id);
 				});
@@ -223,8 +384,10 @@ export class WorkerEngine implements IOqronModule {
 
 		if (!this.enabled) return;
 
-		// A worker's job structure uses 'moduleName' matching the topic
-		const w = getRegisteredWorkers().find((cw) => cw.topic === job.moduleName);
+		// W3: Match by moduleName first, fall back to queueName if moduleName is missing
+		const w = getRegisteredWorkers().find(
+			(cw) => cw.topic === job.moduleName || cw.topic === job.queueName,
+		);
 		if (!w) return; // We don't have a handler registered for this worker topic
 
 		if (w.disabledBehavior === "skip") {
@@ -280,7 +443,9 @@ export class WorkerEngine implements IOqronModule {
 			heartbeatMs: w.heartbeatMs,
 			lockTtlMs: w.lockTtlMs,
 			timeout: w.timeout,
+			tags: w.tags,
 			retries: w.retries,
+			rateLimiter: w.rateLimiter,
 			deadLetter: w.deadLetter,
 			hooks: w.hooks,
 			removeOnComplete: w.removeOnComplete,

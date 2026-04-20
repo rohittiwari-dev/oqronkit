@@ -1,17 +1,35 @@
 import type { WorkerConfig } from "./types.js";
 
-const registeredWorkers: WorkerConfig[] = [];
+/**
+ * R1: Symbol-guarded globalThis registry.
+ *
+ * In monorepo setups with multiple bundler instances or duplicate `node_modules`
+ * copies, module-scope arrays get duplicated — one per copy — meaning definitions
+ * registered in one copy are invisible to the engine running in another.
+ *
+ * Using `Symbol.for()` on `globalThis` guarantees a single canonical array
+ * regardless of how many copies of this file are evaluated at runtime.
+ */
+const GLOBAL_KEY = Symbol.for("oqronkit:pending_workers");
+type GlobalRegistry = typeof globalThis & { [key: symbol]: WorkerConfig[] | undefined };
+
+function _getPending(): WorkerConfig[] {
+  const g = globalThis as unknown as GlobalRegistry;
+  if (!g[GLOBAL_KEY]) g[GLOBAL_KEY] = [];
+  return g[GLOBAL_KEY]!;
+}
 
 /**
  * Registers a worker config for the engine to pick up.
  */
 export function registerWorker(config: WorkerConfig): void {
+  const pending = _getPending();
   // If a worker with this topic already exists, replace it
-  const existingIndex = registeredWorkers.findIndex((w) => w.topic === config.topic);
+  const existingIndex = pending.findIndex((w) => w.topic === config.topic);
   if (existingIndex > -1) {
-    registeredWorkers[existingIndex] = config;
+    pending[existingIndex] = config;
   } else {
-    registeredWorkers.push(config);
+    pending.push(config);
   }
 }
 
@@ -19,5 +37,19 @@ export function registerWorker(config: WorkerConfig): void {
  * Gets all registered worker configurations.
  */
 export function getRegisteredWorkers(): WorkerConfig[] {
-  return registeredWorkers;
+  return _getPending();
+}
+
+/**
+ * Remove a worker from the registry by topic.
+ * Used by WorkerEngine.deregisterWorker() for dynamic CRUD.
+ */
+export function deregisterWorker(topic: string): boolean {
+  const pending = _getPending();
+  const idx = pending.findIndex((w) => w.topic === topic);
+  if (idx > -1) {
+    pending.splice(idx, 1);
+    return true;
+  }
+  return false;
 }

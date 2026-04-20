@@ -15,7 +15,7 @@ export class MemoryBroker implements IBrokerEngine {
   private events = new EventEmitter();
   private waitLists = new Map<string, string[]>(); // FIFO/LIFO queue
   private priorityLists = new Map<string, PriorityEntry[]>(); // Priority queue
-  private delayed = new Map<string, { runAt: number; id: string }[]>();
+  private delayed = new Map<string, { runAt: number; id: string; priority?: number }[]>();
   private activeLocks = new Map<string, LockEntry>(); // id -> lock
   private paused = new Set<string>();
 
@@ -27,7 +27,7 @@ export class MemoryBroker implements IBrokerEngine {
   ): Promise<void> {
     if (delayMs && delayMs > 0) {
       const list = this.delayed.get(brokerName) || [];
-      list.push({ runAt: Date.now() + delayMs, id });
+      list.push({ runAt: Date.now() + delayMs, id, priority });
       this.delayed.set(brokerName, list);
     } else if (priority !== undefined) {
       // Priority: insert into sorted priority list
@@ -63,13 +63,13 @@ export class MemoryBroker implements IBrokerEngine {
       }
     }
 
-    // 1. Promote due delayed items
+    // 1. Promote due delayed items (MB1: restore original priority)
     const delayed = this.delayed.get(brokerName) || [];
     const due = delayed.filter((d) => d.runAt <= now);
     if (due.length > 0) {
       if (strategy === "priority") {
         const pList = this.priorityLists.get(brokerName) || [];
-        for (const d of due) pList.push({ id: d.id, priority: 0 }); // default priority
+        for (const d of due) pList.push({ id: d.id, priority: d.priority ?? 0 });
         pList.sort((a, b) => a.priority - b.priority);
         this.priorityLists.set(brokerName, pList);
       } else {

@@ -93,6 +93,7 @@ export {
 } from "./modules.js";
 export { worker } from "./worker/define-worker.js";
 export type { IWorker, WorkerConfig } from "./worker/types.js";
+export { WorkerMetrics, type WorkerMetricEntry, type WorkerMetricsSnapshot } from "./worker/worker-metrics.js";
 export { queue } from "./queue/define-queue.js";
 export type {
 	IPublisherQueue,
@@ -100,6 +101,7 @@ export type {
 	QueueConfig,
 	QueueJobContext,
 } from "./queue/types.js";
+export { QueueMetrics as QueueModuleMetrics, type QueueMetricEntry, type QueueMetricsSnapshot } from "./queue/queue-metrics.js";
 export {
 	cron,
 	type DefineCronOptions,
