@@ -12,6 +12,7 @@ import type { OqronJob } from "../engine/types/job.types.js";
 import { keepHistoryToRemoveConfig } from "../engine/utils/job-retention.js";
 import {
   executeJob,
+  executeBatch,
   type JobExecutionContext,
   type JobHandlerConfig,
 } from "../engine/utils/job-executor.js";
@@ -439,16 +440,51 @@ export class WorkerEngine implements IOqronModule {
 				w.strategy ?? this.workerModuleConfig.strategy ?? "fifo";
 			const lockTtlMs = w.lockTtlMs ?? this.workerModuleConfig.lockTtlMs ?? 30_000;
 
-			const claimedIds = await this.di.broker.claim(
-				w.topic, // Broker queue is mapped to worker topic
-				this.workerIdStr,
-				freeSlots,
-				lockTtlMs,
-				strategy,
-			);
+			// v2: Compute claim limit — respect batchSize for batch mode
+			const batchSize = w.batchSize ?? 10;
+			const limit = w.processBatch ? Math.min(freeSlots, batchSize) : freeSlots;
+
+			// v2: Use blocking claims when available
+			let claimedIds: string[] = [];
+			const blockingTimeoutMs = w.blockingTimeoutMs ?? w.pollIntervalMs ?? w.heartbeatMs ?? this.workerModuleConfig.heartbeatMs ?? 5000;
+
+			if (this.di.broker.claimBlocking) {
+				const firstId = await this.di.broker.claimBlocking(
+					w.topic,
+					this.workerIdStr,
+					lockTtlMs,
+					blockingTimeoutMs,
+					strategy,
+				);
+				if (firstId) {
+					claimedIds.push(firstId);
+					// Claim remaining slots non-blocking
+					if (limit > 1) {
+						const rest = await this.di.broker.claim(
+							w.topic,
+							this.workerIdStr,
+							limit - 1,
+							lockTtlMs,
+							strategy,
+						);
+						claimedIds.push(...rest);
+					}
+				}
+			} else {
+				// Fallback to active polling
+				claimedIds = await this.di.broker.claim(
+					w.topic,
+					this.workerIdStr,
+					limit,
+					lockTtlMs,
+					strategy,
+				);
+			}
 
 			if (!claimedIds.length) return;
 
+			// 2. Fetch job data & validate
+			const validJobs: OqronJob[] = [];
 			for (const id of claimedIds) {
 				const raw = await this.di.storage.get<OqronJob>("jobs", id);
 				if (!raw) {
@@ -472,27 +508,54 @@ export class WorkerEngine implements IOqronModule {
 					continue;
 				}
 
-				// Track in per-topic active set
-				if (!this.activeJobsByTopic.has(w.topic)) {
-					this.activeJobsByTopic.set(w.topic, new Set());
-				}
-				this.activeJobsByTopic.get(w.topic)!.add(id);
+				validJobs.push(job);
+			}
 
-				// Phase 5: Emit claimed metric
-				OqronEventBus.emit("worker:job:claimed", w.topic, id);
+			if (validJobs.length === 0) return;
 
-				const startTs = Date.now();
-				const p = this.delegateExecuteJob(job, w).then(() => {
+			// Track in per-topic active set
+			if (!this.activeJobsByTopic.has(w.topic)) {
+				this.activeJobsByTopic.set(w.topic, new Set());
+			}
+			const activeSet = this.activeJobsByTopic.get(w.topic)!;
+			validJobs.forEach(j => activeSet.add(j.id));
+
+			// Phase 5: Emit claimed metrics
+			validJobs.forEach(j => OqronEventBus.emit("worker:job:claimed", w.topic, j.id));
+
+			// v2: Branch to batch or single execution
+			const startTs = Date.now();
+
+			if (w.processBatch && validJobs.length > 0) {
+				// Batch execution path
+				const p = this.delegateExecuteBatch(validJobs, w).then(() => {
 					const durationMs = Date.now() - startTs;
-					OqronEventBus.emit("worker:job:completed", w.topic, id, durationMs);
+					validJobs.forEach(j => OqronEventBus.emit("worker:job:completed", w.topic, j.id, durationMs));
 				}).catch(() => {
 					const durationMs = Date.now() - startTs;
-					OqronEventBus.emit("worker:job:failed", w.topic, id, durationMs);
+					validJobs.forEach(j => OqronEventBus.emit("worker:job:failed", w.topic, j.id, durationMs));
 				}).finally(() => {
-					this.activeJobs.delete(id);
-					this.activeJobsByTopic.get(w.topic)?.delete(id);
+					validJobs.forEach(j => {
+						this.activeJobs.delete(j.id);
+						activeSet.delete(j.id);
+					});
 				});
-				this.activeJobs.set(id, p);
+				validJobs.forEach(j => this.activeJobs.set(j.id, p));
+			} else {
+				// Single execution path
+				for (const job of validJobs) {
+					const p = this.delegateExecuteJob(job, w).then(() => {
+						const durationMs = Date.now() - startTs;
+						OqronEventBus.emit("worker:job:completed", w.topic, job.id, durationMs);
+					}).catch(() => {
+						const durationMs = Date.now() - startTs;
+						OqronEventBus.emit("worker:job:failed", w.topic, job.id, durationMs);
+					}).finally(() => {
+						this.activeJobs.delete(job.id);
+						activeSet.delete(job.id);
+					});
+					this.activeJobs.set(job.id, p);
+				}
 			}
 		} finally {
 			this.isPolling.delete(w.topic);
@@ -570,6 +633,7 @@ export class WorkerEngine implements IOqronModule {
 		const handlerConfig: JobHandlerConfig = {
 			name: w.topic,
 			handler: w.handler,
+			processBatch: w.processBatch,
 			guaranteedWorker: w.guaranteedWorker,
 			heartbeatMs: w.heartbeatMs,
 			lockTtlMs: w.lockTtlMs,
@@ -594,9 +658,48 @@ export class WorkerEngine implements IOqronModule {
 			moduleDefaults: this.workerModuleConfig,
 			heartbeats: this.heartbeats,
 			abortControllers: this.abortControllers,
-			lockPrefix: "worker", // Uses "worker:" for lock keys
+			lockPrefix: "worker",
 		};
 
 		await executeJob(job, execCtx);
+	}
+
+	/**
+	 * v2: Delegates batch of jobs to the shared executeBatch().
+	 */
+	private async delegateExecuteBatch(jobs: OqronJob[], w: WorkerConfig): Promise<void> {
+		if (!w.processBatch) return;
+
+		const handlerConfig: JobHandlerConfig = {
+			name: w.topic,
+			processBatch: w.processBatch,
+			guaranteedWorker: w.guaranteedWorker,
+			heartbeatMs: w.heartbeatMs,
+			lockTtlMs: w.lockTtlMs,
+			timeout: w.timeout,
+			tags: w.tags,
+			retries: w.retries,
+			rateLimiter: w.rateLimiter,
+			deadLetter: w.deadLetter,
+			hooks: w.hooks,
+			condition: w.condition,
+			removeOnComplete: w.removeOnComplete ?? keepHistoryToRemoveConfig(w.keepHistory),
+			removeOnFail: w.removeOnFail ?? keepHistoryToRemoveConfig(w.keepFailedHistory),
+		};
+
+		const execCtx: JobExecutionContext = {
+			di: this.di,
+			logger: this.logger,
+			workerId: this.workerIdStr,
+			environment: this.config.environment ?? "default",
+			project: this.config.project ?? "default",
+			handlerConfig,
+			moduleDefaults: this.workerModuleConfig,
+			heartbeats: this.heartbeats,
+			abortControllers: this.abortControllers,
+			lockPrefix: "worker",
+		};
+
+		await executeBatch(jobs, execCtx);
 	}
 }

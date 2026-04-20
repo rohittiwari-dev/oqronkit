@@ -11,9 +11,10 @@ import type { BrokerStrategy } from "../engine/types/engine.js";
 import type { OqronJob } from "../engine/types/job.types.js";
 import { keepHistoryToRemoveConfig } from "../engine/utils/job-retention.js";
 import {
-  executeJob,
-  type JobExecutionContext,
-  type JobHandlerConfig,
+	executeJob,
+	executeBatch,
+	type JobExecutionContext,
+	type JobHandlerConfig,
 } from "../engine/utils/job-executor.js";
 import type { QueueModuleDef } from "../modules.js";
 import { deregisterQueue, getRegisteredQueues, registerQueue as registryRegister } from "./registry.js";
@@ -438,9 +439,9 @@ export class QueueEngine implements IOqronModule {
 	}
 
 	private startPolling(q: QueueConfig) {
-		// Publisher-only queues have no handler — skip polling entirely.
+		// Publisher-only queues have no handler and no processBatch — skip polling entirely.
 		// These queues only push jobs; a separate Worker node consumes them.
-		if (!q.handler) {
+		if (!q.handler && !q.processBatch) {
 			this.logger.info(
 				`Queue "${q.name}" has no handler — running in publisher-only mode (no polling)`,
 			);
@@ -483,17 +484,51 @@ export class QueueEngine implements IOqronModule {
 			// 1. Claim IDs from Broker with ordering strategy
 			const strategy: BrokerStrategy =
 				q.strategy ?? this.queueConfig?.strategy ?? "fifo";
-			const jobIds = await this.di.broker.claim(
-				q.name,
-				this.workerIdStr,
-				freeSlots,
-				lockTtlMs,
-				strategy,
-			);
+
+			// v2: Compute claim limit — respect batchSize for batch mode
+			const batchSize = q.batchSize ?? 10;
+			const limit = q.processBatch ? Math.min(freeSlots, batchSize) : freeSlots;
+
+			// v2: Use blocking claims when available
+			let jobIds: string[] = [];
+			const blockingTimeoutMs = q.blockingTimeoutMs ?? q.pollIntervalMs ?? q.heartbeatMs ?? this.queueConfig?.heartbeatMs ?? 5000;
+
+			if (this.di.broker.claimBlocking) {
+				const firstId = await this.di.broker.claimBlocking(
+					q.name,
+					this.workerIdStr,
+					lockTtlMs,
+					blockingTimeoutMs,
+					strategy,
+				);
+				if (firstId) {
+					jobIds.push(firstId);
+					// Claim remaining slots non-blocking
+					if (limit > 1) {
+						const rest = await this.di.broker.claim(
+							q.name,
+							this.workerIdStr,
+							limit - 1,
+							lockTtlMs,
+							strategy,
+						);
+						jobIds.push(...rest);
+					}
+				}
+			} else {
+				jobIds = await this.di.broker.claim(
+					q.name,
+					this.workerIdStr,
+					limit,
+					lockTtlMs,
+					strategy,
+				);
+			}
 
 			if (jobIds.length === 0) return;
 
-			// 2. Fetch job data & Execute
+			// 2. Fetch job data & validate
+			const validJobs: OqronJob[] = [];
 			for (const id of jobIds) {
 				const raw = await this.di.storage.get("jobs", id);
 				if (!raw) {
@@ -517,27 +552,54 @@ export class QueueEngine implements IOqronModule {
 					continue;
 				}
 
-				// Track in per-queue active set
-				if (!this.activeJobsByQueue.has(q.name)) {
-					this.activeJobsByQueue.set(q.name, new Set());
-				}
-				this.activeJobsByQueue.get(q.name)!.add(id);
+				validJobs.push(job);
+			}
 
-				// Phase 5: Emit claimed metric
-				OqronEventBus.emit("queue:job:claimed", q.name, id);
+			if (validJobs.length === 0) return;
 
-				const startTs = Date.now();
-				const p = this.delegateExecuteJob(job, q).then(() => {
+			// Track in per-queue active set
+			if (!this.activeJobsByQueue.has(q.name)) {
+				this.activeJobsByQueue.set(q.name, new Set());
+			}
+			const activeSet = this.activeJobsByQueue.get(q.name)!;
+			validJobs.forEach(j => activeSet.add(j.id));
+
+			// Phase 5: Emit claimed metrics
+			validJobs.forEach(j => OqronEventBus.emit("queue:job:claimed", q.name, j.id));
+
+			// v2: Branch to batch or single execution
+			const startTs = Date.now();
+
+			if (q.processBatch && validJobs.length > 0) {
+				// Batch execution path
+				const p = this.delegateExecuteBatch(validJobs, q).then(() => {
 					const durationMs = Date.now() - startTs;
-					OqronEventBus.emit("queue:job:completed", q.name, id, durationMs);
+					validJobs.forEach(j => OqronEventBus.emit("queue:job:completed", q.name, j.id, durationMs));
 				}).catch(() => {
 					const durationMs = Date.now() - startTs;
-					OqronEventBus.emit("queue:job:failed", q.name, id, durationMs);
+					validJobs.forEach(j => OqronEventBus.emit("queue:job:failed", q.name, j.id, durationMs));
 				}).finally(() => {
-					this.activeJobs.delete(id);
-					this.activeJobsByQueue.get(q.name)?.delete(id);
+					validJobs.forEach(j => {
+						this.activeJobs.delete(j.id);
+						activeSet.delete(j.id);
+					});
 				});
-				this.activeJobs.set(id, p);
+				validJobs.forEach(j => this.activeJobs.set(j.id, p));
+			} else {
+				// Single execution path
+				for (const job of validJobs) {
+					const p = this.delegateExecuteJob(job, q).then(() => {
+						const durationMs = Date.now() - startTs;
+						OqronEventBus.emit("queue:job:completed", q.name, job.id, durationMs);
+					}).catch(() => {
+						const durationMs = Date.now() - startTs;
+						OqronEventBus.emit("queue:job:failed", q.name, job.id, durationMs);
+					}).finally(() => {
+						this.activeJobs.delete(job.id);
+						activeSet.delete(job.id);
+					});
+					this.activeJobs.set(job.id, p);
+				}
 			}
 		} finally {
 			this.isPolling.delete(q.name);
@@ -549,11 +611,12 @@ export class QueueEngine implements IOqronModule {
 	 * handler invocation, retry/nack/DLQ, finalization, hooks, and pruning.
 	 */
 	private async delegateExecuteJob(job: OqronJob, q: QueueConfig): Promise<void> {
-		if (!q.handler) return; // Safety guard — publisher-only queues never reach here
+		if (!q.handler && !q.processBatch) return; // Safety guard
 
 		const handlerConfig: JobHandlerConfig = {
 			name: q.name,
 			handler: q.handler,
+			processBatch: q.processBatch,
 			guaranteedWorker: q.guaranteedWorker,
 			heartbeatMs: q.heartbeatMs,
 			lockTtlMs: q.lockTtlMs,
@@ -582,5 +645,44 @@ export class QueueEngine implements IOqronModule {
 		};
 
 		await executeJob(job, execCtx);
+	}
+
+	/**
+	 * v2: Delegates batch of jobs to the shared executeBatch().
+	 */
+	private async delegateExecuteBatch(jobs: OqronJob[], q: QueueConfig): Promise<void> {
+		if (!q.processBatch) return;
+
+		const handlerConfig: JobHandlerConfig = {
+			name: q.name,
+			processBatch: q.processBatch,
+			guaranteedWorker: q.guaranteedWorker,
+			heartbeatMs: q.heartbeatMs,
+			lockTtlMs: q.lockTtlMs,
+			timeout: q.timeout,
+			tags: q.tags,
+			retries: q.retries,
+			rateLimiter: q.rateLimiter,
+			deadLetter: q.deadLetter,
+			hooks: q.hooks,
+			condition: q.condition,
+			removeOnComplete: q.removeOnComplete ?? keepHistoryToRemoveConfig(q.keepHistory),
+			removeOnFail: q.removeOnFail ?? keepHistoryToRemoveConfig(q.keepFailedHistory),
+		};
+
+		const execCtx: JobExecutionContext = {
+			di: this.di,
+			logger: this.logger,
+			workerId: this.workerIdStr,
+			environment: this.config.environment ?? "default",
+			project: this.config.project ?? "default",
+			handlerConfig,
+			moduleDefaults: this.queueConfig ?? {},
+			heartbeats: this.heartbeats,
+			abortControllers: this.abortControllers,
+			lockPrefix: "queue",
+		};
+
+		await executeBatch(jobs, execCtx);
 	}
 }

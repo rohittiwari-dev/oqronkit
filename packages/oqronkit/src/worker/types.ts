@@ -156,6 +156,29 @@ export interface WorkerConfig<T = any, R = any> {
    * Only useful if you want this specific worker to ignore the `disabled` setting.
    */
   disabledBehavior?: DisabledBehavior;
+
+  /**
+   * Batch processing handler — receives an array of job contexts.
+   * When set, the engine claims up to `batchSize` jobs per poll tick and
+   * passes them all to this handler in a single invocation.
+   *
+   * Mutually exclusive with `handler`. If both are set, `processBatch` takes precedence.
+   */
+  processBatch?: (jobs: QueueJobContext<T>[]) => Promise<R[]>;
+
+  /**
+   * Number of jobs to claim per poll tick when using `processBatch`.
+   * Ignored when using single `handler`.
+   * @default 10
+   */
+  batchSize?: number;
+
+  /**
+   * Max time (ms) to block waiting for a job when the broker supports
+   * blocking claims (BLPOP). Falls back to active polling if not supported.
+   * @default pollIntervalMs ?? 5000
+   */
+  blockingTimeoutMs?: number;
 }
 
 /**

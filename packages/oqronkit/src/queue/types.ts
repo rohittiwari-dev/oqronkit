@@ -63,6 +63,22 @@ export interface QueueJobContext<T = any> {
 
   /** The project context (isolation boundary) */
   project: string;
+
+  /**
+   * Spawn a child job dynamically during execution.
+   * The child is enqueued immediately and linked to this job via `parentId`.
+   * Returns the child job ID.
+   *
+   * @example
+   * ```ts
+   * const childId = await ctx.spawnChild("video-encode", { url: "..." });
+   * ```
+   */
+  spawnChild: <C = any>(
+    queueName: string,
+    data: C,
+    opts?: OqronJobOptions,
+  ) => Promise<string>;
 }
 
 export interface QueueConfig<T = any, R = any> {
@@ -208,6 +224,29 @@ export interface QueueConfig<T = any, R = any> {
    * Use the `worker()` factory on a separate node to consume these jobs.
    */
   handler?: (job: QueueJobContext<T>) => Promise<R>;
+
+  /**
+   * Batch processing handler — receives an array of job contexts.
+   * When set, the engine claims up to `batchSize` jobs per poll tick and
+   * passes them all to this handler in a single invocation.
+   *
+   * Mutually exclusive with `handler`. If both are set, `processBatch` takes precedence.
+   */
+  processBatch?: (jobs: QueueJobContext<T>[]) => Promise<R[]>;
+
+  /**
+   * Number of jobs to claim per poll tick when using `processBatch`.
+   * Ignored when using single `handler`.
+   * @default 10
+   */
+  batchSize?: number;
+
+  /**
+   * Max time (ms) to block waiting for a job when the broker supports
+   * blocking claims (BLPOP). Falls back to active polling if not supported.
+   * @default pollIntervalMs ?? 5000
+   */
+  blockingTimeoutMs?: number;
 }
 
 export interface IQueue<T = any, R = any> {

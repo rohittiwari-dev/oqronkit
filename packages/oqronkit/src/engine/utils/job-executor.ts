@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { HeartbeatWorker } from "../lock/heartbeat-worker.js";
 import type { Logger } from "../logger/index.js";
 import type { OqronJob } from "../types/job.types.js";
@@ -8,6 +9,7 @@ import { calculateBackoff } from "./backoffs.js";
 import { DependencyResolver } from "./dependency-resolver.js";
 import { pruneAfterCompletion } from "./job-retention.js";
 import type { RemoveOnConfig } from "../types/job.types.js";
+import type { OqronJobOptions } from "../types/job.types.js";
 
 // ── Shared configuration shape ──────────────────────────────────────────────
 // Both QueueConfig and WorkerConfig expose overlapping execution settings.
@@ -16,8 +18,10 @@ import type { RemoveOnConfig } from "../types/job.types.js";
 export interface JobHandlerConfig {
   /** Queue/topic name used in Broker operations */
   name: string;
-  /** The handler function to execute */
-  handler: (ctx: QueueJobContext<any>) => Promise<any>;
+  /** The handler function to execute. Optional when processBatch is set. */
+  handler?: (ctx: QueueJobContext<any>) => Promise<any>;
+  /** Batch handler — receives an array of job contexts. Mutually exclusive with handler. */
+  processBatch?: (jobs: QueueJobContext<any>[]) => Promise<any[]>;
   /** Enable crash-safe heartbeat locks. @default true */
   guaranteedWorker?: boolean;
   /** Heartbeat polling interval in ms */
@@ -235,6 +239,41 @@ export async function executeJob(
     },
     // C3: Return current progress value from job record
     getProgress: () => job.progressPercent ?? 0,
+    // v2: Dynamic child spawning
+    spawnChild: async <C = any>(queueName: string, data: C, childOpts?: OqronJobOptions) => {
+      const childId = childOpts?.jobId ?? randomUUID();
+      const childJob: OqronJob<C> = {
+        id: childId,
+        type: "task",
+        queueName,
+        status: childOpts?.delay ? "delayed" : "waiting",
+        moduleName: queueName,
+        data,
+        opts: childOpts ?? {},
+        attemptMade: 0,
+        progressPercent: 0,
+        parentId: job.id,
+        tags: [],
+        environment: job.environment ?? ctx.environment,
+        project: job.project ?? ctx.project,
+        createdAt: new Date(),
+        queuedAt: new Date(),
+        triggeredBy: "flow",
+      };
+      // Save child job to storage
+      await di.storage.save("jobs", childId, childJob);
+      // Link child to parent
+      if (!job.childrenIds) job.childrenIds = [];
+      if (!job.childrenIds.includes(childId)) {
+        job.childrenIds.push(childId);
+        await di.storage.save("jobs", job.id, job);
+      }
+      // Publish to broker
+      await di.broker.publish(queueName, childId, childOpts?.delay, childOpts?.priority);
+      OqronEventBus.emit("job:child:spawned", job.id, childId, queueName);
+      logger.info(`Spawned child job ${childId} on queue ${queueName}`, { parentId: job.id });
+      return childId;
+    },
   };
 
   // Update state to active
@@ -304,7 +343,8 @@ export async function executeJob(
     }
 
     let timeoutHandle: any;
-    const executePromise = hc.handler(jobCtx);
+    const activeHandler = hc.handler!;
+    const executePromise = activeHandler(jobCtx);
 
     if (typeof hc.timeout === "number") {
       const timeoutPromise = new Promise((_, reject) => {
@@ -368,7 +408,6 @@ export async function executeJob(
       // Mark as delayed in storage so dashboards see the correct state
       job.status = "delayed";
       job.error = error;
-      await di.storage.save("jobs", job.id, job);
 
       // Stop heartbeat before nack
       if (heartbeat) {
@@ -379,9 +418,14 @@ export async function executeJob(
       // Clean up abort controller
       ctx.abortControllers.delete(job.id);
 
-      // Nack back to broker with delay — crash-safe
+      // v2: Atomic state transition — save + nack in one call when available
       OqronEventBus.emit("job:retried", job.id, `attempt:${job.attemptMade + 1}`);
-      await di.broker.nack(hc.name, job.id, delay);
+      if (di.broker.atomicTransition) {
+        await di.broker.atomicTransition(hc.name, job.id, job as Record<string, any>, "nack", delay);
+      } else {
+        await di.storage.save("jobs", job.id, job);
+        await di.broker.nack(hc.name, job.id, delay);
+      }
       return; // Exit — the job will be re-claimed on the next poll cycle
     }
 
@@ -433,8 +477,13 @@ export async function executeJob(
     reason: status === "failed" ? error : "Finished successfully",
   });
 
-  await di.storage.save("jobs", job.id, job);
-  await di.broker.ack(hc.name, job.id);
+  // v2: Atomic state transition — save + ack in one call when available
+  if (di.broker.atomicTransition) {
+    await di.broker.atomicTransition(hc.name, job.id, job as Record<string, any>, "ack");
+  } else {
+    await di.storage.save("jobs", job.id, job);
+    await di.broker.ack(hc.name, job.id);
+  }
 
   // ── Notify dependent children ────────────────────────────────────
   if (job.childrenIds?.length) {
@@ -526,5 +575,297 @@ function pushTimeline(
   // Cap timeline entries to prevent unbounded growth
   if (job.timeline.length > MAX_TIMELINE_ENTRIES) {
     job.timeline = job.timeline.slice(job.timeline.length - MAX_TIMELINE_ENTRIES);
+  }
+}
+
+// ── v2: Batch Execution ──────────────────────────────────────────────────────
+
+/**
+ * Shared context builder — extracted for reuse in both single and batch execution.
+ * Returns the built QueueJobContext without executing the handler.
+ */
+function buildJobContext(
+  job: OqronJob,
+  ctx: JobExecutionContext,
+): { jobCtx: QueueJobContext; abortController: AbortController } {
+  const { di, logger, handlerConfig: hc } = ctx;
+
+  const abortController = new AbortController();
+  ctx.abortControllers.set(job.id, abortController);
+
+  const maxRetries = hc.retries?.max ?? ctx.moduleDefaults.retries?.max ?? 0;
+  const effectiveMaxRetries = job.opts?.attempts
+    ? job.opts.attempts - 1
+    : maxRetries;
+  const maxAttempts = effectiveMaxRetries + 1;
+  const executionStartTime = Date.now();
+
+  // C2: Build hybrid function+object log API
+  const logFn = (level: "info" | "warn" | "error", msg: string) => {
+    const method = logger[level] || logger.info;
+    method.call(logger, `[batch:${hc.name}] ${msg}`, { jobId: job.id });
+    if (!job.logs) job.logs = [];
+    job.logs.push({ level, msg, ts: new Date() });
+    di.storage.save("jobs", job.id, job).catch(() => {});
+  };
+  logFn.info = (msg: string) => logFn("info", msg);
+  logFn.warn = (msg: string) => logFn("warn", msg);
+  logFn.error = (msg: string) => logFn("error", msg);
+
+  let internalDiscarded = false;
+
+  const jobCtx: QueueJobContext<any> = {
+    id: job.id,
+    name: hc.name,
+    data: job.data,
+    signal: abortController.signal,
+    get aborted() { return abortController.signal.aborted; },
+    environment: job.environment ?? ctx.environment,
+    project: job.project ?? ctx.project,
+    attempt: (job.attemptMade ?? 0) + 1,
+    maxAttempts,
+    createdAt: job.createdAt ? new Date(job.createdAt) : new Date(),
+    get duration() { return Date.now() - executionStartTime; },
+    progress: async (percent, label) => {
+      job.progressPercent = percent;
+      job.progressLabel = label;
+      await di.storage.save("jobs", job.id, job);
+      OqronEventBus.emit("job:progress", job.queueName, job.id, percent);
+    },
+    log: logFn,
+    discard: () => { internalDiscarded = true; },
+    getProgress: () => job.progressPercent ?? 0,
+    spawnChild: async <C = any>(queueName: string, data: C, childOpts?: OqronJobOptions) => {
+      const childId = childOpts?.jobId ?? randomUUID();
+      const childJob: OqronJob<C> = {
+        id: childId,
+        type: "task",
+        queueName,
+        status: childOpts?.delay ? "delayed" : "waiting",
+        moduleName: queueName,
+        data,
+        opts: childOpts ?? {},
+        attemptMade: 0,
+        progressPercent: 0,
+        parentId: job.id,
+        tags: [],
+        environment: job.environment ?? ctx.environment,
+        project: job.project ?? ctx.project,
+        createdAt: new Date(),
+        queuedAt: new Date(),
+        triggeredBy: "flow",
+      };
+      await di.storage.save("jobs", childId, childJob);
+      if (!job.childrenIds) job.childrenIds = [];
+      if (!job.childrenIds.includes(childId)) {
+        job.childrenIds.push(childId);
+        await di.storage.save("jobs", job.id, job);
+      }
+      await di.broker.publish(queueName, childId, childOpts?.delay, childOpts?.priority);
+      return childId;
+    },
+  };
+
+  return { jobCtx, abortController };
+}
+
+/**
+ * Execute a batch of jobs using `processBatch`. All-or-nothing semantics:
+ * if the batch handler succeeds, ALL jobs are marked completed.
+ * If it throws, ALL jobs fail and retry together.
+ *
+ * Falls back to parallel individual execution if `processBatch` is not set.
+ */
+export async function executeBatch(
+  jobs: OqronJob[],
+  ctx: JobExecutionContext,
+): Promise<void> {
+  if (jobs.length === 0) return;
+  const { di, logger, workerId, handlerConfig: hc, moduleDefaults: md } = ctx;
+
+  if (!hc.processBatch) {
+    // Fallback: execute individually in parallel
+    await Promise.all(jobs.map((job) => executeJob(job, ctx)));
+    return;
+  }
+
+  const lockTtlMs = hc.lockTtlMs ?? md.lockTtlMs ?? 30000;
+  const heartbeatMs = hc.heartbeatMs ?? md.heartbeatMs ?? 5000;
+  const useGuaranteed = hc.guaranteedWorker !== false;
+
+  // Resolve retry config
+  const maxRetries = hc.retries?.max ?? md.retries?.max ?? 0;
+  const retryStrategy = hc.retries?.strategy ?? md.retries?.strategy ?? "exponential";
+  const baseDelay = hc.retries?.baseDelay ?? md.retries?.baseDelay ?? 2000;
+  const maxDelay = hc.retries?.maxDelay ?? md.retries?.maxDelay ?? 60000;
+
+  // ── Heartbeat: one lock for the entire batch ──────────────────────────
+  const batchId = jobs[0].id; // Use first job ID as batch lock key
+  let heartbeat: HeartbeatWorker | null = null;
+  if (useGuaranteed) {
+    const lockKey = `${ctx.lockPrefix}:batch:${batchId}`;
+    heartbeat = new HeartbeatWorker(
+      di.lock,
+      logger,
+      lockKey,
+      workerId,
+      lockTtlMs,
+      heartbeatMs,
+    );
+    const acquired = await heartbeat.start();
+    if (!acquired) {
+      logger.warn(`Failed to acquire batch heartbeat lock for batch starting with ${batchId}`);
+      for (const job of jobs) {
+        await di.broker.nack(hc.name, job.id);
+      }
+      return;
+    }
+  }
+
+  // ── Build contexts for all jobs ────────────────────────────────────────
+  const contexts: Array<{ job: OqronJob; jobCtx: QueueJobContext; abortController: AbortController }> = [];
+  for (const job of jobs) {
+    job.moduleName = job.moduleName ?? hc.name;
+    job.status = "active";
+    job.startedAt = new Date();
+    job.attemptMade = (job.attemptMade ?? 0) + 1;
+    job.workerId = workerId;
+    job.processedOn = job.startedAt;
+    await di.storage.save("jobs", job.id, job);
+
+    const { jobCtx, abortController } = buildJobContext(job, ctx);
+    contexts.push({ job, jobCtx, abortController });
+  }
+
+  let status: "completed" | "failed" = "completed";
+  let error: string | undefined;
+  let results: any[] | undefined;
+
+  try {
+    results = await hc.processBatch(contexts.map((c) => c.jobCtx));
+    status = "completed";
+  } catch (e: any) {
+    error = e.message ?? "Batch processing failed";
+    status = "failed";
+
+    // Check if we should retry ALL jobs
+    const shouldRetry = contexts.some((c) => {
+      const effectiveMax = c.job.opts?.attempts ? c.job.opts.attempts - 1 : maxRetries;
+      return c.job.attemptMade <= effectiveMax;
+    });
+
+    if (shouldRetry) {
+      const backoffOpts = { type: retryStrategy, delay: baseDelay };
+      const delay = calculateBackoff(backoffOpts, contexts[0].job.attemptMade, maxDelay);
+
+      logger.warn("Batch failed, re-queuing all jobs for retry...", {
+        name: hc.name,
+        count: jobs.length,
+        nextIn: `${delay}ms`,
+        error,
+      });
+
+      // Stop heartbeat before nack
+      if (heartbeat) {
+        await heartbeat.stop();
+      }
+
+      for (const { job } of contexts) {
+        job.status = "delayed";
+        job.error = error;
+        OqronEventBus.emit("job:retried", job.id, `batch-attempt:${job.attemptMade + 1}`);
+        if (di.broker.atomicTransition) {
+          await di.broker.atomicTransition(hc.name, job.id, job as Record<string, any>, "nack", delay);
+        } else {
+          await di.storage.save("jobs", job.id, job);
+          await di.broker.nack(hc.name, job.id, delay);
+        }
+      }
+
+      // Clean up
+      for (const { job } of contexts) {
+        ctx.abortControllers.delete(job.id);
+      }
+      return;
+    }
+  }
+
+  // ── Clean up ──────────────────────────────────────────────────────────
+  for (const { job } of contexts) {
+    ctx.abortControllers.delete(job.id);
+  }
+
+  if (heartbeat) {
+    await heartbeat.stop();
+  }
+
+  // ── Finalize all jobs ─────────────────────────────────────────────────
+  const finishedAt = new Date();
+  for (let i = 0; i < contexts.length; i++) {
+    const { job } = contexts[i];
+    job.status = status;
+    job.finishedAt = finishedAt;
+    job.error = error;
+
+    if (status === "completed") {
+      job.returnValue = results?.[i];
+      job.progressPercent = 100;
+      job.progressLabel = "Completed";
+    }
+
+    if (job.startedAt) {
+      job.durationMs = finishedAt.getTime() - new Date(job.startedAt).getTime();
+    }
+
+    if (!job.timeline) job.timeline = [];
+    pushTimeline(job, {
+      ts: finishedAt,
+      from: "active",
+      to: status,
+      reason: status === "failed" ? error : `Batch completed (${contexts.length} jobs)`,
+    });
+
+    // Atomic save + ack
+    if (di.broker.atomicTransition) {
+      await di.broker.atomicTransition(hc.name, job.id, job as Record<string, any>, "ack");
+    } else {
+      await di.storage.save("jobs", job.id, job);
+      await di.broker.ack(hc.name, job.id);
+    }
+
+    // Notify children
+    if (job.childrenIds?.length) {
+      await DependencyResolver.notifyChildren(di.storage, di.broker, job.id);
+    }
+  }
+
+  // ── EventBus emissions + hooks ─────────────────────────────────────────
+  if (status === "completed") {
+    for (let i = 0; i < contexts.length; i++) {
+      const { job } = contexts[i];
+      OqronEventBus.emit("job:success", job.queueName, job.id);
+    }
+  } else {
+    for (const { job } of contexts) {
+      const errorObject = new Error(error ?? "Unknown error");
+      OqronEventBus.emit("job:fail", job.queueName, job.id, errorObject);
+    }
+  }
+
+  // ── Job Retention / Pruning ────────────────────────────────────────────
+  for (const { job } of contexts) {
+    await pruneAfterCompletion({
+      namespace: "jobs",
+      jobId: job.id,
+      status,
+      jobRemoveConfig:
+        status === "completed" ? job.opts?.removeOnComplete : job.opts?.removeOnFail,
+      moduleRemoveConfig:
+        status === "completed" ? hc.removeOnComplete : hc.removeOnFail,
+      globalRemoveConfig:
+        status === "completed" ? md.removeOnComplete : md.removeOnFail,
+      filterKey: "queueName",
+      filterValue: hc.name,
+    });
   }
 }

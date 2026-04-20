@@ -164,4 +164,47 @@ export class MemoryBroker implements IBrokerEngine {
     this.paused.delete(brokerName);
     this.events.emit(`broker:ready:${brokerName}`);
   }
+
+  /**
+   * Blocking claim — waits up to `timeoutMs` for a job to become available.
+   * Uses EventEmitter-based notification (zero CPU while waiting).
+   */
+  async claimBlocking(
+    brokerName: string,
+    consumerId: string,
+    lockTtlMs: number,
+    timeoutMs: number,
+    strategy: BrokerStrategy = "fifo",
+  ): Promise<string | null> {
+    // Try non-blocking first
+    const immediate = await this.claim(brokerName, consumerId, 1, lockTtlMs, strategy);
+    if (immediate.length > 0) return immediate[0];
+
+    // Wait for a job to arrive or timeout
+    return new Promise<string | null>((resolve) => {
+      let settled = false;
+      const eventName = `broker:ready:${brokerName}`;
+
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        this.events.removeListener(eventName, onReady);
+        resolve(null);
+      }, timeoutMs);
+      timer.unref();
+
+      const onReady = async () => {
+        if (settled) return;
+        const claimed = await this.claim(brokerName, consumerId, 1, lockTtlMs, strategy);
+        if (claimed.length > 0) {
+          settled = true;
+          clearTimeout(timer);
+          this.events.removeListener(eventName, onReady);
+          resolve(claimed[0]);
+        }
+      };
+
+      this.events.on(eventName, onReady);
+    });
+  }
 }

@@ -9,6 +9,7 @@ export type OqronEventMap = {
   "job:cancelled": [queueName: string, jobId: string];
   "job:stalled": [queueName: string, jobId: string];
   "job:retried": [jobId: string, retryId: string];
+  "job:child:spawned": [queueName: string, jobId: string, childId: string];
 
   // ── Module lifecycle ──────────────────────────────────────────────────────
   "module:enabled": [moduleName: string];
