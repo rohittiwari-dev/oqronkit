@@ -27,6 +27,12 @@ export { OqronEventBus } from "./events/event-bus.js";
 // ── Circuit Breaker ──────────────────────────────────────────────────────────
 export { LagMonitor } from "./lag-monitor.js";
 
+// ── Lock Infrastructure ──────────────────────────────────────────────────────
+export { CrossNodeStallScanner } from "./lock/cross-node-stall-scanner.js";
+
+// ── Sandbox ──────────────────────────────────────────────────────────────────
+export { SandboxedProcessor, type SandboxedProcessorConfig, type SandboxResult } from "./sandbox/sandboxed-processor.js";
+
 // ── Logger (voltlog-io) ──────────────────────────────────────────────────────
 export type {
   Logger,
