@@ -19,13 +19,13 @@ export class MemoryStore implements IStorageEngine {
 
   async save<T>(namespace: string, id: string, data: T): Promise<void> {
     const map = this.getNamespaceMap(namespace);
-    map.set(id, { ...data }); // Clone to prevent mutation refs
+    map.set(id, this.clone(data));
   }
 
   async get<T>(namespace: string, id: string): Promise<T | null> {
     const map = this.getNamespaceMap(namespace);
     const data = map.get(id);
-    return data ? { ...data } : null;
+    return data ? this.clone(data) : null;
   }
 
   async list<T>(
@@ -34,7 +34,9 @@ export class MemoryStore implements IStorageEngine {
     opts?: ListOptions,
   ): Promise<T[]> {
     const map = this.getNamespaceMap(namespace);
-    let results: T[] = Array.from(map.values()) as T[];
+    let results: T[] = Array.from(map.values()).map((item) =>
+      this.clone(item),
+    ) as T[];
 
     if (filter) {
       results = results.filter((item: any) => {
@@ -164,5 +166,26 @@ export class MemoryStore implements IStorageEngine {
       return Number.isNaN(parsed) ? undefined : parsed;
     }
     return undefined;
+  }
+
+  private clone<T>(value: T, seen = new WeakMap<object, any>()): T {
+    if (value === null || typeof value !== "object") return value;
+    if (value instanceof Date) return new Date(value.getTime()) as T;
+    if (typeof value === "function") return value;
+    if (seen.has(value as object)) return seen.get(value as object);
+
+    if (Array.isArray(value)) {
+      const out: any[] = [];
+      seen.set(value, out);
+      for (const item of value) out.push(this.clone(item, seen));
+      return out as T;
+    }
+
+    const out: Record<string, unknown> = {};
+    seen.set(value as object, out);
+    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+      out[key] = this.clone(item, seen);
+    }
+    return out as T;
   }
 }

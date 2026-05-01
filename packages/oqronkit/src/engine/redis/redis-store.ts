@@ -62,10 +62,13 @@ export class RedisStore implements IStorageEngine {
     // Use offset/limit for pagination — no more hard-cap at 100
     const offset = opts?.offset ?? 0;
     const limit = opts?.limit;
-    const end = limit === undefined ? -1 : offset + limit - 1;
+    const needsInMemoryFiltering =
+      !!filter || !!(opts?.where && opts.where.length > 0);
+    const end =
+      needsInMemoryFiltering || limit === undefined ? -1 : offset + limit - 1;
     const ids = await this.redis.zrevrange(
       indexKey,
-      offset,
+      needsInMemoryFiltering ? 0 : offset,
       end,
     );
 
@@ -106,6 +109,15 @@ export class RedisStore implements IStorageEngine {
       entities = entities.filter((item: any) =>
         this.matchesWhere(item, opts.where!),
       );
+    }
+
+    if (needsInMemoryFiltering) {
+      if (limit !== undefined) {
+        return entities.slice(offset, offset + limit);
+      }
+      if (offset > 0) {
+        return entities.slice(offset);
+      }
     }
 
     return entities;

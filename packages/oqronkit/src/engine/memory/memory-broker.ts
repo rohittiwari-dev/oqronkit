@@ -16,8 +16,13 @@ export class MemoryBroker implements IBrokerEngine {
   private waitLists = new Map<string, string[]>(); // FIFO/LIFO queue
   private priorityLists = new Map<string, PriorityEntry[]>(); // Priority queue
   private delayed = new Map<string, { runAt: number; id: string; priority?: number }[]>();
-  private activeLocks = new Map<string, LockEntry>(); // id -> lock
+  private activeLocks = new Map<string, LockEntry>(); // brokerName + id -> lock
   private paused = new Set<string>();
+  private readonly lockSeparator = "\u0000";
+
+  private lockKey(brokerName: string, id: string): string {
+    return `${brokerName}${this.lockSeparator}${id}`;
+  }
 
   async publish(
     brokerName: string,
@@ -110,7 +115,10 @@ export class MemoryBroker implements IBrokerEngine {
 
     // 3. Atomically lock them
     for (const cid of claimedIds) {
-      this.activeLocks.set(cid, { consumerId, expiresAt: now + lockTtlMs });
+      this.activeLocks.set(this.lockKey(brokerName, cid), {
+        consumerId,
+        expiresAt: now + lockTtlMs,
+      });
     }
 
     return claimedIds;
@@ -121,15 +129,26 @@ export class MemoryBroker implements IBrokerEngine {
     consumerId: string,
     lockTtlMs: number,
   ): Promise<void> {
-    const lock = this.activeLocks.get(id);
+    let matchingKey: string | undefined;
+    let lock: LockEntry | undefined;
+    for (const [key, candidate] of this.activeLocks.entries()) {
+      const candidateId = key.slice(key.indexOf(this.lockSeparator) + 1);
+      if (candidateId !== id || candidate.consumerId !== consumerId) continue;
+      if (matchingKey) {
+        throw new Error(`Ambiguous lock for entity ${id}; broker name is required`);
+      }
+      matchingKey = key;
+      lock = candidate;
+    }
     const now = Date.now();
 
     // Explicit expiration check: if lock naturally expired, delete it and reject extension
-    if (lock && lock.expiresAt < now) {
-      this.activeLocks.delete(id);
+    if (matchingKey && lock && lock.expiresAt < now) {
+      this.activeLocks.delete(matchingKey);
+      lock = undefined;
     }
 
-    const currentLock = this.activeLocks.get(id);
+    const currentLock = matchingKey ? this.activeLocks.get(matchingKey) : undefined;
     if (!currentLock || currentLock.consumerId !== consumerId) {
       throw new Error(`Lock lost or stolen for entity ${id}`);
     }
@@ -137,12 +156,12 @@ export class MemoryBroker implements IBrokerEngine {
     currentLock.expiresAt = now + lockTtlMs;
   }
 
-  async ack(_brokerName: string, id: string): Promise<void> {
-    this.activeLocks.delete(id);
+  async ack(brokerName: string, id: string): Promise<void> {
+    this.activeLocks.delete(this.lockKey(brokerName, id));
   }
 
   async nack(brokerName: string, id: string, delayMs?: number): Promise<void> {
-    this.activeLocks.delete(id);
+    this.activeLocks.delete(this.lockKey(brokerName, id));
 
     if (delayMs && delayMs > 0) {
       const list = this.delayed.get(brokerName) || [];

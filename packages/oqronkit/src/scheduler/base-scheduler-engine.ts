@@ -38,6 +38,7 @@ import {
 export type ActiveJobEntry = {
 	runId: string;
 	lockKey: string;
+	scheduleName: string;
 	worker?: HeartbeatWorker;
 	abort?: AbortController;
 	promise?: Promise<void>;
@@ -182,6 +183,14 @@ export abstract class BaseSchedulerEngine<
 	 */
 	protected async shouldFire(_def: TDef, _record: any): Promise<boolean> {
 		return true;
+	}
+
+	protected canTickRecord(_def: TDef, _record: any): boolean {
+		return true;
+	}
+
+	protected shouldFireWithoutNextRun(_def: TDef, _record: any): boolean {
+		return false;
 	}
 
 	// ── Lifecycle (shared) ────────────────────────────────────────────────────
@@ -446,7 +455,7 @@ export abstract class BaseSchedulerEngine<
 
 		// Cancel any active jobs for this schedule
 		for (const [runId, entry] of this.activeJobs.entries()) {
-			if (entry.lockKey.includes(name)) {
+			if (entry.scheduleName === name) {
 				entry.abort?.abort();
 				if (entry.worker) {
 					await entry.worker.stop();
@@ -603,6 +612,7 @@ export abstract class BaseSchedulerEngine<
 			for (const record of due) {
 				const def = this.getDefinition(record.name);
 				if (!def) continue;
+				if (!this.canTickRecord(def, record)) continue;
 
 				// ── Disabled behavior enforcement ──
 				if (record.paused) {
@@ -696,6 +706,16 @@ export abstract class BaseSchedulerEngine<
 					nextRun = new Date(nextRun.getTime() + jitter);
 				}
 				if (!nextRun) {
+					if (this.shouldFireWithoutNextRun(def, record)) {
+						await this.di.storage.save(this.storageNamespace, def.name, {
+							...record,
+							nextRunAt: null,
+							lastRunAt: now,
+							type: this.moduleType,
+						});
+						void this.fire(def, now);
+						continue;
+					}
 					this.logger.error(
 						"Cannot compute next run — suspending to prevent runaway loop",
 						{ name: def.name },
@@ -895,7 +915,7 @@ export abstract class BaseSchedulerEngine<
 		if (!acquired) return;
 
 		const abort = new AbortController();
-		const entry: ActiveJobEntry = { runId, lockKey, worker, abort };
+		const entry: ActiveJobEntry = { runId, lockKey, scheduleName: def.name, worker, abort };
 		this.activeJobs.set(runId, entry);
 
 		// Persist initial running job state

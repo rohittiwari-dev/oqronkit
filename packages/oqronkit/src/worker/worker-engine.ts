@@ -416,19 +416,18 @@ export class WorkerEngine implements IOqronModule {
 
 	private async poll(w: WorkerConfig): Promise<void> {
 		if (!this.running || !this.enabled) return;
-		if (this.pausedTopics.has(w.topic)) return;
+		if (this.pausedTopics.has(w.topic)) {
+			if (w.disabledBehavior === "skip") {
+				await this.flushTopic(w.topic);
+			}
+			return;
+		}
 		if (this.isPolling.has(w.topic)) return;
 		// Circuit breaker: skip polling if event loop is stalled
 		if (this.lagMonitor?.isCircuitTripped) return;
 
 		this.isPolling.add(w.topic);
 		try {
-			const isSkipLocal = w.disabledBehavior === "skip";
-			if (isSkipLocal) {
-				await this.flushTopic(w.topic);
-				return;
-			}
-
 			const concurrency =
 				w.concurrency ?? this.workerModuleConfig.concurrency ?? 5;
 			const currentActive = this.activeJobsByTopic.get(w.topic)?.size ?? 0;
@@ -594,7 +593,7 @@ export class WorkerEngine implements IOqronModule {
 		);
 		if (!w) return; // We don't have a handler registered for this worker topic
 
-		if (w.disabledBehavior === "skip") {
+		if (this.pausedTopics.has(w.topic) && w.disabledBehavior === "skip") {
 			return;
 		}
 

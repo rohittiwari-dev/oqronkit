@@ -9,6 +9,12 @@ import type {
 	WorkerModuleDef,
 } from "../../modules.js";
 
+const positiveInt = z.number().int().positive();
+const nonNegativeInt = z.number().int().nonnegative();
+const postgresIdentifier = z
+	.string()
+	.regex(/^[A-Za-z_][A-Za-z0-9_]*$/, "Must be a safe PostgreSQL identifier");
+
 // ── Resolved Module Config Defaults ─────────────────────────────────────────
 
 const DEFAULT_CRON: Omit<
@@ -262,8 +268,8 @@ export const OqronConfigSchema = z.object({
 	postgres: z
 		.object({
 			connectionString: z.string(),
-			tablePrefix: z.string().default("oqron"),
-			poolSize: z.number().default(10),
+			tablePrefix: postgresIdentifier.default("oqron"),
+			poolSize: positiveInt.default(10),
 		})
 		.optional(),
 
@@ -315,12 +321,12 @@ export const OqronConfigSchema = z.object({
 
 	observability: z
 		.object({
-			maxJobLogs: z.number().default(200),
-			maxTimelineEntries: z.number().default(20),
+			maxJobLogs: nonNegativeInt.default(200),
+			maxTimelineEntries: nonNegativeInt.default(20),
 			trackMemory: z.boolean().default(true),
 			logCollector: z.boolean().default(true),
-			logCollectorMaxGlobal: z.number().default(500),
-			logCollectorMaxPerCategory: z.number().default(200),
+			logCollectorMaxGlobal: nonNegativeInt.default(500),
+			logCollectorMaxPerCategory: nonNegativeInt.default(200),
 		})
 		.default({}),
 
@@ -348,8 +354,8 @@ export const OqronConfigSchema = z.object({
 	shutdown: z
 		.object({
 			enabled: z.boolean().default(true),
-			timeout: z.number().default(30000),
-			signals: z.array(z.string()).default(["SIGINT", "SIGTERM"]),
+			timeout: positiveInt.default(30000),
+			signals: z.array(z.string().min(1)).default(["SIGINT", "SIGTERM"]),
 		})
 		.default({}),
 });

@@ -86,6 +86,23 @@ describe("Webhook Factory (define-webhook)", () => {
       );
     });
 
+    it("does not persist webhook signing secrets into job payloads", async () => {
+      const dispatcher = webhook<any>({
+        name: "signed-dispatcher",
+        security: { signingSecret: "super-secret" },
+        endpoints: [
+          { name: "ep1", url: "http://ep1.com", events: ["user.*"] },
+        ],
+      });
+
+      const jobs = await dispatcher.fire("user.created", { id: 1 });
+
+      expect(jobs[0].data.security).toBeUndefined();
+      const savedJob = mockDi.storage.save.mock.calls[0][2];
+      expect(savedJob.data.security).toBeUndefined();
+      expect(JSON.stringify(savedJob)).not.toContain("super-secret");
+    });
+
     it("should fire to multiple matching endpoints", async () => {
       const config: WebhookConfig = {
         name: "multi-match",

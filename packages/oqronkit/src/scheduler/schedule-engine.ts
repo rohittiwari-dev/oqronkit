@@ -461,6 +461,15 @@ export class ScheduleEngine extends BaseSchedulerEngine<ScheduleDefinition> {
     return true;
   }
 
+  protected canTickRecord(def: ScheduleDefinition, record: any): boolean {
+    if (!this.shardedLeader) return true;
+    return this.shardedLeader.isLeader && this.shardedLeader.ownsJob(record.name ?? def.name);
+  }
+
+  protected shouldFireWithoutNextRun(def: ScheduleDefinition, _record: any): boolean {
+    return !!def.runAt;
+  }
+
   protected createExecutionContext(opts: {
     def: ScheduleDefinition;
     runId: string;

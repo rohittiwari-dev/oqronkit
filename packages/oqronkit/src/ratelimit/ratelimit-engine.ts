@@ -126,6 +126,7 @@ export class RateLimitEngine<TContext = any> implements IRateLimiter<TContext> {
   private readonly dryRun: boolean;
 
   constructor(config: RateLimitConfig<TContext>) {
+    this.validateConfig(config);
     this.name = config.name;
     this.config = config;
     this.jitterFraction = config.jitter ?? 0.1;
@@ -163,6 +164,77 @@ export class RateLimitEngine<TContext = any> implements IRateLimiter<TContext> {
       );
     }
     return container.storage;
+  }
+
+  private validateConfig(config: RateLimitConfig<TContext>): void {
+    if (!config.name) {
+      throw new Error("[OqronKit:RateLimit] Limiter name is required.");
+    }
+    if (!Array.isArray(config.tiers) || config.tiers.length === 0) {
+      throw new Error(
+        `[OqronKit:RateLimit] Limiter "${config.name}" must define at least one tier.`,
+      );
+    }
+    if (
+      config.jitter !== undefined &&
+      (!Number.isFinite(config.jitter) || config.jitter < 0 || config.jitter > 1)
+    ) {
+      throw new Error(
+        `[OqronKit:RateLimit] Invalid jitter "${config.jitter}". Jitter must be between 0 and 1.`,
+      );
+    }
+    if (config.algorithm === "token-bucket") {
+      if (
+        config.refillRate !== undefined &&
+        (!Number.isFinite(config.refillRate) || config.refillRate <= 0)
+      ) {
+        throw new Error("[OqronKit:RateLimit] refillRate must be greater than zero.");
+      }
+      if (
+        config.refillIntervalMs !== undefined &&
+        (!Number.isFinite(config.refillIntervalMs) || config.refillIntervalMs <= 0)
+      ) {
+        throw new Error(
+          "[OqronKit:RateLimit] refillIntervalMs must be greater than zero.",
+        );
+      }
+    }
+    for (const tier of config.tiers) {
+      if (!tier.name) {
+        throw new Error(`[OqronKit:RateLimit] Tier name is required.`);
+      }
+      if (!Number.isFinite(tier.max) || !Number.isInteger(tier.max) || tier.max <= 0) {
+        throw new Error(
+          `[OqronKit:RateLimit] Tier "${tier.name}" max must be a positive integer.`,
+        );
+      }
+      parseWindow(tier.window);
+    }
+  }
+
+  private async withWriteLock<T>(fn: () => Promise<T>): Promise<T> {
+    const container = OqronContainer.tryGet();
+    if (!container) return fn();
+
+    const ownerId = `ratelimit-${this.name}-${randomUUID()}`;
+    const lockKey = `ratelimit:${this.name}:write`;
+    const ttlMs = 5_000;
+    const deadline = Date.now() + ttlMs;
+
+    while (!(await container.lock.acquire(lockKey, ownerId, ttlMs))) {
+      if (Date.now() >= deadline) {
+        throw new Error(
+          `[OqronKit:RateLimit] Timed out acquiring write lock for limiter "${this.name}".`,
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+
+    try {
+      return await fn();
+    } finally {
+      await container.lock.release(lockKey, ownerId).catch(() => {});
+    }
   }
 
   private normalizeCost(cost: number, allowZero: boolean): number {
@@ -209,9 +281,9 @@ export class RateLimitEngine<TContext = any> implements IRateLimiter<TContext> {
       for (const depName of this.config.dependsOn) {
         const depLimiter = _getLimiter(depName);
         if (depLimiter) {
-          // Peek with cost=1 to see if upstream has capacity for one more request
+          // Peek with the same cost to ensure upstream capacity matches this request
           // without actually consuming any tokens.
-          const depResult = await depLimiter.peek(ctx, 1);
+          const depResult = await depLimiter.peek(ctx, cost);
           if (!depResult.allowed) {
             // Dependency limiter is blocked — propagate block
             const result: RateLimitResult = {
@@ -238,7 +310,9 @@ export class RateLimitEngine<TContext = any> implements IRateLimiter<TContext> {
     }
 
     try {
-      const result = await this._evaluate(ctx, cost, storage, false);
+      const result = await this.withWriteLock(() =>
+        this._evaluate(ctx, cost, storage, false),
+      );
       // Tag passthrough if instance was disabled with passthrough behavior
       if (isPassthrough) {
         (result as any).passthrough = true;

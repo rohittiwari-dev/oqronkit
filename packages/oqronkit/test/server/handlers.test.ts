@@ -109,6 +109,24 @@ describe("Server Handlers", () => {
       expect(body.ok).toBe(true);
       expect(body.stats.project).toBe("test");
     });
+
+    it("requires basic auth when ui.auth is configured", async () => {
+      configureHandlers(OqronRegistry.getInstance(), {
+        ...config,
+        ui: { auth: { username: "admin", password: "secret" } },
+      });
+
+      const unauthenticated = await dispatch(req("GET", "/admin/system"));
+      expect(unauthenticated.status).toBe(401);
+
+      const token = Buffer.from("admin:secret").toString("base64");
+      const authenticated = await dispatch(
+        req("GET", "/admin/system", {
+          headers: { authorization: `Basic ${token}` },
+        }),
+      );
+      expect(authenticated.status).toBe(200);
+    });
   });
 
   // ── Admin Queue ────────────────────────────────────────────────────────

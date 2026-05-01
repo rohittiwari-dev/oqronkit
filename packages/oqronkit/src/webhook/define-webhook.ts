@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { OqronContainer, OqronEventBus } from "../engine/index.js";
+import { OqronContainer, OqronEventBus, OqronRegistry } from "../engine/index.js";
 import type {
   OqronJob,
   OqronJobOptions,
@@ -13,7 +13,6 @@ import type {
   WebhookConfig,
   WebhookDeliveryPayload,
   WebhookEndpoint,
-  WebhookSecurity,
 } from "./types.js";
 
 async function resolveEndpoints(
@@ -21,14 +20,6 @@ async function resolveEndpoints(
 ): Promise<WebhookEndpoint[]> {
   if (Array.isArray(input)) return input;
   return await input();
-}
-
-async function resolveSecurity(
-  input?: WebhookConfig["security"],
-): Promise<WebhookSecurity | undefined> {
-  if (!input) return undefined;
-  if (typeof input === "function") return await input();
-  return input;
 }
 
 export function webhook<T = any>(
@@ -56,10 +47,6 @@ export function webhook<T = any>(
       ? await config.transform(data, endpoint)
       : undefined;
 
-    const security = await resolveSecurity(
-      endpoint.security || config.security,
-    );
-
     return {
       event,
       endpointName: endpoint.name,
@@ -70,7 +57,6 @@ export function webhook<T = any>(
       headers: { "Content-Type": "application/json", ...headersBase, ...headersEp },
       body: data,
       transformedBody,
-      security,
       idempotencyKey: `${config.name}:${endpoint.name}:${id}`,
       timestamp: Date.now(),
     };
@@ -106,6 +92,15 @@ export function webhook<T = any>(
     if (!isInstanceEnabled && behavior === "skip") {
       // Silently drop
       return { id: jobId, status: "completed" } as any;
+    }
+
+    if (opts?.jobId) {
+      const existing = await di.storage.get("jobs", jobId);
+      if (existing) {
+        throw new Error(
+          `[OqronKit] Webhook job id "${jobId}" already exists for dispatcher "${config.name}".`,
+        );
+      }
     }
 
     // Determine initial status based on opts and enabled state
@@ -387,22 +382,34 @@ export async function deleteWebhook(name: string): Promise<boolean> {
 /** Pause a webhook dispatcher — stops claiming new jobs */
 export async function pauseWebhook(name: string): Promise<void> {
   const di = OqronContainer.get();
+  const engine = OqronRegistry.getInstance().get("webhook") as any;
+  if (engine && typeof engine.pauseDispatcher === "function") {
+    await engine.pauseDispatcher(name);
+    return;
+  }
   const existing = await di.storage.get<any>("webhook_instances", name);
   await di.storage.save("webhook_instances", name, {
     ...(existing || {}),
     enabled: false,
   });
+  await di.broker.pause(name);
   OqronEventBus.emit("webhook:paused", name);
 }
 
 /** Resume a paused webhook dispatcher */
 export async function resumeWebhook(name: string): Promise<void> {
   const di = OqronContainer.get();
+  const engine = OqronRegistry.getInstance().get("webhook") as any;
+  if (engine && typeof engine.resumeDispatcher === "function") {
+    await engine.resumeDispatcher(name);
+    return;
+  }
   const existing = await di.storage.get<any>("webhook_instances", name);
   await di.storage.save("webhook_instances", name, {
     ...(existing || {}),
     enabled: true,
   });
+  await di.broker.resume(name);
   OqronEventBus.emit("webhook:resumed", name);
 }
 

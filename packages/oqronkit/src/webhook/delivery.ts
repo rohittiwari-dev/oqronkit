@@ -18,11 +18,17 @@ export async function deliverWebhook(
   const start = performance.now();
 
   try {
-    const response = await fetch(url, {
+    const requestInit: RequestInit = {
       method,
       headers,
-      body: bodyStr,
       signal: controller.signal,
+    };
+    if (method.toUpperCase() !== "GET" && method.toUpperCase() !== "HEAD") {
+      requestInit.body = bodyStr;
+    }
+
+    const response = await fetch(url, {
+      ...requestInit,
     });
 
     const durationMs = Math.round(performance.now() - start);

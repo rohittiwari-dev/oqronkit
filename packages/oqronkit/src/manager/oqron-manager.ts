@@ -485,7 +485,7 @@ export class OqronManager {
     const job = await Storage.get<OqronJob>("jobs", jobId);
 
     // If the job is actively running, try to abort it via the engine
-    if (job && job.status === "active") {
+    if (job && (job.status === "active" || job.status === "running")) {
       const registry = OqronRegistry.getInstance();
       for (const mod of registry.getAll()) {
         if (mod.cancelActiveJob) {

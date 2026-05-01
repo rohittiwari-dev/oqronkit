@@ -136,7 +136,7 @@ export class TelemetryManager {
     lines.push("# TYPE oqronkit_jobs_started_total counter");
     for (const [schedule, count] of this.jobsStartedTotal) {
       lines.push(
-        `oqronkit_jobs_started_total{schedule="${schedule}"} ${count}`,
+        `oqronkit_jobs_started_total{schedule="${this.escapeLabel(schedule)}"} ${count}`,
       );
     }
 
@@ -147,7 +147,7 @@ export class TelemetryManager {
     lines.push("# TYPE oqronkit_jobs_completed_total counter");
     for (const [schedule, count] of this.jobsCompletedTotal) {
       lines.push(
-        `oqronkit_jobs_completed_total{schedule="${schedule}"} ${count}`,
+        `oqronkit_jobs_completed_total{schedule="${this.escapeLabel(schedule)}"} ${count}`,
       );
     }
 
@@ -157,7 +157,9 @@ export class TelemetryManager {
     );
     lines.push("# TYPE oqronkit_jobs_failed_total counter");
     for (const [schedule, count] of this.jobsFailedTotal) {
-      lines.push(`oqronkit_jobs_failed_total{schedule="${schedule}"} ${count}`);
+      lines.push(
+        `oqronkit_jobs_failed_total{schedule="${this.escapeLabel(schedule)}"} ${count}`,
+      );
     }
 
     lines.push("");
@@ -165,7 +167,7 @@ export class TelemetryManager {
     lines.push("# TYPE oqronkit_jobs_active gauge");
     for (const [schedule, count] of this.jobsActiveGauge) {
       if (count > 0) {
-        lines.push(`oqronkit_jobs_active{schedule="${schedule}"} ${count}`);
+        lines.push(`oqronkit_jobs_active{schedule="${this.escapeLabel(schedule)}"} ${count}`);
       }
     }
 
@@ -182,6 +184,7 @@ export class TelemetryManager {
       lines.push("# TYPE oqronkit_job_duration_ms summary");
 
       for (const sched of schedules) {
+        const scheduleLabel = this.escapeLabel(sched);
         const durations = recentDurations
           .filter((d) => d.schedule === sched)
           .map((d) => d.duration)
@@ -194,17 +197,17 @@ export class TelemetryManager {
         const p99 = durations[Math.floor(count * 0.99)] ?? 0;
 
         lines.push(
-          `oqronkit_job_duration_ms{schedule="${sched}",quantile="0.5"} ${p50}`,
+          `oqronkit_job_duration_ms{schedule="${scheduleLabel}",quantile="0.5"} ${p50}`,
         );
         lines.push(
-          `oqronkit_job_duration_ms{schedule="${sched}",quantile="0.95"} ${p95}`,
+          `oqronkit_job_duration_ms{schedule="${scheduleLabel}",quantile="0.95"} ${p95}`,
         );
         lines.push(
-          `oqronkit_job_duration_ms{schedule="${sched}",quantile="0.99"} ${p99}`,
+          `oqronkit_job_duration_ms{schedule="${scheduleLabel}",quantile="0.99"} ${p99}`,
         );
-        lines.push(`oqronkit_job_duration_ms_sum{schedule="${sched}"} ${sum}`);
+        lines.push(`oqronkit_job_duration_ms_sum{schedule="${scheduleLabel}"} ${sum}`);
         lines.push(
-          `oqronkit_job_duration_ms_count{schedule="${sched}"} ${count}`,
+          `oqronkit_job_duration_ms_count{schedule="${scheduleLabel}"} ${count}`,
         );
       }
     }
@@ -222,5 +225,9 @@ export class TelemetryManager {
   private decrement(map: Map<string, number>, key: string): void {
     const val = map.get(key) ?? 0;
     map.set(key, Math.max(0, val - 1));
+  }
+
+  private escapeLabel(value: string): string {
+    return value.replace(/\\/g, "\\\\").replace(/\n/g, "\\n").replace(/"/g, '\\"');
   }
 }

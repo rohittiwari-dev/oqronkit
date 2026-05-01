@@ -164,7 +164,7 @@ describe("WebhookEngine", () => {
 
     const config = {
       name: "test-dispatcher",
-      endpoints: [],
+      endpoints: [{ name: "ep1", url: "http://example.com/webhook", events: ["*"] }],
       hooks: { onSuccess: onSuccessHook },
     };
 
@@ -197,7 +197,7 @@ describe("WebhookEngine", () => {
 
     const config = {
       name: "test-dispatcher",
-      endpoints: [],
+      endpoints: [{ name: "ep1", url: "http://example.com/webhook", events: ["*"] }],
       retries: { max: 3 },
       hooks: { onFail: onFailHook },
     };
@@ -235,7 +235,7 @@ describe("WebhookEngine", () => {
 
     const config = {
       name: "test-dispatcher",
-      endpoints: [],
+      endpoints: [{ name: "ep1", url: "http://example.com/webhook", events: ["*"] }],
       retries: { max: 3, strategy: "fixed", baseDelay: 5000 },
     };
 
@@ -272,7 +272,7 @@ describe("WebhookEngine", () => {
 
     const config = {
       name: "test-dispatcher",
-      endpoints: [],
+      endpoints: [{ name: "ep1", url: "http://example.com/webhook", events: ["*"] }],
       retries: { max: 3 },
     };
 
@@ -356,21 +356,26 @@ describe("WebhookEngine", () => {
       .spyOn(hmac, "signWebhookPayload")
       .mockResolvedValue("t=123,v1=abc123");
 
-    const job = createMockJob({
-      data: {
-        ...createMockJob().data,
-        security: {
-          signingSecret: "my-secret",
-          signingAlgorithm: "sha256",
-          signingHeader: "X-Sig",
-          timestampHeader: "X-TS",
-          includeTimestamp: true,
-        },
-      },
-    });
+    const job = createMockJob();
     mockDi.storage.get.mockResolvedValueOnce(job);
 
-    const config = { name: "test-dispatcher", endpoints: [] };
+    const config = {
+      name: "test-dispatcher",
+      endpoints: [
+        {
+          name: "ep1",
+          url: "http://example.com/webhook",
+          events: ["*"],
+          security: {
+            signingSecret: "my-secret",
+            signingAlgorithm: "sha256",
+            signingHeader: "X-Sig",
+            timestampHeader: "X-TS",
+            includeTimestamp: true,
+          },
+        },
+      ],
+    };
     const engine = createEngine();
     await engine["processJob"](config as any, "job-1");
 
@@ -405,7 +410,7 @@ describe("WebhookEngine", () => {
 
     const config = {
       name: "test-dispatcher",
-      endpoints: [],
+      endpoints: [{ name: "ep1", url: "http://example.com/webhook", events: ["*"] }],
       retries: { max: 3 },
       deadLetter: { enabled: true, onDead },
     };

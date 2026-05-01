@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { OqronContainer } from "../engine/index.js";
+import { OqronContainer, OqronRegistry } from "../engine/index.js";
 import { OqronEventBus } from "../engine/events/event-bus.js";
 import type { OqronJob } from "../engine/types/job.types.js";
 import { DependencyResolver } from "../engine/utils/dependency-resolver.js";
@@ -44,6 +44,31 @@ export function queue<T = any, R = any>(
 ): IQueue<T, R> | IPublisherQueue<T> {
   registerQueue(config);
 
+  function getLiveQueueEngine(): any | null {
+    return OqronRegistry.getInstance().get("queue") ?? null;
+  }
+
+  async function releaseHeldJobs(di: OqronContainer): Promise<void> {
+    while (true) {
+      const batch = await di.storage.list<OqronJob>(
+        "jobs",
+        {
+          queueName: config.name,
+          status: "paused",
+          pausedReason: "disabled-hold",
+        },
+        { limit: 100 },
+      );
+      if (batch.length === 0) break;
+      for (const held of batch) {
+        held.status = "waiting";
+        held.pausedReason = undefined;
+        await di.storage.save("jobs", held.id, held);
+        await di.broker.publish(config.name, held.id, undefined, held.opts?.priority);
+      }
+    }
+  }
+
   /** Shared add logic */
   async function addOne(data: T, opts?: any): Promise<OqronJob<T, R>> {
     const di = OqronContainer.get();
@@ -72,6 +97,15 @@ export function queue<T = any, R = any>(
     if (!isInstanceEnabled && behavior === "skip") {
       // Silently drop
       return { id: jobId, status: "completed" } as any;
+    }
+
+    if (opts?.jobId) {
+      const existing = await di.storage.get("jobs", jobId);
+      if (existing) {
+        throw new Error(
+          `[OqronKit] Job id "${jobId}" already exists for queue "${config.name}".`,
+        );
+      }
     }
 
     const job: OqronJob = {
@@ -199,35 +233,27 @@ export function queue<T = any, R = any>(
 
     pause: async () => {
       const di = OqronContainer.get();
-      await di.storage.save("queue_instances", config.name, { enabled: false });
-      OqronEventBus.emit("queue:paused", config.name);
+      const engine = getLiveQueueEngine();
+      if (engine && typeof engine.pauseQueue === "function") {
+        await engine.pauseQueue(config.name);
+      } else {
+        await di.storage.save("queue_instances", config.name, { enabled: false });
+        OqronEventBus.emit("queue:paused", config.name);
+      }
+      await di.broker.pause(config.name);
     },
 
     resume: async () => {
       const di = OqronContainer.get();
-      await di.storage.save("queue_instances", config.name, { enabled: true });
-
-      // Release held jobs to broker in batches to avoid memory pressure (DQ1)
-      while (true) {
-        const batch = await di.storage.list<OqronJob>(
-          "jobs",
-          {
-            queueName: config.name,
-            status: "paused",
-            pausedReason: "disabled-hold",
-          },
-          { limit: 100 },
-        );
-        if (batch.length === 0) break;
-        for (const held of batch) {
-          held.status = "waiting";
-          held.pausedReason = undefined;
-          await di.storage.save("jobs", held.id, held);
-          await di.broker.publish(config.name, held.id);
-        }
+      const engine = getLiveQueueEngine();
+      if (engine && typeof engine.resumeQueue === "function") {
+        await engine.resumeQueue(config.name);
+      } else {
+        await di.storage.save("queue_instances", config.name, { enabled: true });
+        OqronEventBus.emit("queue:resumed", config.name);
       }
-
-      OqronEventBus.emit("queue:resumed", config.name);
+      await di.broker.resume(config.name);
+      await releaseHeldJobs(di);
     },
 
     isPaused: async () => {
@@ -242,7 +268,13 @@ export function queue<T = any, R = any>(
     drain: async () => {
       const di = OqronContainer.get();
       // 1. Pause to stop new claims
-      await di.storage.save("queue_instances", config.name, { enabled: false });
+      const engine = getLiveQueueEngine();
+      if (engine && typeof engine.pauseQueue === "function") {
+        await engine.pauseQueue(config.name);
+      } else {
+        await di.storage.save("queue_instances", config.name, { enabled: false });
+      }
+      await di.broker.pause(config.name);
 
       // 2. Poll until no active jobs remain (or timeout after 30s)
       const drainTimeout = 30_000;

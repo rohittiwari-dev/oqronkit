@@ -152,6 +152,47 @@ describe("ScheduleEngine", () => {
       expect(fired).toBe(true);
     });
 
+    it("fires due one-shot runAt schedules once and clears nextRunAt", async () => {
+      const past = new Date(Date.now() - 1000);
+
+      await storage.save("schedule_schedules", "one-shot", {
+        name: "one-shot",
+        nextRunAt: past,
+      });
+
+      let fired = false;
+      const module = new ScheduleEngine(
+        [
+          {
+            name: "one-shot",
+            runAt: past,
+            handler: async () => {
+              fired = true;
+            },
+          },
+        ],
+        logger,
+        "test",
+        "default",
+        {},
+        container,
+      );
+      (module as any).leader = { isLeader: true };
+      (module as any)._hasRunLeaderInit = true;
+
+      await (module as any).tick();
+
+      const saved = await storage.get<any>("schedule_schedules", "one-shot");
+      expect(saved.nextRunAt).toBeNull();
+
+      const activeJobs = Array.from(module["activeJobs"].values());
+      for (const job of activeJobs) {
+        if (job.promise) await job.promise;
+      }
+
+      expect(fired).toBe(true);
+    });
+
     it("handles disabled hold behavior on tick", async () => {
       const now = Date.now();
       const past = new Date(now - 1000);

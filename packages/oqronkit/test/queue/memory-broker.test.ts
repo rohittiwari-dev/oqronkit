@@ -40,5 +40,22 @@ describe("MemoryBroker Engine", () => {
 
       await expect(broker.extendLock("j1", "worker-2", 60000)).rejects.toThrow();
     });
+
+    it("acks only the matching broker when job ids collide across brokers", async () => {
+      await broker.publish("q1", "same-id");
+      await broker.publish("q2", "same-id");
+
+      expect(await broker.claim("q1", "worker-1", 1, 30000)).toEqual(["same-id"]);
+      expect(await broker.claim("q2", "worker-2", 1, 30000)).toEqual(["same-id"]);
+
+      await broker.ack("q1", "same-id");
+
+      await expect(
+        broker.extendLock("same-id", "worker-1", 30000),
+      ).rejects.toThrow();
+      await expect(
+        broker.extendLock("same-id", "worker-2", 30000),
+      ).resolves.not.toThrow();
+    });
   });
 });

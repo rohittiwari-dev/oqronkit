@@ -28,5 +28,11 @@ export function parseWindow(window: string): number {
       `[OqronKit:RateLimit] Invalid window format: "${window}". Use: 30s, 1m, 1h, 1d`,
     );
   }
-  return parseInt(match[1], 10) * UNITS[match[2]];
+  const amount = parseInt(match[1], 10);
+  if (amount <= 0) {
+    throw new Error(
+      `[OqronKit:RateLimit] Invalid window duration: "${window}". Duration must be greater than zero.`,
+    );
+  }
+  return amount * UNITS[match[2]];
 }

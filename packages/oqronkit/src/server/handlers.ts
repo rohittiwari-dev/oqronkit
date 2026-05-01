@@ -1,3 +1,4 @@
+import { timingSafeEqual } from "node:crypto";
 import { OqronEventBus, type OqronJob } from "../engine/index.js";
 import type { OqronRegistry } from "../engine/registry.js";
 import type { OqronConfig } from "../engine/types/config.types.js";
@@ -8,11 +9,13 @@ export type MonitorRequest = {
   path: string;
   query: Record<string, string>;
   params: Record<string, string>;
+  headers?: Record<string, string | string[] | undefined>;
   body?: unknown;
 };
 
 export type MonitorResponse = {
   status: number;
+  headers?: Record<string, string>;
   body: unknown;
 };
 
@@ -52,6 +55,7 @@ export function configureHandlers(
 ): void {
   _registry = registry;
   if (config) _config = config;
+  _manager = null;
 }
 
 // ── Core Handlers ────────────────────────────────────────────────────────────
@@ -124,6 +128,60 @@ function getManager(): OqronManager | null {
     _manager = OqronManager.from(_config);
   }
   return _manager;
+}
+
+function firstHeader(
+  headers: MonitorRequest["headers"] | undefined,
+  name: string,
+): string | undefined {
+  if (!headers) return undefined;
+  const target = name.toLowerCase();
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() !== target) continue;
+    if (Array.isArray(value)) return value[0];
+    return value;
+  }
+  return undefined;
+}
+
+function constantTimeEqual(a: string, b: string): boolean {
+  const ab = Buffer.from(a);
+  const bb = Buffer.from(b);
+  if (ab.length !== bb.length) return false;
+  return timingSafeEqual(ab, bb);
+}
+
+function isAuthorized(req: MonitorRequest): boolean {
+  const auth = _config?.ui?.auth;
+  if (!auth?.username && !auth?.password) return true;
+
+  const expectedUser = auth.username ?? "";
+  const expectedPass = auth.password ?? "";
+  const header = firstHeader(req.headers, "authorization");
+  if (!header?.startsWith("Basic ")) return false;
+
+  let decoded = "";
+  try {
+    decoded = Buffer.from(header.slice("Basic ".length), "base64").toString(
+      "utf8",
+    );
+  } catch {
+    return false;
+  }
+
+  const separator = decoded.indexOf(":");
+  if (separator === -1) return false;
+  const user = decoded.slice(0, separator);
+  const pass = decoded.slice(separator + 1);
+  return constantTimeEqual(user, expectedUser) && constantTimeEqual(pass, expectedPass);
+}
+
+function unauthorized(): MonitorResponse {
+  return {
+    status: 401,
+    headers: { "WWW-Authenticate": 'Basic realm="OqronKit"' },
+    body: { ok: false, error: "Unauthorized" },
+  };
 }
 
 export async function handleAdminSystem(
@@ -511,6 +569,9 @@ export async function dispatch(req: MonitorRequest): Promise<MonitorResponse> {
 
   // Core routes
   if (method === "GET" && path === "/health") return handleHealth(req);
+
+  if (!isAuthorized(req)) return unauthorized();
+
   if (method === "GET" && path === "/events") return handleEvents(req);
   if (method === "POST" && path.startsWith("/jobs/")) {
     const id = path.split("/jobs/")[1];

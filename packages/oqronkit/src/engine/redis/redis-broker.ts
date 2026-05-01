@@ -9,7 +9,10 @@ local id = redis.call("lpop", KEYS[1])
 if id == false then return nil end
 local lockKey = ARGV[1] .. id
 local locked = redis.call("set", lockKey, ARGV[2], "PX", ARGV[3], "NX")
-if locked then return id end
+if locked then
+  redis.call("set", ARGV[4] .. id, ARGV[5], "PX", ARGV[3])
+  return id
+end
 redis.call("lpush", KEYS[1], id)
 return nil
 `;
@@ -22,7 +25,10 @@ local id = redis.call("rpop", KEYS[1])
 if id == false then return nil end
 local lockKey = ARGV[1] .. id
 local locked = redis.call("set", lockKey, ARGV[2], "PX", ARGV[3], "NX")
-if locked then return id end
+if locked then
+  redis.call("set", ARGV[4] .. id, ARGV[5], "PX", ARGV[3])
+  return id
+end
 redis.call("rpush", KEYS[1], id)
 return nil
 `;
@@ -37,7 +43,10 @@ local id = result[1]
 local score = result[2]
 local lockKey = ARGV[1] .. id
 local locked = redis.call("set", lockKey, ARGV[2], "PX", ARGV[3], "NX")
-if locked then return id end
+if locked then
+  redis.call("set", ARGV[4] .. id, ARGV[5], "PX", ARGV[3])
+  return id
+end
 redis.call("zadd", KEYS[1], score, id)
 return nil
 `;
@@ -75,12 +84,20 @@ export class RedisBroker implements IBrokerEngine {
     return `${this.keyPrefix}:broker:${brokerName}:delayed`;
   }
 
-  private getLockKey(id: string): string {
-    return `${this.keyPrefix}:lock:${id}`;
+  private getLockKey(brokerName: string, id: string): string {
+    return `${this.keyPrefix}:broker:${brokerName}:lock:${id}`;
   }
 
-  private getLockPrefix(): string {
-    return `${this.keyPrefix}:lock:`;
+  private getLockPrefix(brokerName: string): string {
+    return `${this.keyPrefix}:broker:${brokerName}:lock:`;
+  }
+
+  private getLockIndexKey(id: string): string {
+    return `${this.keyPrefix}:lock-index:${id}`;
+  }
+
+  private getLockIndexPrefix(): string {
+    return `${this.keyPrefix}:lock-index:`;
   }
 
   private getPausedKey(brokerName: string): string {
@@ -155,7 +172,8 @@ export class RedisBroker implements IBrokerEngine {
 
     // 3. Atomically claim items
     const claimedIds: string[] = [];
-    const lockPrefix = this.getLockPrefix();
+    const lockPrefix = this.getLockPrefix(brokerName);
+    const lockIndexPrefix = this.getLockIndexPrefix();
 
     for (let i = 0; i < limit; i++) {
       const id = await this.redis.eval(
@@ -165,6 +183,8 @@ export class RedisBroker implements IBrokerEngine {
         lockPrefix,
         consumerId,
         lockTtlMs,
+        lockIndexPrefix,
+        brokerName,
       );
       if (id === null || id === undefined) break;
       claimedIds.push(id as string);
@@ -178,7 +198,10 @@ export class RedisBroker implements IBrokerEngine {
     consumerId: string,
     lockTtlMs: number,
   ): Promise<void> {
-    const lockKey = this.getLockKey(id);
+    const brokerName = await this.redis.get(this.getLockIndexKey(id));
+    const lockKey = brokerName
+      ? this.getLockKey(brokerName, id)
+      : `${this.keyPrefix}:lock:${id}`;
 
     const result = await this.redis.eval(
       EXTEND_LOCK_LUA,
@@ -193,13 +216,18 @@ export class RedisBroker implements IBrokerEngine {
     }
   }
 
-  async ack(_brokerName: string, id: string): Promise<void> {
-    await this.redis.del(this.getLockKey(id));
+  async ack(brokerName: string, id: string): Promise<void> {
+    await this.redis
+      .multi()
+      .del(this.getLockKey(brokerName, id))
+      .del(this.getLockIndexKey(id))
+      .exec();
   }
 
   async nack(brokerName: string, id: string, delayMs?: number): Promise<void> {
     const pipeline = this.redis.multi();
-    pipeline.del(this.getLockKey(id));
+    pipeline.del(this.getLockKey(brokerName, id));
+    pipeline.del(this.getLockIndexKey(id));
 
     if (delayMs && delayMs > 0) {
       const zkey = this.getDelayedKey(brokerName);
@@ -273,7 +301,7 @@ export class RedisBroker implements IBrokerEngine {
     const id = result[1]; // BLPOP returns [key, value]
 
     // Atomically set the lock
-    const lockKey = this.getLockKey(id);
+    const lockKey = this.getLockKey(brokerName, id);
     const locked = await this.redis.set(lockKey, consumerId, "PX", lockTtlMs, "NX");
     if (locked !== "OK") {
       if (strategy === "lifo") {
@@ -283,6 +311,7 @@ export class RedisBroker implements IBrokerEngine {
       }
       return null;
     }
+    await this.redis.set(this.getLockIndexKey(id), brokerName, "PX", lockTtlMs);
 
     return id;
   }

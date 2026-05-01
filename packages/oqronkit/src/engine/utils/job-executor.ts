@@ -942,7 +942,7 @@ export async function executeBatch(
     await di.storage.save("jobs", job.id, job);
     await di.broker.ack(hc.name, job.id);
 
-    if (job.childrenIds?.length && finalStatus === "completed") {
+    if (job.childrenIds?.length) {
       await DependencyResolver.notifyChildren(di.storage, di.broker, job.id);
     }
 

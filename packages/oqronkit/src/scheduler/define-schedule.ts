@@ -147,7 +147,7 @@ export const schedule = <TPayload = unknown>(
       if (opts.recurring) dynamicDef.recurring = opts.recurring;
       if (opts.rrule) dynamicDef.rrule = opts.rrule;
       if (opts.every) dynamicDef.every = opts.every;
-      if (opts.payload) dynamicDef.payload = opts.payload;
+      if ("payload" in opts) dynamicDef.payload = opts.payload;
     }
 
     // SAFETY: Always isolate dynamic triggers from the base singleton.

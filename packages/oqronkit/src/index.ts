@@ -26,6 +26,14 @@ import { TelemetryManager } from "./telemetry/index.js";
 
 let _config: ValidatedConfig | null = null;
 let _logger: Logger | null = null;
+let _signalHandlers: Array<{ signal: string; handler: () => void }> = [];
+
+function removeSignalHandlers(): void {
+	for (const { signal, handler } of _signalHandlers) {
+		process.off(signal as NodeJS.Signals, handler);
+	}
+	_signalHandlers = [];
+}
 
 export type {
 	ClusteringConfig,
@@ -264,13 +272,16 @@ export const OqronKit = {
 
 		// --- Shutdown hooks ---
 		if (_config.shutdown.enabled) {
+			removeSignalHandlers();
 			for (const signal of _config.shutdown.signals) {
-				process.on(signal, () => {
+				const handler = () => {
 					_logger?.info(
 						`${signal} received — initiating graceful shutdown…`,
 					);
 					void this.stop().then(() => process.exit(0));
-				});
+				};
+				process.on(signal as NodeJS.Signals, handler);
+				_signalHandlers.push({ signal, handler });
 			}
 		}
 
@@ -402,14 +413,18 @@ export const OqronKit = {
 		);
 		try {
 			await Promise.race([stopPromise, timeoutPromise]);
+		} catch (err) {
+			log.error("Error during stop", { error: String(err) });
+		} finally {
 			TelemetryManager.getInstance().stop();
-			await stopEngine();
+			await stopEngine().catch((err) =>
+				log.error("Error stopping engine", { error: String(err) }),
+			);
 			OqronRegistry.getInstance()._reset();
+			removeSignalHandlers();
 			_config = null;
 			_logger = null;
 			log.info("OqronKit stopped.");
-		} catch (err) {
-			log.error("Error during stop", { error: String(err) });
 		}
 	},
 
@@ -419,24 +434,26 @@ export const OqronKit = {
 	},
 
 	async pause(scheduleId: string): Promise<void> {
-		const s = await Storage.get<{ paused?: boolean }>(
-			"schedules",
-			scheduleId,
-		);
-		if (s)
-			await Storage.save("schedules", scheduleId, { ...s, paused: true });
+		for (const ns of ["cron_schedules", "schedule_schedules"]) {
+			const s = await Storage.get<{ paused?: boolean }>(ns, scheduleId);
+			if (s) {
+				await Storage.save(ns, scheduleId, { ...s, paused: true });
+				return;
+			}
+		}
 	},
 
 	async resume(scheduleId: string): Promise<void> {
-		const s = await Storage.get<{ paused?: boolean }>(
-			"schedules",
-			scheduleId,
-		);
-		if (s)
-			await Storage.save("schedules", scheduleId, {
-				...s,
-				paused: false,
-			});
+		for (const ns of ["cron_schedules", "schedule_schedules"]) {
+			const s = await Storage.get<{ paused?: boolean }>(ns, scheduleId);
+			if (s) {
+				await Storage.save(ns, scheduleId, {
+					...s,
+					paused: false,
+				});
+				return;
+			}
+		}
 	},
 
 	/**

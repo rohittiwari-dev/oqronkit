@@ -82,4 +82,33 @@ describe("WorkerEngine — Disabled Behavior", () => {
 
     expect(processed).toBe(true);
   });
+
+  it("does not skip jobs just because enabled worker config uses disabledBehavior=skip", async () => {
+    let processed = false;
+
+    worker<{ x: number }>({
+      topic: "enabled-skip-policy-topic",
+      disabledBehavior: "skip",
+      handler: async () => {
+        processed = true;
+      },
+    });
+
+    const pub = queue<{ x: number }>({ name: "enabled-skip-policy-topic" });
+    const job = await pub.add({ x: 1 });
+
+    const engine = new WorkerEngine(
+      { project: "test", environment: "test" },
+      logger,
+      { module: "worker", heartbeatMs: 50 },
+    );
+    await engine.init();
+    await engine.start();
+    await new Promise((r) => setTimeout(r, 300));
+    await engine.stop();
+
+    const stored = await OqronContainer.get().storage.get<any>("jobs", job.id);
+    expect(processed).toBe(true);
+    expect(stored?.status).toBe("completed");
+  });
 });

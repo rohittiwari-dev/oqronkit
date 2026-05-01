@@ -1,4 +1,5 @@
 import type { BrokerStrategy, IBrokerEngine } from "../types/engine.js";
+import { assertValidIdentifier, quoteIdentifier } from "./identifiers.js";
 
 /**
  * PostgreSQL Broker using FOR UPDATE SKIP LOCKED for atomic job claiming.
@@ -18,10 +19,13 @@ import type { BrokerStrategy, IBrokerEngine } from "../types/engine.js";
 export class PostgresBroker implements IBrokerEngine {
   private pool: any;
   private tableName: string;
+  private claimIndexName: string;
   private initialized = false;
 
   constructor(connectionString: string, tablePrefix = "oqron", poolSize = 10) {
-    this.tableName = `${tablePrefix}_queue`;
+    const safePrefix = assertValidIdentifier(tablePrefix, "tablePrefix");
+    this.tableName = quoteIdentifier(`${safePrefix}_queue`, "broker table name");
+    this.claimIndexName = quoteIdentifier(`idx_${safePrefix}_queue_claim`, "broker index name");
     this._initPool(connectionString, poolSize);
   }
 
@@ -52,7 +56,7 @@ export class PostgresBroker implements IBrokerEngine {
 
     // Index for efficient claim queries
     await this.pool.query(`
-      CREATE INDEX IF NOT EXISTS idx_${this.tableName}_claim
+      CREATE INDEX IF NOT EXISTS ${this.claimIndexName}
       ON ${this.tableName} (broker_name, run_at)
       WHERE locked_by IS NULL
     `);
@@ -148,7 +152,12 @@ export class PostgresBroker implements IBrokerEngine {
     const result = await this.pool.query(
       `UPDATE ${this.tableName}
        SET locked_until = $1::timestamptz
-       WHERE id = $2 AND locked_by = $3`,
+       WHERE id = $2
+         AND locked_by = $3
+         AND (
+           SELECT COUNT(*) FROM ${this.tableName}
+           WHERE id = $2 AND locked_by = $3
+         ) = 1`,
       [lockUntil, id, consumerId],
     );
 

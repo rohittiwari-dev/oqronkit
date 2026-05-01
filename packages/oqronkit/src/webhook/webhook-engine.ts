@@ -28,6 +28,8 @@ import type {
   WebhookConfig,
   WebhookDeliveryPayload,
   WebhookEndpoint,
+  WebhookRetryConfig,
+  WebhookSecurity,
 } from "./types.js";
 
 export class WebhookEngine implements IOqronModule {
@@ -448,24 +450,42 @@ export class WebhookEngine implements IOqronModule {
     try {
       const payload = job.data;
       const bodyStr = JSON.stringify(payload.transformedBody ?? payload.body);
+      const endpoint = await this.resolveEndpointConfig(
+        dispatcher,
+        payload.endpointName,
+      );
+      if (!endpoint || endpoint.enabled === false) {
+        await this.handleHardFail(
+          dispatcher,
+          job,
+          new Error(
+            `Webhook endpoint "${payload.endpointName}" is disabled or no longer registered`,
+          ),
+        );
+        return;
+      }
+      const retryConfig = this.resolveRetryConfig(dispatcher, endpoint);
 
       // Sign payload if security is configured
-      if (payload.security) {
+      const security = await this.resolveSecurity(
+        endpoint.security ?? dispatcher.security ?? payload.security,
+      );
+      if (security) {
         const ts = payload.timestamp || startTs;
         const signature = await signWebhookPayload(
           bodyStr,
-          payload.security.signingSecret,
+          security.signingSecret,
           ts,
-          payload.security.signingAlgorithm,
-          payload.security.signFunction,
+          security.signingAlgorithm,
+          security.signFunction,
         );
 
-        const sigHeader = payload.security.signingHeader ?? "X-Oqron-Signature";
+        const sigHeader = security.signingHeader ?? "X-Oqron-Signature";
         payload.headers[sigHeader] = signature;
 
-        if (payload.security.includeTimestamp !== false) {
+        if (security.includeTimestamp !== false) {
           const tsHeader =
-            payload.security.timestampHeader ?? "X-Oqron-Timestamp";
+            security.timestampHeader ?? "X-Oqron-Timestamp";
           payload.headers[tsHeader] = ts.toString();
         }
       }
@@ -478,10 +498,6 @@ export class WebhookEngine implements IOqronModule {
       await updateProgress(30); // Payload signed
 
       const endpointKey = `${dispatcher.name}:${payload.endpointName}`;
-      const endpoint = await this.resolveEndpointConfig(
-        dispatcher,
-        payload.endpointName,
-      );
 
       // G8: Outbound rate limiting per endpoint
       const limiter = this.resolveOutboundLimiter(
@@ -502,9 +518,7 @@ export class WebhookEngine implements IOqronModule {
             level: "warn",
             msg: `Rate limited — re-queuing with ${delayMs}ms delay`,
           });
-          await this.di.storage.save("jobs", jobId, job);
-          await this.finishJobExecution(jobId);
-          await this.di.broker.nack(dispatcher.name, jobId, delayMs);
+          await this.delayJob(dispatcher, job, delayMs, "Outbound rate limit");
           return;
         }
       }
@@ -517,8 +531,7 @@ export class WebhookEngine implements IOqronModule {
         this.logger.warn(
           `Circuit OPEN for ${endpointKey} — skipping delivery, re-queuing`,
         );
-        await this.finishJobExecution(jobId);
-        await this.di.broker.nack(dispatcher.name, jobId, 15000);
+        await this.delayJob(dispatcher, job, 15000, "Circuit breaker open");
         return;
       }
 
@@ -559,7 +572,7 @@ export class WebhookEngine implements IOqronModule {
         await this.handleSuccess(dispatcher, job, result);
       } else {
         await this.circuitBreaker?.recordFailure(endpointKey);
-        const retryStatusCodes = dispatcher.retries?.retryOnStatus;
+        const retryStatusCodes = retryConfig?.retryOnStatus;
         if (shouldRetryDelivery(result.status, retryStatusCodes)) {
           throw Object.assign(
             new Error(
@@ -583,9 +596,38 @@ export class WebhookEngine implements IOqronModule {
       if (abortController.signal.aborted) {
         await this.handleHardFail(dispatcher, job, new Error("Cancelled"));
       } else {
-        await this.handleRetry(dispatcher, job, e);
+        const endpoint = await this.resolveEndpointConfig(
+          dispatcher,
+          job.data?.endpointName,
+        );
+        await this.handleRetry(
+          dispatcher,
+          job,
+          e,
+          this.resolveRetryConfig(dispatcher, endpoint),
+        );
       }
     }
+  }
+
+  private async delayJob(
+    dispatcher: WebhookConfig,
+    job: OqronJob<WebhookDeliveryPayload>,
+    delayMs: number,
+    reason: string,
+  ): Promise<void> {
+    job.status = "delayed";
+    job.runAt = new Date(Date.now() + delayMs);
+    job.timeline ??= [];
+    job.timeline.push({
+      ts: new Date(),
+      from: "active",
+      to: "delayed",
+      reason: `${reason}; re-queuing with ${delayMs}ms delay`,
+    });
+    await this.di.storage.save("jobs", job.id, job);
+    await this.finishJobExecution(job.id);
+    await this.di.broker.nack(dispatcher.name, job.id, delayMs);
   }
 
   private async handleSuccess(
@@ -634,6 +676,7 @@ export class WebhookEngine implements IOqronModule {
     dispatcher: WebhookConfig,
     job: OqronJob<WebhookDeliveryPayload>,
     error: Error,
+    retryConfig?: WebhookRetryConfig,
   ) {
     const errorMsg = error instanceof Error ? error.message : String(error);
     job.logs ??= [];
@@ -643,7 +686,7 @@ export class WebhookEngine implements IOqronModule {
       msg: `Execution attempt ${job.attemptMade} failed: ${errorMsg}`,
     });
 
-    const maxRetries = dispatcher.retries?.max ?? 0;
+    const maxRetries = retryConfig?.max ?? 0;
     const effectiveMaxRetries = job.opts?.attempts
       ? job.opts.attempts - 1
       : maxRetries;
@@ -652,21 +695,21 @@ export class WebhookEngine implements IOqronModule {
       await this.handleHardFail(dispatcher, job, error);
     } else {
       // Retry
-      const backoffOpts: BackoffOptions | undefined = dispatcher.retries
+      const backoffOpts: BackoffOptions | undefined = retryConfig
         ? {
-            type: dispatcher.retries.strategy ?? "fixed",
-            delay: dispatcher.retries.baseDelay ?? 5000,
+            type: retryConfig.strategy ?? "fixed",
+            delay: retryConfig.baseDelay ?? 5000,
           }
         : undefined;
       const computedBackoff = calculateBackoff(
         backoffOpts,
         job.attemptMade,
-        dispatcher.retries?.maxDelay,
+        retryConfig?.maxDelay,
       );
 
       // G6: Respect Retry-After header if present (capped at maxDelay)
       const retryAfterMs = (error as any)?.retryAfterMs as number | undefined;
-      const maxDelay = dispatcher.retries?.maxDelay ?? 300_000;
+      const maxDelay = retryConfig?.maxDelay ?? 300_000;
       const backoffMs = retryAfterMs
         ? Math.min(retryAfterMs, maxDelay)
         : computedBackoff;
@@ -853,6 +896,7 @@ export class WebhookEngine implements IOqronModule {
   async pauseDispatcher(name: string): Promise<void> {
     this.pausedDispatchers.add(name);
     await this.di.storage.save("webhook_instances", name, { enabled: false });
+    await this.di.broker.pause(name);
     OqronEventBus.emit("webhook:paused", name);
     this.logger.info(`Webhook dispatcher "${name}" paused`);
   }
@@ -861,6 +905,7 @@ export class WebhookEngine implements IOqronModule {
   async resumeDispatcher(name: string): Promise<void> {
     this.pausedDispatchers.delete(name);
     await this.di.storage.save("webhook_instances", name, { enabled: true });
+    await this.di.broker.resume(name);
     OqronEventBus.emit("webhook:resumed", name);
     this.logger.info(`Webhook dispatcher "${name}" resumed`);
   }
@@ -962,7 +1007,41 @@ export class WebhookEngine implements IOqronModule {
     const endpoints = Array.isArray(dispatcher.endpoints)
       ? dispatcher.endpoints
       : await dispatcher.endpoints();
-    return endpoints.find((endpoint) => endpoint.name === endpointName) ?? null;
+    const codeEndpoint =
+      endpoints.find((endpoint) => endpoint.name === endpointName) ?? null;
+    const dbEndpoint = await this.di.storage.get<any>(
+      "webhook_endpoints",
+      `${dispatcher.name}:${endpointName}`,
+    );
+
+    if (!dbEndpoint) return codeEndpoint;
+    if (codeEndpoint) {
+      return {
+        ...codeEndpoint,
+        ...dbEndpoint,
+        enabled: dbEndpoint.enabled ?? codeEndpoint.enabled,
+      };
+    }
+    if (dbEndpoint.url && dbEndpoint.events) {
+      return dbEndpoint as WebhookEndpoint;
+    }
+    return null;
+  }
+
+  private async resolveSecurity(
+    input?: WebhookConfig["security"] | WebhookEndpoint["security"] | WebhookSecurity,
+  ): Promise<WebhookSecurity | undefined> {
+    if (!input) return undefined;
+    if (typeof input === "function") return await input();
+    return input;
+  }
+
+  private resolveRetryConfig(
+    dispatcher: WebhookConfig,
+    endpoint: WebhookEndpoint | null,
+  ): WebhookRetryConfig | undefined {
+    if (!dispatcher.retries && !endpoint?.retries) return undefined;
+    return { ...(dispatcher.retries ?? {}), ...(endpoint?.retries ?? {}) };
   }
 
   private resolveOutboundLimiter(

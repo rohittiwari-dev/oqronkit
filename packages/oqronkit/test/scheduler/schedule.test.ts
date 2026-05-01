@@ -189,6 +189,20 @@ describe("Schedule — trigger()/schedule() with mock engine", () => {
     expect(arg.payload).toEqual({ key: "value" });
   });
 
+  it("schedule() preserves falsy payload overrides", async () => {
+    const s = schedule<boolean>({
+      name: "falsy-payload",
+      payload: true,
+      handler: async () => {},
+    });
+    _drainPendingSchedules();
+
+    await s.schedule({ every: { minutes: 1 }, payload: false });
+
+    const arg = mockEngine.registerDynamic.mock.calls[0][0];
+    expect(arg.payload).toBe(false);
+  });
+
   it("cancel() calls engine.cancel with definition name", async () => {
     const s = schedule({
       name: "cancel-sched",

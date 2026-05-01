@@ -398,6 +398,24 @@ export class QueueEngine implements IOqronModule {
 	async resumeQueue(name: string): Promise<void> {
 		this.pausedQueues.delete(name);
 		await this.di.storage.save("queue_instances", name, { enabled: true });
+		while (true) {
+			const batch = await this.di.storage.list<OqronJob>(
+				"jobs",
+				{
+					queueName: name,
+					status: "paused",
+					pausedReason: "disabled-hold",
+				},
+				{ limit: 100 },
+			);
+			if (batch.length === 0) break;
+			for (const held of batch) {
+				held.status = "waiting";
+				held.pausedReason = undefined;
+				await this.di.storage.save("jobs", held.id, held);
+				await this.di.broker.publish(name, held.id, undefined, held.opts?.priority);
+			}
+		}
 		OqronEventBus.emit("queue:resumed", name);
 		this.logger.info(`Queue "${name}" resumed`);
 	}
