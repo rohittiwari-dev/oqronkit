@@ -123,6 +123,20 @@ export {
 	type WebhookSecurity,
 	type WebhookSecurityInput,
 	webhook,
+	// Dynamic CRUD (B14)
+	createWebhook,
+	updateWebhook,
+	deleteWebhook,
+	pauseWebhook,
+	resumeWebhook,
+	// Signing utilities (B12/B13)
+	verifyWebhookSignature,
+	signWebhookPayload,
+	// Circuit breaker (G7)
+	createCircuitBreaker,
+	type ICircuitBreaker,
+	type CircuitBreakerConfig,
+	type CircuitState,
 } from "./webhook/index.js";
 
 export { rateLimit } from "./ratelimit/define-ratelimit.js";

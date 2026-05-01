@@ -109,12 +109,23 @@ const DEFAULT_WORKER: Omit<
 
 const DEFAULT_WEBHOOK: Omit<
 	Required<WebhookModuleDef>,
-	"disabledBehavior" | "maxHeldJobs" | "removeOnComplete" | "removeOnFail"
+	| "disabledBehavior"
+	| "maxHeldJobs"
+	| "removeOnComplete"
+	| "removeOnFail"
+	| "lagMonitor"
+	| "crossNodeStallScanner"
+	| "reconciliation"
+	| "trackProgress"
 > & {
 	disabledBehavior?: WebhookModuleDef["disabledBehavior"];
 	maxHeldJobs?: WebhookModuleDef["maxHeldJobs"];
 	removeOnComplete?: WebhookModuleDef["removeOnComplete"];
 	removeOnFail?: WebhookModuleDef["removeOnFail"];
+	lagMonitor?: WebhookModuleDef["lagMonitor"];
+	crossNodeStallScanner?: WebhookModuleDef["crossNodeStallScanner"];
+	reconciliation?: WebhookModuleDef["reconciliation"];
+	trackProgress?: WebhookModuleDef["trackProgress"];
 } = {
 	module: "webhook",
 	concurrency: 5,
@@ -130,6 +141,8 @@ const DEFAULT_WEBHOOK: Omit<
 	shutdownTimeout: 25000,
 	stalledInterval: 30000,
 	timeout: 30000,
+	strategy: "fifo",
+	deadLetter: { enabled: true },
 	removeOnComplete: false,
 	removeOnFail: false,
 };

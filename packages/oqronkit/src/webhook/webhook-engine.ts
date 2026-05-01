@@ -2,8 +2,12 @@ import { randomUUID } from "node:crypto";
 import type { IOqronModule, Logger } from "../engine/index.js";
 import { OqronContainer, OqronEventBus } from "../engine/index.js";
 import { HeartbeatWorker } from "../engine/lock/heartbeat-worker.js";
+import { CrossNodeStallScanner } from "../engine/lock/cross-node-stall-scanner.js";
 import { StallDetector } from "../engine/lock/stall-detector.js";
+import { LagMonitor } from "../engine/lag-monitor.js";
+import { ReconciliationEngine } from "../engine/utils/reconciliation-engine.js";
 import type { OqronConfig } from "../engine/types/config.types.js";
+import type { BrokerStrategy } from "../engine/types/engine.js";
 import type { OqronJob } from "../engine/types/job.types.js";
 import {
   type BackoffOptions,
@@ -11,21 +15,30 @@ import {
 } from "../engine/utils/backoffs.js";
 import { pruneAfterCompletion } from "../engine/utils/job-retention.js";
 import type { WebhookModuleDef } from "../modules.js";
+import { createCircuitBreaker, type ICircuitBreaker } from "./circuit-breaker.js";
 import { deliverWebhook, shouldRetryDelivery } from "./delivery.js";
 import { signWebhookPayload } from "./hmac.js";
-import { getRegisteredWebhooks } from "./registry.js";
+import { deregisterWebhook, getRegisteredWebhooks } from "./registry.js";
 import type { WebhookConfig, WebhookDeliveryPayload } from "./types.js";
 
 export class WebhookEngine implements IOqronModule {
   public readonly name = "webhook";
   public enabled = true;
   private running = false;
-  private workerIdStr = randomUUID();
+  private readonly workerIdStr = randomUUID();
   private activeJobs = new Map<string, Promise<void>>();
   private activeJobsByDispatcher = new Map<string, Set<string>>();
   private heartbeats = new Map<string, HeartbeatWorker>();
+  private abortControllers = new Map<string, AbortController>();
   private stallDetector: StallDetector | null = null;
   private consumersByQueue = new Map<string, () => Promise<void>>();
+  private isPolling = new Set<string>();
+  private pausedDispatchers = new Set<string>();
+  private dispatcherTimers = new Map<string, NodeJS.Timeout>();
+  private crossNodeScanner: CrossNodeStallScanner | null = null;
+  private lagMonitor: LagMonitor | null = null;
+  private reconciler: ReconciliationEngine | null = null;
+  private circuitBreaker: ICircuitBreaker | null = null;
 
   private timers: NodeJS.Timeout[] = [];
 
@@ -42,6 +55,43 @@ export class WebhookEngine implements IOqronModule {
 
   async init(): Promise<void> {
     const dispatchers = getRegisteredWebhooks();
+
+    // Version-based config migration (parity with queue-engine/worker-engine)
+    for (const d of dispatchers) {
+      const codeVersion = d.version ?? 0;
+      const existing = await this.di.storage.get<any>("webhook_instances", d.name);
+      const dbVersion = existing?.version ?? 0;
+
+      // Downgrade protection — don't overwrite newer DB state with older code
+      if (existing && codeVersion < dbVersion) {
+        this.logger.warn("Code version is older than DB — skipping overwrite", {
+          name: d.name, codeVersion, dbVersion,
+        });
+      } else if (existing && codeVersion > dbVersion) {
+        this.logger.info("Webhook config version upgraded", {
+          name: d.name, from: dbVersion, to: codeVersion,
+        });
+        await this.di.storage.save("webhook_instances", d.name, {
+          ...(existing || {}),
+          version: codeVersion,
+          enabled: existing.enabled ?? true,
+        });
+        OqronEventBus.emit("webhook:version-upgraded", d.name, dbVersion, codeVersion);
+      } else if (!existing) {
+        // First registration — seed the instance record
+        await this.di.storage.save("webhook_instances", d.name, {
+          version: codeVersion,
+          enabled: true,
+        });
+      }
+
+      // Load persisted pause state into memory
+      const instanceState = await this.di.storage.get<any>("webhook_instances", d.name);
+      if (instanceState && instanceState.enabled === false) {
+        this.pausedDispatchers.add(d.name);
+      }
+    }
+
     this.logger.info(
       `Initialized WebhookEngine covering ${dispatchers.length} dispatchers`,
     );
@@ -52,6 +102,20 @@ export class WebhookEngine implements IOqronModule {
     this.running = true;
 
     const dispatchers = getRegisteredWebhooks();
+
+    // G7: Initialize circuit breaker (memory default, shared if storage available)
+    const cbConfig = {
+      failureThreshold: 5,
+      resetTimeoutMs: 30_000,
+      halfOpenMaxAttempts: 1,
+    };
+    // Use shared storage if in distributed mode, else memory
+    const isDistributed = this.config.mode && this.config.mode !== "default";
+    this.circuitBreaker = createCircuitBreaker(
+      cbConfig,
+      isDistributed ? this.di.storage : undefined,
+    );
+
     for (const dispatcher of dispatchers) {
       if (!this.consumersByQueue.has(dispatcher.name)) {
         this.startPolling(dispatcher);
@@ -105,16 +169,67 @@ export class WebhookEngine implements IOqronModule {
               }
             })
             .finally(() => {
+              OqronEventBus.emit("job:stalled", dispatcherName, jobId);
               void this.di.broker.nack(dispatcherName, jobId);
             });
         }
       },
     );
+
+    // Start cross-node stall scanner (B2) — recovers orphaned jobs from crashed nodes
+    const scannerConfig = this.webhookConfig?.crossNodeStallScanner;
+    if (scannerConfig) {
+      const scannerOpts = typeof scannerConfig === "object" ? scannerConfig : {};
+      this.crossNodeScanner = new CrossNodeStallScanner(
+        this.di.storage, this.di.lock, this.logger,
+        {
+          intervalMs: scannerOpts.intervalMs ?? 60_000,
+          lockPrefix: "webhook",
+          maxStalledCount: scannerOpts.maxStalledCount ?? 3,
+        },
+      );
+      this.crossNodeScanner.start(async (job) => {
+        OqronEventBus.emit("job:stalled", job.queueName, job.id);
+        if (job.status !== "failed") {
+          await this.di.broker.nack(job.queueName, job.id);
+        }
+      });
+    }
+
+    // Start event-loop lag monitor (B3)
+    const lagConfig = this.webhookConfig?.lagMonitor;
+    if (lagConfig) {
+      this.lagMonitor = new LagMonitor(
+        this.logger,
+        lagConfig.maxLagMs ?? 500,
+        lagConfig.sampleIntervalMs ?? 50,
+      );
+      this.lagMonitor.start();
+    }
+
+    // Start storage-broker reconciliation engine (B4)
+    const reconConfig = this.webhookConfig?.reconciliation;
+    if (reconConfig) {
+      const reconOpts = typeof reconConfig === "object" ? reconConfig : {};
+      this.reconciler = new ReconciliationEngine(
+        this.di.storage, this.di.broker, this.di.lock, this.logger,
+        {
+          intervalMs: reconOpts.intervalMs ?? 120_000,
+          waitingThresholdMs: reconOpts.waitingThresholdMs ?? 300_000,
+          delayedGraceMs: reconOpts.delayedGraceMs ?? 120_000,
+          batchSize: reconOpts.batchSize ?? 500,
+        },
+      );
+      this.reconciler.start();
+    }
   }
 
   private startPolling(dispatcher: WebhookConfig) {
     const queueName = dispatcher.name;
-    const heartbeatMs = this.webhookConfig?.heartbeatMs ?? 5000;
+    const basePollMs = this.webhookConfig?.heartbeatMs ?? 5000;
+    // G3: Add random jitter to prevent thundering herd on multi-node startup
+    const jitter = Math.round(Math.random() * 500);
+    const pollIntervalMs = basePollMs + jitter;
 
     // Create an active set for this dispatcher
     if (!this.activeJobsByDispatcher.has(queueName)) {
@@ -125,13 +240,15 @@ export class WebhookEngine implements IOqronModule {
       this.poll(dispatcher).catch((e) =>
         this.logger.error(`Webhook poller crashed for ${queueName}`, e),
       );
-    }, heartbeatMs);
+    }, pollIntervalMs);
     t.unref();
     this.timers.push(t);
+    this.dispatcherTimers.set(queueName, t);
 
     // Register the stop function
     this.consumersByQueue.set(queueName, async () => {
       clearInterval(t);
+      this.dispatcherTimers.delete(queueName);
     });
 
     // Initial poll
@@ -140,11 +257,21 @@ export class WebhookEngine implements IOqronModule {
 
   private async poll(dispatcher: WebhookConfig): Promise<void> {
     if (!this.running || !this.enabled) return;
+    // B7: Skip polling for paused dispatchers
+    if (this.pausedDispatchers.has(dispatcher.name)) return;
+    // B6: Reentrant guard — prevent concurrent poll for same dispatcher
+    if (this.isPolling.has(dispatcher.name)) return;
+    // B3: Circuit breaker — skip polling if event loop is stalled
+    if (this.lagMonitor?.isCircuitTripped) return;
 
+    this.isPolling.add(dispatcher.name);
+    try {
     const queueName = dispatcher.name;
     const concurrency =
       dispatcher.concurrency ?? this.webhookConfig?.concurrency ?? 5;
     const lockTtlMs = this.webhookConfig?.lockTtlMs ?? 30000;
+    const strategy: BrokerStrategy =
+      this.webhookConfig?.strategy ?? "fifo";
 
     const activeSet = this.activeJobsByDispatcher.get(queueName);
     const activeCount = activeSet?.size ?? 0;
@@ -158,7 +285,7 @@ export class WebhookEngine implements IOqronModule {
       this.workerIdStr,
       freeSlots,
       lockTtlMs,
-      "fifo",
+      strategy,
     );
 
     for (const jobId of jobIds) {
@@ -178,6 +305,9 @@ export class WebhookEngine implements IOqronModule {
           activeSet?.delete(jobId);
         });
     }
+    } finally {
+      this.isPolling.delete(dispatcher.name);
+    }
   }
 
   private async processJob(
@@ -185,8 +315,9 @@ export class WebhookEngine implements IOqronModule {
     jobId: string,
   ): Promise<void> {
     const lockKey = `webhook:job:${jobId}`;
-    const ttlMs = 30000;
-    const hbMs = 5000;
+    const ttlMs = this.webhookConfig?.lockTtlMs ?? 30000;
+    const hbMs = this.webhookConfig?.heartbeatMs ?? 5000;
+    const trackProgress = this.webhookConfig?.trackProgress !== false;
 
     const acquired = await this.di.lock.acquire(
       lockKey,
@@ -247,6 +378,32 @@ export class WebhookEngine implements IOqronModule {
       return;
     }
 
+    // B15: Isolate by project (L3 safety net — L1 container prefix is primary)
+    if (
+      job.project &&
+      this.config.project &&
+      job.project !== this.config.project
+    ) {
+      this.logger.warn(`Returning webhook ${jobId} — wrong project`, {
+        jobProject: job.project,
+        workerProject: this.config.project,
+      });
+      await heartbeat.stop();
+      this.heartbeats.delete(jobId);
+      await this.di.lock.release(lockKey, this.workerIdStr);
+      await this.di.broker.nack(dispatcher.name, jobId);
+      return;
+    }
+
+    // B16: Progress tracking helper (opt-in, default true)
+    const updateProgress = async (percent: number) => {
+      if (!trackProgress) return;
+      job.progressPercent = percent;
+      await this.di.storage.save("jobs", jobId, job);
+    };
+
+    await updateProgress(10); // Job claimed
+
     job.attemptMade = (job.attemptMade ?? 0) + 1;
     job.status = "active";
     const startTs = Date.now();
@@ -280,6 +437,26 @@ export class WebhookEngine implements IOqronModule {
         }
       }
 
+      // G11: Send idempotency key header
+      if (payload.idempotencyKey) {
+        payload.headers["Idempotency-Key"] = payload.idempotencyKey;
+      }
+
+      await updateProgress(30); // Payload signed
+
+      // G7: Check circuit breaker before sending
+      const endpointKey = `${dispatcher.name}:${payload.endpointName}`;
+      if (this.circuitBreaker && await this.circuitBreaker.isOpen(endpointKey)) {
+        this.logger.warn(`Circuit OPEN for ${endpointKey} — skipping delivery, re-queuing`);
+        const hb = this.heartbeats.get(jobId);
+        if (hb) { await hb.stop(); this.heartbeats.delete(jobId); }
+        await this.di.lock.release(lockKey, this.workerIdStr);
+        await this.di.broker.nack(dispatcher.name, jobId, 15000);
+        return;
+      }
+
+      await updateProgress(50); // HTTP request sent
+
       // Deliver HTTP Payload
       const result = await deliverWebhook(
         payload.url,
@@ -289,15 +466,29 @@ export class WebhookEngine implements IOqronModule {
         dispatcher.timeout ?? 30000,
       );
 
+      await updateProgress(70); // Response received
+
+      // G9: Store full delivery attempt trace in job logs
+      job.logs ??= [];
+      job.logs.push({
+        ts: new Date(),
+        level: result.status >= 200 && result.status < 300 ? "info" : "warn",
+        msg: `Attempt #${job.attemptMade}: HTTP ${result.status} ${payload.method} ${payload.url} (${result.durationMs}ms)${result.retryAfterMs ? ` retryAfter=${result.retryAfterMs}ms` : ""}`,
+      });
+
       // Check for success (2xx) vs retryable/error
       if (result.status >= 200 && result.status < 300) {
+        await this.circuitBreaker?.recordSuccess(endpointKey);
+        await updateProgress(90); // Validated
         // Success
         await this.handleSuccess(dispatcher, job, result, lockKey);
       } else {
+        await this.circuitBreaker?.recordFailure(endpointKey);
         const retryStatusCodes = dispatcher.retries?.retryOnStatus;
         if (shouldRetryDelivery(result.status, retryStatusCodes)) {
-          throw new Error(
-            `HTTP ${result.status} Response. Body: ${result.body?.substring(0, 50)}...`,
+          throw Object.assign(
+            new Error(`HTTP ${result.status} Response. Body: ${result.body?.substring(0, 50)}...`),
+            { retryAfterMs: result.retryAfterMs },
           );
         } else {
           // Hard fail - no retries
@@ -310,6 +501,9 @@ export class WebhookEngine implements IOqronModule {
         }
       }
     } catch (e: any) {
+      // Record circuit breaker failure on exceptions (network errors, timeouts)
+      const endpointKey = `${dispatcher.name}:${job.data?.endpointName}`;
+      await this.circuitBreaker?.recordFailure(endpointKey);
       await this.handleRetry(dispatcher, job, e, lockKey);
     }
   }
@@ -391,11 +585,19 @@ export class WebhookEngine implements IOqronModule {
             delay: dispatcher.retries.baseDelay ?? 5000,
           }
         : undefined;
-      const backoffMs = calculateBackoff(
+      const computedBackoff = calculateBackoff(
         backoffOpts,
         job.attemptMade,
         dispatcher.retries?.maxDelay,
       );
+
+      // G6: Respect Retry-After header if present (capped at maxDelay)
+      const retryAfterMs = (error as any)?.retryAfterMs as number | undefined;
+      const maxDelay = dispatcher.retries?.maxDelay ?? 300_000;
+      const backoffMs = retryAfterMs
+        ? Math.min(retryAfterMs, maxDelay)
+        : computedBackoff;
+
       job.status = "delayed";
       job.runAt = new Date(Date.now() + backoffMs);
       job.timeline ??= [];
@@ -403,7 +605,9 @@ export class WebhookEngine implements IOqronModule {
         ts: new Date(),
         from: "active",
         to: "delayed",
-        reason: `Retry ${job.attemptMade} failed, backing off...`,
+        reason: retryAfterMs
+          ? `Retry ${job.attemptMade} failed, server requested ${retryAfterMs}ms delay`
+          : `Retry ${job.attemptMade} failed, backing off ${backoffMs}ms...`,
       });
 
       await this.di.storage.save("jobs", job.id, job);
@@ -478,18 +682,35 @@ export class WebhookEngine implements IOqronModule {
   async stop(): Promise<void> {
     this.running = false;
 
+    // B5: Full infrastructure cleanup (parity with Queue/Worker)
     this.stallDetector?.stop();
     this.stallDetector = null;
+
+    this.crossNodeScanner?.stop();
+    this.crossNodeScanner = null;
+
+    this.lagMonitor?.stop();
+    this.lagMonitor = null;
+
+    this.reconciler?.stop();
+    this.reconciler = null;
 
     for (const consumerStop of this.consumersByQueue.values()) {
       await consumerStop();
     }
     this.consumersByQueue.clear();
+    this.dispatcherTimers.clear();
 
     for (const t of this.timers) {
       clearInterval(t);
     }
     this.timers = [];
+
+    // Cancel all active job AbortControllers
+    for (const [, ac] of this.abortControllers) {
+      ac.abort();
+    }
+    this.abortControllers.clear();
 
     for (const hb of this.heartbeats.values()) {
       await hb.stop();
@@ -508,7 +729,98 @@ export class WebhookEngine implements IOqronModule {
       ]);
     }
 
+    this.isPolling.clear();
+    this.pausedDispatchers.clear();
     this.logger.info("WebhookEngine stopped.");
+  }
+
+  // ── Dynamic CRUD (G1, G2, G4) ─────────────────────────────────────────────
+
+  /** G1: Trigger an immediate poll cycle for a specific dispatcher */
+  async triggerManual(name: string): Promise<boolean> {
+    const dispatchers = getRegisteredWebhooks();
+    const d = dispatchers.find((x) => x.name === name);
+    if (!d) return false;
+    await this.poll(d);
+    return true;
+  }
+
+  /** G2: Cancel an active job using its AbortController */
+  async cancelActiveJob(jobId: string): Promise<boolean> {
+    const ac = this.abortControllers.get(jobId);
+    if (!ac) return false;
+    ac.abort();
+
+    const job = await this.di.storage.get<OqronJob>("jobs", jobId);
+    if (job) {
+      job.status = "failed";
+      job.error = "Cancelled by operator";
+      job.finishedAt = new Date();
+      job.timeline ??= [];
+      job.timeline.push({
+        ts: new Date(),
+        from: "active",
+        to: "failed",
+        reason: "Manual cancellation",
+      });
+      await this.di.storage.save("jobs", jobId, job);
+    }
+
+    const hb = this.heartbeats.get(jobId);
+    if (hb) {
+      await hb.stop();
+      this.heartbeats.delete(jobId);
+    }
+    this.activeJobs.delete(jobId);
+    this.abortControllers.delete(jobId);
+    OqronEventBus.emit("job:fail", job?.queueName ?? "unknown", jobId, new Error("Cancelled"));
+    return true;
+  }
+
+  /** G4 / B7: Pause a specific dispatcher — stops claiming new jobs */
+  async pauseDispatcher(name: string): Promise<void> {
+    this.pausedDispatchers.add(name);
+    await this.di.storage.save("webhook_instances", name, { enabled: false });
+    OqronEventBus.emit("webhook:paused", name);
+    this.logger.info(`Webhook dispatcher "${name}" paused`);
+  }
+
+  /** G4 / B7: Resume a paused dispatcher */
+  async resumeDispatcher(name: string): Promise<void> {
+    this.pausedDispatchers.delete(name);
+    await this.di.storage.save("webhook_instances", name, { enabled: true });
+    OqronEventBus.emit("webhook:resumed", name);
+    this.logger.info(`Webhook dispatcher "${name}" resumed`);
+  }
+
+  /** G4: Register a new dispatcher at runtime and start polling */
+  async registerDispatcher(config: WebhookConfig): Promise<void> {
+    const { registerWebhook } = await import("./registry.js");
+    registerWebhook(config);
+    await this.di.storage.save("webhook_instances", config.name, {
+      version: config.version ?? 0,
+      enabled: true,
+    });
+    if (this.running) {
+      this.startPolling(config);
+    }
+    OqronEventBus.emit("webhook:registered", config.name);
+    this.logger.info(`Webhook dispatcher "${config.name}" registered at runtime`);
+  }
+
+  /** G4: Deregister a dispatcher and stop its polling */
+  async deregisterDispatcher(name: string): Promise<boolean> {
+    const stopFn = this.consumersByQueue.get(name);
+    if (stopFn) {
+      await stopFn();
+      this.consumersByQueue.delete(name);
+    }
+    deregisterWebhook(name);
+    await this.di.storage.delete("webhook_instances", name);
+    this.activeJobsByDispatcher.delete(name);
+    OqronEventBus.emit("webhook:deregistered", name);
+    this.logger.info(`Webhook dispatcher "${name}" deregistered`);
+    return true;
   }
 
   async enable(): Promise<void> {

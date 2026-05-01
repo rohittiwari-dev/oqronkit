@@ -74,6 +74,16 @@ export type OqronEventMap = {
   "worker:job:claimed": [topic: string, jobId: string];
   "worker:job:completed": [topic: string, jobId: string, durationMs: number];
   "worker:job:failed": [topic: string, jobId: string, durationMs: number];
+
+  // ── Webhook Lifecycle (Phase 3 — Hardening) ─────────────────────────────
+  "webhook:created": [dispatcherName: string];
+  "webhook:updated": [dispatcherName: string];
+  "webhook:deleted": [dispatcherName: string];
+  "webhook:paused": [dispatcherName: string];
+  "webhook:resumed": [dispatcherName: string];
+  "webhook:registered": [dispatcherName: string];
+  "webhook:deregistered": [dispatcherName: string];
+  "webhook:version-upgraded": [dispatcherName: string, fromVersion: number, toVersion: number];
 };
 
 class OqronEventBusClass extends EventEmitter<OqronEventMap> {

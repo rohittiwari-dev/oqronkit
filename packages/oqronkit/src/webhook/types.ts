@@ -68,6 +68,8 @@ export interface WebhookDeliveryResult {
   headers: Record<string, string>;
   body: string | null;
   durationMs: number;
+  /** Parsed Retry-After delay in ms (from 429/503 responses) */
+  retryAfterMs?: number;
 }
 
 export interface WebhookDeliveryPayload<T = any> {
@@ -87,6 +89,9 @@ export interface WebhookDeliveryPayload<T = any> {
 export interface WebhookConfig<T = any> {
   /** Unique name for this webhook dispatcher */
   name: string;
+
+  /** Config version for migration tracking. @default 0 */
+  version?: number;
 
   /** Endpoint definitions */
   endpoints: WebhookEndpointsInput;

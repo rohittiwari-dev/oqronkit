@@ -185,6 +185,35 @@ export interface WebhookModuleConfig {
 	removeOnComplete?: RemoveOnConfig;
 	/** Global default: auto-remove failed webhook deliveries. @default false */
 	removeOnFail?: RemoveOnConfig;
+	/** Job ordering strategy. @default "fifo" */
+	strategy?: BrokerStrategy;
+	/** Dead letter queue configuration */
+	deadLetter?: { enabled?: boolean };
+	/**
+	 * Enable cross-node stall scanning to recover orphaned jobs from crashed nodes.
+	 * Set to `true` for defaults, or pass `{ intervalMs }` to customize.
+	 * @default false
+	 */
+	crossNodeStallScanner?: boolean | { intervalMs?: number; maxStalledCount?: number };
+	/** Event-loop lag monitor thresholds. Pauses job claiming when CPU is stalled. */
+	lagMonitor?: { maxLagMs?: number; sampleIntervalMs?: number };
+	/**
+	 * Enable storage-broker reconciliation to recover orphaned jobs from
+	 * split-brain crashes (DB save succeeded but broker nack failed).
+	 * @default false
+	 */
+	reconciliation?: boolean | {
+		intervalMs?: number;
+		waitingThresholdMs?: number;
+		delayedGraceMs?: number;
+		batchSize?: number;
+	};
+	/**
+	 * Enable progress tracking during webhook delivery lifecycle.
+	 * Adds ~5 extra storage writes per delivery to track intermediate stages.
+	 * @default true
+	 */
+	trackProgress?: boolean;
 }
 
 // ── Discriminated Union (resolved module definitions) ───────────────────────

@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { OqronContainer } from "../engine/index.js";
+import { OqronContainer, OqronEventBus } from "../engine/index.js";
 import type {
   OqronJob,
   OqronJobOptions,
@@ -7,7 +7,7 @@ import type {
 } from "../engine/types/job.types.js";
 import { DependencyResolver } from "../engine/utils/dependency-resolver.js";
 import { matchesEvent } from "./event-matcher.js";
-import { registerWebhook } from "./registry.js";
+import { deregisterWebhook, registerWebhook } from "./registry.js";
 import type {
   IWebhookDispatcher,
   WebhookConfig,
@@ -66,7 +66,8 @@ export function webhook<T = any>(
       dispatcherName: config.name,
       url,
       method: endpoint.method || config.method || "POST",
-      headers: { ...headersBase, ...headersEp },
+      // B10: Default Content-Type — user headers override via spread order
+      headers: { "Content-Type": "application/json", ...headersBase, ...headersEp },
       body: data,
       transformedBody,
       security,
@@ -343,4 +344,65 @@ export function webhook<T = any>(
   };
 
   return dispatcher;
+}
+
+// ── Dynamic CRUD Functions (B14) ─────────────────────────────────────────────
+
+/** Create a new webhook dispatcher at runtime */
+export async function createWebhook<T = any>(config: WebhookConfig<T>): Promise<IWebhookDispatcher<T>> {
+  const di = OqronContainer.get();
+  registerWebhook(config as any);
+  await di.storage.save("webhook_instances", config.name, {
+    version: config.version ?? 0,
+    enabled: true,
+    createdAt: new Date(),
+  });
+  OqronEventBus.emit("webhook:created", config.name);
+  return webhook(config);
+}
+
+/** Update an existing webhook dispatcher config */
+export async function updateWebhook(name: string, updates: Partial<WebhookConfig>): Promise<void> {
+  const di = OqronContainer.get();
+  const existing = await di.storage.get<any>("webhook_instances", name);
+  if (!existing) throw new Error(`Webhook dispatcher "${name}" not found`);
+  await di.storage.save("webhook_instances", name, {
+    ...existing,
+    ...updates,
+    updatedAt: new Date(),
+  });
+  OqronEventBus.emit("webhook:updated", name);
+}
+
+/** Delete a webhook dispatcher */
+export async function deleteWebhook(name: string): Promise<boolean> {
+  const di = OqronContainer.get();
+  const existed = await di.storage.get("webhook_instances", name);
+  if (!existed) return false;
+  deregisterWebhook(name);
+  await di.storage.delete("webhook_instances", name);
+  OqronEventBus.emit("webhook:deleted", name);
+  return true;
+}
+
+/** Pause a webhook dispatcher — stops claiming new jobs */
+export async function pauseWebhook(name: string): Promise<void> {
+  const di = OqronContainer.get();
+  const existing = await di.storage.get<any>("webhook_instances", name);
+  await di.storage.save("webhook_instances", name, {
+    ...(existing || {}),
+    enabled: false,
+  });
+  OqronEventBus.emit("webhook:paused", name);
+}
+
+/** Resume a paused webhook dispatcher */
+export async function resumeWebhook(name: string): Promise<void> {
+  const di = OqronContainer.get();
+  const existing = await di.storage.get<any>("webhook_instances", name);
+  await di.storage.save("webhook_instances", name, {
+    ...(existing || {}),
+    enabled: true,
+  });
+  OqronEventBus.emit("webhook:resumed", name);
 }

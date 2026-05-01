@@ -51,11 +51,28 @@ export async function deliverWebhook(
       }
     }
 
+    // G6: Parse Retry-After header (429/503) — supports seconds and HTTP-date
+    let retryAfterMs: number | undefined;
+    const retryAfterRaw = response.headers.get("retry-after");
+    if (retryAfterRaw && (response.status === 429 || response.status === 503)) {
+      const seconds = Number(retryAfterRaw);
+      if (!Number.isNaN(seconds)) {
+        retryAfterMs = Math.round(seconds * 1000);
+      } else {
+        // Try HTTP-date format: "Wed, 01 May 2026 12:00:00 GMT"
+        const date = new Date(retryAfterRaw);
+        if (!Number.isNaN(date.getTime())) {
+          retryAfterMs = Math.max(0, date.getTime() - Date.now());
+        }
+      }
+    }
+
     return {
       status: response.status,
       headers: responseHeaders,
       body: bodyText || null,
       durationMs,
+      retryAfterMs,
     };
   } catch (error: any) {
     const durationMs = Math.round(performance.now() - start);
