@@ -179,7 +179,11 @@ export type { RateLimitMiddlewareOptions } from "./ratelimit/middleware.js";
 /** Well-known directories checked when `triggers` is not set */
 const TRIGGER_PROBE_PATHS = ["src/triggers", "triggers", "src/jobs", "jobs"];
 
-/** Recursively import all .ts/.js files in a directory */
+/**
+ * Recursively import all .ts/.js files in a trusted triggers directory.
+ * Importing trigger files executes project code during init; do not point this
+ * at untrusted, user-writable, or broad repository roots.
+ */
 async function scanDir(dir: string): Promise<number> {
 	let count = 0;
 	const entries = await readdir(dir, { withFileTypes: true });
@@ -190,7 +194,6 @@ async function scanDir(dir: string): Promise<number> {
 		} else if (entry.isFile() && /\.(js|ts|mjs|cjs)$/.test(entry.name)) {
 			await import(pathToFileURL(full).toString());
 			count++;
-			``;
 		}
 	}
 	return count;

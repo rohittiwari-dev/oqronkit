@@ -77,10 +77,9 @@ export class MemoryStore implements IStorageEngine {
   async count(
     namespace: string,
     filter?: Record<string, any>,
-    where?: WhereCondition[],
   ): Promise<number> {
     const map = this.getNamespaceMap(namespace);
-    if (!filter && !where) return map.size;
+    if (!filter) return map.size;
 
     let count = 0;
     for (const item of map.values()) {
@@ -92,9 +91,6 @@ export class MemoryStore implements IStorageEngine {
             break;
           }
         }
-      }
-      if (matches && where) {
-        matches = this.matchesWhere(item, where);
       }
       if (matches) count++;
     }

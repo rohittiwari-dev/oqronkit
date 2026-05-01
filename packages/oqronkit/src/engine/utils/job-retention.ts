@@ -139,20 +139,17 @@ export async function pruneAfterCompletion(opts: PruneOptions): Promise<void> {
 
   try {
     // Fetch all records in this scope
-    const filter: Record<string, string> = {};
+    const filter: Record<string, string> = { status: opts.status };
     if (opts.filterKey && opts.filterValue) {
       filter[opts.filterKey] = opts.filterValue;
     }
 
     const allRecords = await Storage.list<any>(
       opts.namespace,
-      Object.keys(filter).length > 0 ? filter : undefined,
+      filter,
     );
 
-    // Filter by status (only prune completed OR failed, not mixed)
-    const statusRecords = allRecords.filter(
-      (r: any) => r.status === opts.status,
-    );
+    const statusRecords = allRecords;
 
     // Sort by finishedOn/finishedAt descending (newest first)
     statusRecords.sort((a: any, b: any) => {

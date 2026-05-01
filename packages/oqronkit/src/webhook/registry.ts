@@ -1,23 +1,33 @@
 import type { WebhookConfig } from "./types.js";
 
-const webhooks = new Map<string, WebhookConfig>();
+const GLOBAL_KEY = Symbol.for("oqronkit:webhook_registry");
+
+type GlobalRegistry = typeof globalThis & {
+  [key: symbol]: Map<string, WebhookConfig> | undefined;
+};
+
+function getRegistry(): Map<string, WebhookConfig> {
+  const g = globalThis as unknown as GlobalRegistry;
+  if (!g[GLOBAL_KEY]) g[GLOBAL_KEY] = new Map();
+  return g[GLOBAL_KEY]!;
+}
 
 export function registerWebhook(config: WebhookConfig): void {
-  webhooks.set(config.name, config);
+  getRegistry().set(config.name, config);
 }
 
 export function getRegisteredWebhooks(): WebhookConfig[] {
-  return Array.from(webhooks.values());
+  return Array.from(getRegistry().values());
 }
 
 export function getWebhookByName(name: string): WebhookConfig | undefined {
-  return webhooks.get(name);
+  return getRegistry().get(name);
 }
 
 export function deregisterWebhook(name: string): boolean {
-  return webhooks.delete(name);
+  return getRegistry().delete(name);
 }
 
 export function clearWebhooks(): void {
-  webhooks.clear();
+  getRegistry().clear();
 }

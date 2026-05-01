@@ -139,6 +139,23 @@ function restorePreExecutionState(job: OqronJob, state: PreExecutionState): void
   job.timeline = state.timeline;
 }
 
+async function nackJob(
+  di: OqronContainer,
+  queueName: string,
+  job: Pick<OqronJob, "id" | "opts">,
+  delayMs?: number,
+): Promise<void> {
+  if (job.opts?.priority !== undefined) {
+    await di.broker.nack(queueName, job.id, delayMs, job.opts.priority);
+    return;
+  }
+  if (delayMs !== undefined) {
+    await di.broker.nack(queueName, job.id, delayMs);
+    return;
+  }
+  await di.broker.nack(queueName, job.id);
+}
+
 /**
  * Shared job execution logic used by both QueueEngine and WorkerEngine.
  *
@@ -200,7 +217,7 @@ export async function executeJob(
     const acquired = await heartbeat.start();
     if (!acquired) {
       logger.warn(`Failed to acquire heartbeat lock for job ${job.id}`);
-      await di.broker.nack(hc.name, job.id);
+      await nackJob(di, hc.name, job);
       return;
     }
     ctx.heartbeats.set(job.id, heartbeat);
@@ -339,7 +356,7 @@ export async function executeJob(
         // Restore all pre-claim metadata so skipped jobs do not look attempted.
         restorePreExecutionState(job, previousState);
         await di.storage.save("jobs", job.id, job);
-        await di.broker.nack(hc.name, job.id, 1000); // Small delay before retry
+        await nackJob(di, hc.name, job, 1000); // Small delay before retry
         return;
       }
     }
@@ -363,7 +380,7 @@ export async function executeJob(
         // Restore all pre-claim metadata so skipped jobs do not look attempted.
         restorePreExecutionState(job, previousState);
         await di.storage.save("jobs", job.id, job);
-        await di.broker.nack(hc.name, job.id, 2000); // Re-queue with 2s delay
+        await nackJob(di, hc.name, job, 2000); // Re-queue with 2s delay
         return;
       }
     }
@@ -446,7 +463,7 @@ export async function executeJob(
 
       OqronEventBus.emit("job:retried", job.id, `attempt:${job.attemptMade + 1}`);
       await di.storage.save("jobs", job.id, job);
-      await di.broker.nack(hc.name, job.id, delay);
+      await nackJob(di, hc.name, job, delay);
       return; // Exit — the job will be re-claimed on the next poll cycle
     }
 
@@ -730,7 +747,7 @@ export async function executeBatch(
     if (!acquired) {
       logger.warn(`Failed to acquire batch heartbeat lock for batch starting with ${batchId}`);
       for (const job of jobs) {
-        await di.broker.nack(hc.name, job.id);
+        await nackJob(di, hc.name, job);
       }
       return;
     }
@@ -775,7 +792,7 @@ export async function executeBatch(
         ctx.abortControllers.delete(job.id);
         restorePreExecutionState(job, previousState);
         await di.storage.save("jobs", job.id, job);
-        await di.broker.nack(hc.name, job.id, 1000);
+        await nackJob(di, hc.name, job, 1000);
         continue;
       }
     }
@@ -803,7 +820,7 @@ export async function executeBatch(
         ctx.abortControllers.delete(job.id);
         restorePreExecutionState(job, previousState);
         await di.storage.save("jobs", job.id, job);
-        await di.broker.nack(hc.name, job.id, 2000);
+        await nackJob(di, hc.name, job, 2000);
         continue;
       }
     }
@@ -919,7 +936,7 @@ export async function executeBatch(
         
         OqronEventBus.emit("job:retried", job.id, `attempt:${job.attemptMade + 1}`);
         await di.storage.save("jobs", job.id, job);
-        await di.broker.nack(hc.name, job.id, delay);
+        await nackJob(di, hc.name, job, delay);
         continue; // Skip the standard completion save/ack below
       }
     }

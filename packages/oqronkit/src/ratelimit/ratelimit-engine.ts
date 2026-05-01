@@ -119,10 +119,10 @@ function parseAdminKey(adminKey: string): { tier: string; key: string } {
  */
 export class RateLimitEngine<TContext = any> implements IRateLimiter<TContext> {
   readonly name: string;
-  private readonly config: RateLimitConfig<TContext>;
-  private readonly algorithm: IRateLimitAlgorithm;
-  private readonly jitterFraction: number;
-  private readonly failOpen: boolean;
+  private config: RateLimitConfig<TContext>;
+  private algorithm: IRateLimitAlgorithm;
+  private jitterFraction: number;
+  private failOpen: boolean;
   private readonly dryRun: boolean;
 
   constructor(config: RateLimitConfig<TContext>) {
@@ -133,25 +133,44 @@ export class RateLimitEngine<TContext = any> implements IRateLimiter<TContext> {
     this.failOpen = config.failOpen ?? false;
     this.dryRun = config.dryRun ?? false;
 
-    // Resolve algorithm
+    this.algorithm = this.createAlgorithm(config);
+  }
+
+  private createAlgorithm(config: RateLimitConfig<TContext>): IRateLimitAlgorithm {
     const algo = config.algorithm ?? "sliding-window";
     switch (algo) {
       case "sliding-window":
-        this.algorithm = new SlidingWindowAlgorithm();
-        break;
+        return new SlidingWindowAlgorithm();
       case "token-bucket":
-        this.algorithm = new TokenBucketAlgorithm(
+        return new TokenBucketAlgorithm(
           config.refillRate ?? 1,
           config.refillIntervalMs ?? 1_000,
         );
-        break;
       case "fixed-window":
-        this.algorithm = new FixedWindowAlgorithm();
-        break;
+        return new FixedWindowAlgorithm();
       default:
         throw new Error(
           `[OqronKit:RateLimit] Unknown algorithm: "${algo}". Use: sliding-window, token-bucket, fixed-window.`,
         );
+    }
+  }
+
+  applyModuleDefaults(
+    defaults: Pick<RateLimitConfig<TContext>, "algorithm" | "failOpen" | "jitter" | "disabledBehavior">,
+  ): void {
+    const previousAlgorithm = this.config.algorithm;
+    this.config = {
+      ...this.config,
+      algorithm: this.config.algorithm ?? defaults.algorithm,
+      failOpen: this.config.failOpen ?? defaults.failOpen,
+      jitter: this.config.jitter ?? defaults.jitter,
+      disabledBehavior: this.config.disabledBehavior ?? defaults.disabledBehavior,
+    };
+    this.validateConfig(this.config);
+    this.jitterFraction = this.config.jitter ?? 0.1;
+    this.failOpen = this.config.failOpen ?? false;
+    if (!previousAlgorithm && this.config.algorithm) {
+      this.algorithm = this.createAlgorithm(this.config);
     }
   }
 
@@ -310,17 +329,17 @@ export class RateLimitEngine<TContext = any> implements IRateLimiter<TContext> {
     }
 
     try {
-      const result = await this.withWriteLock(() =>
-        this._evaluate(ctx, cost, storage, false),
-      );
-      // Tag passthrough if instance was disabled with passthrough behavior
-      if (isPassthrough) {
-        (result as any).passthrough = true;
-        (result as any).instanceDisabled = true;
-        (result as any).allowed = true; // passthrough always allows
-      }
-      // ── Stats + event write (fire-and-forget, don't block response) ──
-      void this._updateStats(storage, result).catch(() => {});
+      const result = await this.withWriteLock(async () => {
+        const evaluated = await this._evaluate(ctx, cost, storage, false);
+        if (isPassthrough) {
+          (evaluated as any).passthrough = true;
+          (evaluated as any).instanceDisabled = true;
+          (evaluated as any).allowed = true; // passthrough always allows
+        }
+        await this._updateStats(storage, evaluated);
+        return evaluated;
+      });
+      // Block events stay async; quota and stats writes are serialized above.
       if (!result.allowed && !this.dryRun) {
         void this._writeBlockEvent(storage, result, cost).catch(() => {});
       }

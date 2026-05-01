@@ -151,7 +151,16 @@ export class WorkerEngine implements IOqronModule {
 			this.crossNodeScanner.start(async (job) => {
 				OqronEventBus.emit("job:stalled", job.queueName, job.id);
 				if (job.status !== "failed") {
-					await this.di.broker.nack(job.queueName, job.id);
+					if (job.opts?.priority !== undefined) {
+						await this.di.broker.nack(
+							job.queueName,
+							job.id,
+							undefined,
+							job.opts.priority,
+						);
+					} else {
+						await this.di.broker.nack(job.queueName, job.id);
+					}
 				}
 			});
 		}

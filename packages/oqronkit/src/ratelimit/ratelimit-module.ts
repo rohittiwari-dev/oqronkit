@@ -25,13 +25,14 @@ export class RateLimitModule implements IOqronModule {
   enabled = true;
 
   private _timer: NodeJS.Timeout | null = null;
+  private _initialTimer: NodeJS.Timeout | null = null;
   private readonly _tickMs: number;
   private readonly _eventRetentionMs: number;
 
   constructor(
     _config: OqronConfig,
     private readonly logger: Logger,
-    moduleConfig: RateLimitModuleDef,
+    private readonly moduleConfig: RateLimitModuleDef,
   ) {
     this._tickMs = moduleConfig.gcIntervalMs ?? 300_000; // 5 min default
     this._eventRetentionMs =
@@ -47,6 +48,12 @@ export class RateLimitModule implements IOqronModule {
 
     // Persist all registered instances
     for (const limiter of limiters) {
+      limiter.applyModuleDefaults?.({
+        algorithm: this.moduleConfig.algorithm,
+        failOpen: this.moduleConfig.failOpen,
+        jitter: this.moduleConfig.jitter,
+        disabledBehavior: this.moduleConfig.disabledBehavior,
+      });
       const config = (limiter as any).config;
       if (!config) continue;
 
@@ -114,6 +121,10 @@ export class RateLimitModule implements IOqronModule {
       clearInterval(this._timer);
       this._timer = null;
     }
+    if (this._initialTimer) {
+      clearTimeout(this._initialTimer);
+      this._initialTimer = null;
+    }
   }
 
   async enable(): Promise<void> {
@@ -132,7 +143,11 @@ export class RateLimitModule implements IOqronModule {
     if (this._timer.unref) this._timer.unref();
 
     // Initial cleanup after a short delay (let the rest of the system boot)
-    setTimeout(() => void this._tick(), 10_000);
+    this._initialTimer = setTimeout(() => {
+      this._initialTimer = null;
+      void this._tick();
+    }, 10_000);
+    if (this._initialTimer.unref) this._initialTimer.unref();
   }
 
   // ── Management Tick ──────────────────────────────────────────────────────

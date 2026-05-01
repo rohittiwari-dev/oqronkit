@@ -1,22 +1,29 @@
 import type { RateLimitEngine } from "./ratelimit-engine.js";
 
-// ── In-memory registry of all created rate limiter instances ─────────────────
-// Mirrors the queue/registry.ts and worker/registry.ts pattern.
+const GLOBAL_KEY = Symbol.for("oqronkit:ratelimit_registry");
 
-const registeredLimiters: Map<string, RateLimitEngine<any>> = new Map();
+type GlobalRegistry = typeof globalThis & {
+  [key: symbol]: Map<string, RateLimitEngine<any>> | undefined;
+};
+
+function getRegistry(): Map<string, RateLimitEngine<any>> {
+  const g = globalThis as unknown as GlobalRegistry;
+  if (!g[GLOBAL_KEY]) g[GLOBAL_KEY] = new Map();
+  return g[GLOBAL_KEY]!;
+}
 
 export function registerLimiter(engine: RateLimitEngine<any>): void {
-  registeredLimiters.set(engine.name, engine);
+  getRegistry().set(engine.name, engine);
 }
 
 export function deregisterLimiter(name: string): boolean {
-  return registeredLimiters.delete(name);
+  return getRegistry().delete(name);
 }
 
 export function getLimiter(name: string): RateLimitEngine<any> | undefined {
-  return registeredLimiters.get(name);
+  return getRegistry().get(name);
 }
 
 export function getRegisteredLimiters(): RateLimitEngine<any>[] {
-  return [...registeredLimiters.values()];
+  return [...getRegistry().values()];
 }

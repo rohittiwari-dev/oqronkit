@@ -200,7 +200,16 @@ export class QueueEngine implements IOqronModule {
 				OqronEventBus.emit("job:stalled", job.queueName, job.id);
 				if (job.status !== "failed") {
 					// Re-queue for retry
-					await this.di.broker.nack(job.queueName, job.id);
+					if (job.opts?.priority !== undefined) {
+						await this.di.broker.nack(
+							job.queueName,
+							job.id,
+							undefined,
+							job.opts.priority,
+						);
+					} else {
+						await this.di.broker.nack(job.queueName, job.id);
+					}
 				}
 			});
 		}

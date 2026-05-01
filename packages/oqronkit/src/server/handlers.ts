@@ -78,7 +78,7 @@ export async function handleHealth(
 export async function handleEvents(
   req: MonitorRequest,
 ): Promise<MonitorResponse> {
-  const limit = Math.min(Number(req.query.limit ?? 50), 200);
+  const limit = queryInt(req.query, "limit", 50, { min: 1, max: 200 });
   return {
     status: 200,
     body: { ok: true, events: recentEvents.slice(0, limit) },
@@ -184,6 +184,20 @@ function unauthorized(): MonitorResponse {
   };
 }
 
+function queryInt(
+  query: Record<string, string>,
+  name: string,
+  fallback: number,
+  opts: { min?: number; max?: number } = {},
+): number {
+  const raw = query[name];
+  const parsed = raw === undefined ? fallback : Number(raw);
+  if (!Number.isFinite(parsed) || !Number.isInteger(parsed)) return fallback;
+  const min = opts.min ?? Number.MIN_SAFE_INTEGER;
+  const max = opts.max ?? Number.MAX_SAFE_INTEGER;
+  return Math.max(min, Math.min(max, parsed));
+}
+
 export async function handleAdminSystem(
   _req: MonitorRequest,
 ): Promise<MonitorResponse> {
@@ -213,7 +227,7 @@ export async function handleAdminQueue(
   if (!name)
     return { status: 400, body: { ok: false, error: "Missing queue name" } };
   const state = req.query.state as OqronJob["status"] | undefined;
-  const limit = Number(req.query.limit ?? 50);
+  const limit = queryInt(req.query, "limit", 50, { min: 1, max: 200 });
   const info = await mgr.getQueueInfo(name, { state, limit });
   return { status: 200, body: { ok: true, ...info } };
 }
@@ -353,8 +367,8 @@ export async function handleAdminSchedules(
 
   // GET /admin/schedules/:name/history
   if (name && req.params.subResource === "history") {
-    const limit = Number(req.query.limit ?? 50);
-    const offset = Number(req.query.offset ?? 0);
+    const limit = queryInt(req.query, "limit", 50, { min: 1, max: 200 });
+    const offset = queryInt(req.query, "offset", 0, { min: 0, max: 100_000 });
     const status = req.query.status as any;
     const result = await mgr.getJobHistory(name, { status, limit, offset });
     return { status: 200, body: { ok: true, ...result } };
@@ -386,8 +400,8 @@ export async function handleAdminJobsQuery(
     status: req.query.status as any,
     queueName: req.query.queue,
     scheduleId: req.query.schedule,
-    limit: Number(req.query.limit ?? 50),
-    offset: Number(req.query.offset ?? 0),
+    limit: queryInt(req.query, "limit", 50, { min: 1, max: 200 }),
+    offset: queryInt(req.query, "offset", 0, { min: 0, max: 100_000 }),
   });
   return { status: 200, body: { ok: true, ...result } };
 }
@@ -473,8 +487,8 @@ export async function handleAdminRateLimiters(
   const { subResource } = req.params;
 
   if (subResource === "events") {
-    const limit = Number(req.query.limit ?? 50);
-    const offset = Number(req.query.offset ?? 0);
+    const limit = queryInt(req.query, "limit", 50, { min: 1, max: 200 });
+    const offset = queryInt(req.query, "offset", 0, { min: 0, max: 100_000 });
     const result = await mgr.getRateLimiterEvents(name, { limit, offset });
     return { status: 200, body: { ok: true, ...result } };
   }
@@ -542,8 +556,8 @@ export async function handleAdminWebhooks(
   const { subResource } = req.params;
 
   if (subResource === "deliveries") {
-    const limit = Number(req.query.limit ?? 50);
-    const offset = Number(req.query.offset ?? 0);
+    const limit = queryInt(req.query, "limit", 50, { min: 1, max: 200 });
+    const offset = queryInt(req.query, "offset", 0, { min: 0, max: 100_000 });
     const status = req.query.status;
     const result = await mgr.getWebhookDeliveries(name, { status, limit, offset });
     return { status: 200, body: { ok: true, ...result } };

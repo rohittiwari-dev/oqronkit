@@ -20,7 +20,10 @@ function _getPending(): ScheduleDefinition[] {
 
 /** @internal Called by schedule() to auto-register a definition */
 export function _registerSchedule(def: ScheduleDefinition): void {
-  _getPending().push(def);
+  const pending = _getPending();
+  const existingIndex = pending.findIndex((item) => item.name === def.name);
+  if (existingIndex >= 0) pending.splice(existingIndex, 1, def);
+  else pending.push(def);
 }
 
 /** @internal Called by OqronKit.init() to collect all auto-registered schedules */

@@ -46,7 +46,20 @@ describe("calculateBackoff()", () => {
   it("should handle attempt=0 gracefully", () => {
     const d = calculateBackoff({ type: "exponential", delay: 1000 }, 0, 60000);
     // 2^(-1) = 0.5 → 500, but minimum should be reasonable
-    expect(d).toBeGreaterThanOrEqual(0);
+    expect(d).toBeGreaterThan(0);
+  });
+
+  it("rejects invalid delay outputs", () => {
+    expect(() => calculateBackoff({ type: "fixed", delay: 0 }, 1)).toThrow(
+      "positive finite",
+    );
+    expect(() =>
+      calculateBackoff({
+        type: "custom",
+        delay: 100,
+        backoffFn: () => Number.NaN,
+      }, 1),
+    ).toThrow("invalid delay");
   });
 });
 

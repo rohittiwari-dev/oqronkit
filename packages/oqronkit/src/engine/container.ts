@@ -21,13 +21,23 @@ const makeIsolatedBroker = (
   base: IBrokerEngine,
   prefix: string,
 ): IBrokerEngine => ({
-  publish: (ns, id, delay, prio) =>
-    base.publish(`${prefix}:${ns}`, id, delay, prio),
+  publish: (ns, id, delay, prio) => {
+    const scopedNs = `${prefix}:${ns}`;
+    if (prio !== undefined) return base.publish(scopedNs, id, delay, prio);
+    if (delay !== undefined) return base.publish(scopedNs, id, delay);
+    return base.publish(scopedNs, id);
+  },
   claim: (ns, cid, limit, ttl, strat) =>
     base.claim(`${prefix}:${ns}`, cid, limit, ttl, strat),
   ack: (ns, id) => base.ack(`${prefix}:${ns}`, id),
-  nack: (ns, id, delay) => base.nack(`${prefix}:${ns}`, id, delay),
-  extendLock: (id, cid, ttl) => base.extendLock(id, cid, ttl),
+  nack: (ns, id, delay, prio) => {
+    const scopedNs = `${prefix}:${ns}`;
+    if (prio !== undefined) return base.nack(scopedNs, id, delay, prio);
+    if (delay !== undefined) return base.nack(scopedNs, id, delay);
+    return base.nack(scopedNs, id);
+  },
+  extendLock: (id, cid, ttl, ns) =>
+    base.extendLock(id, cid, ttl, ns ? `${prefix}:${ns}` : undefined),
   pause: (ns) => base.pause(`${prefix}:${ns}`),
   resume: (ns) => base.resume(`${prefix}:${ns}`),
 });

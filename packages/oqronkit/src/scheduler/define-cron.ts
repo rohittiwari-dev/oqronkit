@@ -21,6 +21,7 @@ export type DefineCronOptions = CronScheduleConfig & {
   name: string;
   timezone?: string;
   missedFire?: MissedFirePolicy;
+  maxMissedRuns?: number;
   overlap?: OverlapPolicy;
   guaranteedWorker?: boolean;
   heartbeatMs?: number;
@@ -109,6 +110,7 @@ export const cron = (options: DefineCronOptions): CronDefinition => {
     intervalMs,
     timezone: options.timezone,
     missedFire: options.missedFire ?? "skip",
+    maxMissedRuns: options.maxMissedRuns,
     overlap: options.overlap ?? "skip",
     guaranteedWorker: options.guaranteedWorker ?? false,
     heartbeatMs: options.heartbeatMs,

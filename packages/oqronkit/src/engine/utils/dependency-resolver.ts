@@ -15,6 +15,26 @@ import type { OqronJob } from "../types/job.types.js";
  */
 export class DependencyResolver {
   /**
+   * Validate parent IDs before a dependent job is persisted. A missing parent
+   * cannot ever notify children, so accepting it would leave the child stuck.
+   */
+  static async assertParentsExist(
+    storage: IStorageEngine,
+    dependsOn: string[],
+  ): Promise<void> {
+    const missing: string[] = [];
+    for (const parentId of dependsOn) {
+      const parent = await storage.get<OqronJob>("jobs", parentId);
+      if (!parent) missing.push(parentId);
+    }
+    if (missing.length > 0) {
+      throw new Error(
+        `[OqronKit] Missing dependency parent job(s): ${missing.join(", ")}`,
+      );
+    }
+  }
+
+  /**
    * Check if all parent jobs have completed.
    */
   static async canProceed(

@@ -349,15 +349,23 @@ export class OqronManager {
   }
 
   async retryAllFailed(name: string): Promise<number> {
-    const failedJobs = await Storage.list<OqronJob>(
-      "jobs",
-      { queueName: name, status: "failed" },
-    );
-
     let retried = 0;
-    for (const job of failedJobs) {
-      await this.retryJob(job.id);
-      retried++;
+    const batchSize = 500;
+
+    while (true) {
+      const failedJobs = await Storage.list<OqronJob>(
+        "jobs",
+        { queueName: name, status: "failed" },
+        { limit: batchSize },
+      );
+      if (failedJobs.length === 0) break;
+
+      for (const job of failedJobs) {
+        await this.retryJob(job.id);
+        retried++;
+      }
+
+      if (failedJobs.length < batchSize) break;
     }
 
     return retried;

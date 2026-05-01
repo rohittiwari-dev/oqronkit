@@ -108,6 +108,10 @@ export function queue<T = any, R = any>(
       }
     }
 
+    if (hasDeps) {
+      await DependencyResolver.assertParentsExist(di.storage, opts.dependsOn);
+    }
+
     const job: OqronJob = {
       id: jobId,
       type: "task",

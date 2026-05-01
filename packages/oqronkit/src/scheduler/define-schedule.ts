@@ -42,6 +42,7 @@ export type DefineScheduleOptions<TPayload> = {
   every?: { weeks?: number; days?: number; minutes?: number; hours?: number; seconds?: number };
   timezone?: string;
   missedFire?: MissedFirePolicy;
+  maxMissedRuns?: number;
   overlap?: OverlapPolicy;
   guaranteedWorker?: boolean;
   heartbeatMs?: number;
@@ -105,6 +106,7 @@ export const schedule = <TPayload = unknown>(
     every: options.every,
     timezone: options.timezone,
     missedFire: options.missedFire ?? "skip",
+    maxMissedRuns: options.maxMissedRuns,
     overlap: options.overlap ?? "skip",
     guaranteedWorker: options.guaranteedWorker ?? false,
     heartbeatMs: options.heartbeatMs,

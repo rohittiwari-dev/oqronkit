@@ -103,6 +103,10 @@ export function webhook<T = any>(
       }
     }
 
+    if (hasDeps) {
+      await DependencyResolver.assertParentsExist(di.storage, opts!.dependsOn!);
+    }
+
     // Determine initial status based on opts and enabled state
     let initialStatus: OqronJob["status"] = "waiting";
     let pausedReason: PausedReason | undefined;
@@ -155,7 +159,7 @@ export function webhook<T = any>(
           status: "paused",
           pausedReason: "disabled-hold",
         },
-        { limit: 100_000 },
+        { limit: maxHeld + 1 },
       );
 
       heldJobs.sort(

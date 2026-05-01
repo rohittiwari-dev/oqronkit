@@ -141,6 +141,7 @@ export class WebhookEngine implements IOqronModule {
     this.circuitBreaker = createCircuitBreaker(
       cbConfig,
       isDistributed ? this.di.storage : undefined,
+      isDistributed ? this.di.lock : undefined,
     );
 
     for (const dispatcher of dispatchers) {
@@ -219,7 +220,7 @@ export class WebhookEngine implements IOqronModule {
       this.crossNodeScanner.start(async (job) => {
         OqronEventBus.emit("job:stalled", job.queueName, job.id);
         if (job.status !== "failed") {
-          await this.di.broker.nack(job.queueName, job.id);
+          await this.nackJob(job.queueName, job);
         }
       });
     }
@@ -269,6 +270,22 @@ export class WebhookEngine implements IOqronModule {
       this.heartbeats.delete(jobId);
     }
     this.abortControllers.delete(jobId);
+  }
+
+  private async nackJob(
+    queueName: string,
+    job: Pick<OqronJob<WebhookDeliveryPayload>, "id" | "opts">,
+    delayMs?: number,
+  ): Promise<void> {
+    if (job.opts?.priority !== undefined) {
+      await this.di.broker.nack(queueName, job.id, delayMs, job.opts.priority);
+      return;
+    }
+    if (delayMs !== undefined) {
+      await this.di.broker.nack(queueName, job.id, delayMs);
+      return;
+    }
+    await this.di.broker.nack(queueName, job.id);
   }
 
   private startPolling(dispatcher: WebhookConfig) {
@@ -627,7 +644,7 @@ export class WebhookEngine implements IOqronModule {
     });
     await this.di.storage.save("jobs", job.id, job);
     await this.finishJobExecution(job.id);
-    await this.di.broker.nack(dispatcher.name, job.id, delayMs);
+    await this.nackJob(dispatcher.name, job, delayMs);
   }
 
   private async handleSuccess(
@@ -730,7 +747,7 @@ export class WebhookEngine implements IOqronModule {
 
       await this.finishJobExecution(job.id);
 
-      await this.di.broker.nack(dispatcher.name, job.id, backoffMs);
+      await this.nackJob(dispatcher.name, job, backoffMs);
     }
   }
 

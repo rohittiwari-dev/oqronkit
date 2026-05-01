@@ -66,6 +66,13 @@ export function calculateBackoff(
   maxDelay?: number,
 ): number {
   if (!backoff) return 0;
+  if (!Number.isFinite(backoff.delay) || backoff.delay <= 0) {
+    throw new Error("[OqronKit] Backoff delay must be a positive finite number.");
+  }
+  if (maxDelay !== undefined && (!Number.isFinite(maxDelay) || maxDelay <= 0)) {
+    throw new Error("[OqronKit] maxDelay must be a positive finite number.");
+  }
+  const safeAttemptsMade = Math.max(1, Math.floor(attemptsMade));
 
   let delay: number;
 
@@ -76,7 +83,7 @@ export function calculateBackoff(
         `[OqronKit] Custom backoff strategy requires a "backoffFn" function.`,
       );
     }
-    delay = backoff.backoffFn(attemptsMade, backoff.delay);
+    delay = backoff.backoffFn(safeAttemptsMade, backoff.delay);
   } else {
     const strategyFactory = builtinStrategies[backoff.type];
     if (!strategyFactory) {
@@ -87,7 +94,11 @@ export function calculateBackoff(
     }
 
     const strategy = strategyFactory(backoff.delay);
-    delay = strategy(attemptsMade);
+    delay = strategy(safeAttemptsMade);
+  }
+
+  if (!Number.isFinite(delay) || delay <= 0) {
+    throw new Error("[OqronKit] Backoff strategy produced an invalid delay.");
   }
 
   // Cap at maxDelay if specified

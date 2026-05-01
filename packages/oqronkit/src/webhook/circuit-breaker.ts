@@ -1,4 +1,5 @@
 import type { IStorageEngine } from "../engine/types/engine.js";
+import type { ILockAdapter } from "../engine/types/engine.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -115,6 +116,7 @@ export class SharedCircuitBreaker implements ICircuitBreaker {
   constructor(
     private config: CircuitBreakerConfig = {},
     private storage: IStorageEngine,
+    private lock?: ILockAdapter,
   ) {}
 
   private get threshold() { return this.config.failureThreshold ?? 5; }
@@ -130,26 +132,49 @@ export class SharedCircuitBreaker implements ICircuitBreaker {
     await this.storage.save(this.NS, key, entry);
   }
 
+  private async withKeyLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
+    if (!this.lock) return fn();
+    const lockKey = `webhook:circuit:${key}`;
+    const owner = `circuit-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    const ttlMs = 5_000;
+    const deadline = Date.now() + ttlMs;
+    while (!(await this.lock.acquire(lockKey, owner, ttlMs))) {
+      if (Date.now() >= deadline) {
+        throw new Error(`[OqronKit] Timed out acquiring circuit lock for ${key}`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    try {
+      return await fn();
+    } finally {
+      await this.lock.release(lockKey, owner).catch(() => {});
+    }
+  }
+
   async recordSuccess(key: string): Promise<void> {
-    const entry = await this.getEntry(key);
-    entry.failures = 0;
-    entry.halfOpenAttempts = 0;
-    entry.state = "CLOSED";
-    await this.saveEntry(key, entry);
+    await this.withKeyLock(key, async () => {
+      const entry = await this.getEntry(key);
+      entry.failures = 0;
+      entry.halfOpenAttempts = 0;
+      entry.state = "CLOSED";
+      await this.saveEntry(key, entry);
+    });
   }
 
   async recordFailure(key: string): Promise<void> {
-    const entry = await this.getEntry(key);
-    entry.failures++;
-    entry.lastFailureAt = Date.now();
+    await this.withKeyLock(key, async () => {
+      const entry = await this.getEntry(key);
+      entry.failures++;
+      entry.lastFailureAt = Date.now();
 
-    if (entry.state === "HALF_OPEN") {
-      entry.state = "OPEN";
-      entry.halfOpenAttempts = 0;
-    } else if (entry.failures >= this.threshold) {
-      entry.state = "OPEN";
-    }
-    await this.saveEntry(key, entry);
+      if (entry.state === "HALF_OPEN") {
+        entry.state = "OPEN";
+        entry.halfOpenAttempts = 0;
+      } else if (entry.failures >= this.threshold) {
+        entry.state = "OPEN";
+      }
+      await this.saveEntry(key, entry);
+    });
   }
 
   async isOpen(key: string): Promise<boolean> {
@@ -158,30 +183,32 @@ export class SharedCircuitBreaker implements ICircuitBreaker {
   }
 
   async getState(key: string): Promise<CircuitState> {
-    const entry = await this.getEntry(key);
+    return this.withKeyLock(key, async () => {
+      const entry = await this.getEntry(key);
 
-    if (entry.state === "OPEN") {
-      if (Date.now() - entry.lastFailureAt >= this.resetMs) {
-        entry.state = "HALF_OPEN";
-        entry.halfOpenAttempts = 0;
+      if (entry.state === "OPEN") {
+        if (Date.now() - entry.lastFailureAt >= this.resetMs) {
+          entry.state = "HALF_OPEN";
+          entry.halfOpenAttempts = 0;
+          await this.saveEntry(key, entry);
+          return "HALF_OPEN";
+        }
+        return "OPEN";
+      }
+
+      if (entry.state === "HALF_OPEN") {
+        if (entry.halfOpenAttempts >= this.halfOpenMax) {
+          entry.state = "OPEN";
+          await this.saveEntry(key, entry);
+          return "OPEN";
+        }
+        entry.halfOpenAttempts++;
         await this.saveEntry(key, entry);
         return "HALF_OPEN";
       }
-      return "OPEN";
-    }
 
-    if (entry.state === "HALF_OPEN") {
-      if (entry.halfOpenAttempts >= this.halfOpenMax) {
-        entry.state = "OPEN";
-        await this.saveEntry(key, entry);
-        return "OPEN";
-      }
-      entry.halfOpenAttempts++;
-      await this.saveEntry(key, entry);
-      return "HALF_OPEN";
-    }
-
-    return "CLOSED";
+      return "CLOSED";
+    });
   }
 
   async reset(key: string): Promise<void> {
@@ -198,7 +225,8 @@ export class SharedCircuitBreaker implements ICircuitBreaker {
 export function createCircuitBreaker(
   config: CircuitBreakerConfig = {},
   storage?: IStorageEngine,
+  lock?: ILockAdapter,
 ): ICircuitBreaker {
-  if (storage) return new SharedCircuitBreaker(config, storage);
+  if (storage) return new SharedCircuitBreaker(config, storage, lock);
   return new MemoryCircuitBreaker(config);
 }

@@ -65,6 +65,7 @@ export interface ScheduleDefinition<TPayload = unknown> {
 
   // Schedule configurations
   runAt?: Date;
+  /** Repeating relative interval. For one-shot delayed schedules, use runAt. */
   runAfter?: ScheduleRunAfter;
   recurring?: ScheduleRecurring;
   rrule?: string;
@@ -73,6 +74,8 @@ export interface ScheduleDefinition<TPayload = unknown> {
   // Execution Logic
   timezone?: string;
   missedFire?: MissedFirePolicy;
+  /** Maximum occurrences replayed for missedFire="run-all". Default: 100. */
+  maxMissedRuns?: number;
   overlap?: OverlapPolicy;
   guaranteedWorker?: boolean;
   heartbeatMs?: number;

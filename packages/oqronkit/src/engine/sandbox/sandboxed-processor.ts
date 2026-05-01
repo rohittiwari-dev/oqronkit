@@ -15,6 +15,10 @@ import type { Logger } from "../logger/index.js";
  * 3. **Memory limits** — configurable V8 heap limit per thread via
  *    `resourceLimits.maxOldGenerationSizeMb`.
  *
+ * This is not a security sandbox for untrusted code. The worker can still use
+ * process capabilities available to the current OS user. Use OS/container
+ * isolation for hostile or tenant-provided handlers.
+ *
  * **Usage:**
  * ```ts
  * const sandbox = new SandboxedProcessor({

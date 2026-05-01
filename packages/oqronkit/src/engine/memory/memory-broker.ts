@@ -24,16 +24,58 @@ export class MemoryBroker implements IBrokerEngine {
     return `${brokerName}${this.lockSeparator}${id}`;
   }
 
+  private removeQueuedId(brokerName: string, id: string): void {
+    const waiting = this.waitLists.get(brokerName);
+    if (waiting) {
+      this.waitLists.set(
+        brokerName,
+        waiting.filter((queuedId) => queuedId !== id),
+      );
+    }
+
+    const priority = this.priorityLists.get(brokerName);
+    if (priority) {
+      this.priorityLists.set(
+        brokerName,
+        priority.filter((entry) => entry.id !== id),
+      );
+    }
+
+    const delayed = this.delayed.get(brokerName);
+    if (delayed) {
+      this.delayed.set(
+        brokerName,
+        delayed.filter((entry) => entry.id !== id),
+      );
+    }
+  }
+
+  private nextDelayedDueInMs(brokerName: string): number | null {
+    const delayed = this.delayed.get(brokerName) || [];
+    if (delayed.length === 0) return null;
+    const nextRunAt = Math.min(...delayed.map((entry) => entry.runAt));
+    return Math.max(0, nextRunAt - Date.now());
+  }
+
+  private scheduleDelayedWake(brokerName: string, delayMs: number): void {
+    const timer = setTimeout(() => {
+      this.events.emit(`broker:ready:${brokerName}`);
+    }, Math.max(0, delayMs));
+    timer.unref();
+  }
+
   async publish(
     brokerName: string,
     id: string,
     delayMs?: number,
     priority?: number,
   ): Promise<void> {
+    this.removeQueuedId(brokerName, id);
     if (delayMs && delayMs > 0) {
       const list = this.delayed.get(brokerName) || [];
       list.push({ runAt: Date.now() + delayMs, id, priority });
       this.delayed.set(brokerName, list);
+      this.scheduleDelayedWake(brokerName, delayMs);
     } else if (priority !== undefined) {
       // Priority: insert into sorted priority list
       const list = this.priorityLists.get(brokerName) || [];
@@ -158,15 +200,23 @@ export class MemoryBroker implements IBrokerEngine {
 
   async ack(brokerName: string, id: string): Promise<void> {
     this.activeLocks.delete(this.lockKey(brokerName, id));
+    this.removeQueuedId(brokerName, id);
   }
 
-  async nack(brokerName: string, id: string, delayMs?: number): Promise<void> {
+  async nack(
+    brokerName: string,
+    id: string,
+    delayMs?: number,
+    priority?: number,
+  ): Promise<void> {
     this.activeLocks.delete(this.lockKey(brokerName, id));
+    this.removeQueuedId(brokerName, id);
 
     if (delayMs && delayMs > 0) {
       const list = this.delayed.get(brokerName) || [];
-      list.push({ runAt: Date.now() + delayMs, id });
+      list.push({ runAt: Date.now() + delayMs, id, priority });
       this.delayed.set(brokerName, list);
+      this.scheduleDelayedWake(brokerName, delayMs);
     } else {
       const waiting = this.waitLists.get(brokerName) || [];
       waiting.unshift(id);
@@ -203,25 +253,34 @@ export class MemoryBroker implements IBrokerEngine {
     return new Promise<string | null>((resolve) => {
       let settled = false;
       const eventName = `broker:ready:${brokerName}`;
+      let dueTimer: ReturnType<typeof setTimeout> | undefined;
 
-      const timer = setTimeout(() => {
+      const timeoutTimer = setTimeout(() => {
         if (settled) return;
         settled = true;
+        if (dueTimer) clearTimeout(dueTimer);
         this.events.removeListener(eventName, onReady);
         resolve(null);
       }, timeoutMs);
-      timer.unref();
+      timeoutTimer.unref();
 
       const onReady = async () => {
         if (settled) return;
         const claimed = await this.claim(brokerName, consumerId, 1, lockTtlMs, strategy);
         if (claimed.length > 0) {
           settled = true;
-          clearTimeout(timer);
+          clearTimeout(timeoutTimer);
+          if (dueTimer) clearTimeout(dueTimer);
           this.events.removeListener(eventName, onReady);
           resolve(claimed[0]);
         }
       };
+
+      const dueInMs = this.nextDelayedDueInMs(brokerName);
+      if (dueInMs !== null && dueInMs <= timeoutMs) {
+        dueTimer = setTimeout(() => void onReady(), dueInMs);
+        dueTimer.unref();
+      }
 
       this.events.on(eventName, onReady);
     });

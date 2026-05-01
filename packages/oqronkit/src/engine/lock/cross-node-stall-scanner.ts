@@ -83,7 +83,7 @@ export class CrossNodeStallScanner {
     prefix: string,
     onStalled: (job: OqronJob) => Promise<void> | void,
   ): Promise<number> {
-    const filter: Record<string, any> = { status: "active" };
+    const activeStatuses = ["active", "running"];
 
     // If specific queue names are configured, scan only those
     const queueNames = this.config.queueNames;
@@ -93,16 +93,22 @@ export class CrossNodeStallScanner {
       // Scan each queue separately
       activeJobs = [];
       for (const qn of queueNames) {
-        const jobs = await this.storage.list<OqronJob>("jobs", {
-          ...filter,
-          queueName: qn,
-        }, { limit: 1000 });
-        activeJobs.push(...jobs);
+        for (const status of activeStatuses) {
+          const jobs = await this.storage.list<OqronJob>("jobs", {
+            status,
+            queueName: qn,
+          }, { limit: 1000 });
+          activeJobs.push(...jobs);
+        }
       }
     } else {
-      activeJobs = await this.storage.list<OqronJob>("jobs", filter, {
-        limit: 10_000,
-      });
+      activeJobs = [];
+      for (const status of activeStatuses) {
+        const jobs = await this.storage.list<OqronJob>("jobs", { status }, {
+          limit: 10_000,
+        });
+        activeJobs.push(...jobs);
+      }
     }
 
     if (activeJobs.length === 0) return 0;
@@ -135,7 +141,7 @@ export class CrossNodeStallScanner {
         if (!job.timeline) job.timeline = [];
         job.timeline.push({
           ts: new Date(),
-          from: "active",
+          from: job.status,
           to: "stalled",
           reason: `Cross-node scan: Worker ${job.workerId} lock expired`,
         });

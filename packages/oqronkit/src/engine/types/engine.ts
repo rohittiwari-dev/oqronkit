@@ -70,8 +70,13 @@ export interface IBrokerEngine {
     strategy?: BrokerStrategy,
   ): Promise<string[]>;
 
-  /** Renews the lock heartbeat */
-  extendLock(id: string, consumerId: string, lockTtlMs: number): Promise<void>;
+  /** Renews the lock heartbeat. brokerName is optional for backward compatibility. */
+  extendLock(
+    id: string,
+    consumerId: string,
+    lockTtlMs: number,
+    brokerName?: string,
+  ): Promise<void>;
 
   /** Pops the entity out of the active broker locking list permanently */
   ack(brokerName: string, id: string): Promise<void>;
@@ -81,7 +86,12 @@ export interface IBrokerEngine {
    * Used for crash-safe retries: the job goes back to the waiting list with an
    * optional delay, so even if the process dies, the job is NOT lost.
    */
-  nack(brokerName: string, id: string, delayMs?: number): Promise<void>;
+  nack(
+    brokerName: string,
+    id: string,
+    delayMs?: number,
+    priority?: number,
+  ): Promise<void>;
 
   /** Pauses/Resumes all emissions from a specific broker namespace */
   pause(brokerName: string): Promise<void>;

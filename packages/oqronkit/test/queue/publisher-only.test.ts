@@ -87,6 +87,24 @@ describe("Publisher-Only Queue (no handler)", () => {
     expect(job.id).toBe("my-unique-key");
   });
 
+  it("rejects duplicate custom job IDs instead of overwriting persisted jobs", async () => {
+    const pubQueue = queue<{ data: number }>({ name: "idem-reject-pub" });
+
+    await pubQueue.add({ data: 1 }, { jobId: "dup-key" });
+
+    await expect(
+      pubQueue.add({ data: 2 }, { jobId: "dup-key" }),
+    ).rejects.toThrow("already exists");
+  });
+
+  it("rejects dependencies on missing parent jobs", async () => {
+    const pubQueue = queue<{ data: number }>({ name: "missing-parent-pub" });
+
+    await expect(
+      pubQueue.add({ data: 1 }, { dependsOn: ["missing-parent"] }),
+    ).rejects.toThrow("Missing dependency parent");
+  });
+
   it("QueueEngine should NOT start polling for handler-less queues", async () => {
     // Register a publisher-only queue
     queue<{ x: number }>({ name: "no-poll-queue" });

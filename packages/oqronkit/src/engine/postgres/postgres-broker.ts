@@ -145,21 +145,29 @@ export class PostgresBroker implements IBrokerEngine {
     id: string,
     consumerId: string,
     lockTtlMs: number,
+    brokerName?: string,
   ): Promise<void> {
     await this.ensureTable();
     const lockUntil = new Date(Date.now() + lockTtlMs).toISOString();
 
-    const result = await this.pool.query(
-      `UPDATE ${this.tableName}
-       SET locked_until = $1::timestamptz
-       WHERE id = $2
-         AND locked_by = $3
-         AND (
-           SELECT COUNT(*) FROM ${this.tableName}
-           WHERE id = $2 AND locked_by = $3
-         ) = 1`,
-      [lockUntil, id, consumerId],
-    );
+    const result = brokerName
+      ? await this.pool.query(
+          `UPDATE ${this.tableName}
+           SET locked_until = $1::timestamptz
+           WHERE broker_name = $2 AND id = $3 AND locked_by = $4`,
+          [lockUntil, brokerName, id, consumerId],
+        )
+      : await this.pool.query(
+          `UPDATE ${this.tableName}
+           SET locked_until = $1::timestamptz
+           WHERE id = $2
+             AND locked_by = $3
+             AND (
+               SELECT COUNT(*) FROM ${this.tableName}
+               WHERE id = $2 AND locked_by = $3
+             ) = 1`,
+          [lockUntil, id, consumerId],
+        );
 
     if (result.rowCount === 0) {
       throw new Error(`Lock lost or stolen for entity ${id}`);
@@ -174,7 +182,12 @@ export class PostgresBroker implements IBrokerEngine {
     );
   }
 
-  async nack(brokerName: string, id: string, delayMs?: number): Promise<void> {
+  async nack(
+    brokerName: string,
+    id: string,
+    delayMs?: number,
+    priority?: number,
+  ): Promise<void> {
     await this.ensureTable();
     const runAt =
       delayMs && delayMs > 0
@@ -183,9 +196,10 @@ export class PostgresBroker implements IBrokerEngine {
 
     await this.pool.query(
       `UPDATE ${this.tableName}
-       SET locked_by = NULL, locked_until = NULL, run_at = $1::timestamptz
+       SET locked_by = NULL, locked_until = NULL, run_at = $1::timestamptz,
+           priority = COALESCE($4, priority)
        WHERE broker_name = $2 AND id = $3`,
-      [runAt, brokerName, id],
+      [runAt, brokerName, id, priority],
     );
   }
 

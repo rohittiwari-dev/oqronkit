@@ -33,6 +33,8 @@ export interface CronDefinition {
   intervalMs?: number; // interval in ms   (resolved from `every` config)
   timezone?: string;
   missedFire?: MissedFirePolicy;
+  /** Maximum occurrences replayed for missedFire="run-all". Default: 100. */
+  maxMissedRuns?: number;
   overlap?: OverlapPolicy;
   guaranteedWorker?: boolean;
   heartbeatMs?: number;

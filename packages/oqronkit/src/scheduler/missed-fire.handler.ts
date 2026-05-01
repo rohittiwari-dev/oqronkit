@@ -50,6 +50,8 @@ export class MissedFireHandler {
     try {
       let missed = false;
       const missedDates: Date[] = [];
+      const maxMissedRuns = Math.max(1, def.maxMissedRuns ?? 100);
+      let droppedMissedRuns = 0;
 
       if (def.expression) {
         const opts = { currentDate: lastRunAt, tz: def.timezone };
@@ -60,7 +62,11 @@ export class MissedFireHandler {
             // Enumerate all missed occurrences between lastRunAt and now
             let next = interval.next().toDate();
             while (next <= now) {
-              missedDates.push(next);
+              if (missedDates.length < maxMissedRuns) {
+                missedDates.push(next);
+              } else {
+                droppedMissedRuns++;
+              }
               try {
                 next = interval.next().toDate();
               } catch {
@@ -92,7 +98,11 @@ export class MissedFireHandler {
           // Enumerate all missed interval ticks
           let tickTime = new Date(lastRunAt.getTime() + def.intervalMs);
           while (tickTime <= now) {
-            missedDates.push(tickTime);
+            if (missedDates.length < maxMissedRuns) {
+              missedDates.push(tickTime);
+            } else {
+              droppedMissedRuns++;
+            }
             tickTime = new Date(tickTime.getTime() + def.intervalMs);
           }
         } else if (missed) {
@@ -105,12 +115,15 @@ export class MissedFireHandler {
           name: def.name,
           policy: def.missedFire,
           count: missedDates.length,
+          dropped: droppedMissedRuns,
         });
 
         if (def.hooks?.onMissedFire) {
           try {
-            const ctx = createMissedFireContext(def.name, this.logger, now);
-            await def.hooks.onMissedFire(ctx, lastRunAt);
+            for (const missedAt of missedDates) {
+              const ctx = createMissedFireContext(def.name, this.logger, missedAt);
+              await def.hooks.onMissedFire(ctx, missedAt);
+            }
           } catch (err) {
             this.logger.error("onMissedFire hook threw", {
               name: def.name,
