@@ -1,11 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type { IOqronModule, Logger } from "../engine/index.js";
 import { OqronContainer, OqronEventBus } from "../engine/index.js";
-import { HeartbeatWorker } from "../engine/lock/heartbeat-worker.js";
-import { CrossNodeStallScanner } from "../engine/lock/cross-node-stall-scanner.js";
-import { StallDetector } from "../engine/lock/stall-detector.js";
 import { LagMonitor } from "../engine/lag-monitor.js";
-import { ReconciliationEngine } from "../engine/utils/reconciliation-engine.js";
+import { CrossNodeStallScanner } from "../engine/lock/cross-node-stall-scanner.js";
+import { HeartbeatWorker } from "../engine/lock/heartbeat-worker.js";
+import { StallDetector } from "../engine/lock/stall-detector.js";
 import type { OqronConfig } from "../engine/types/config.types.js";
 import type { BrokerStrategy } from "../engine/types/engine.js";
 import type { OqronJob } from "../engine/types/job.types.js";
@@ -14,12 +13,22 @@ import {
   calculateBackoff,
 } from "../engine/utils/backoffs.js";
 import { pruneAfterCompletion } from "../engine/utils/job-retention.js";
+import { ReconciliationEngine } from "../engine/utils/reconciliation-engine.js";
 import type { WebhookModuleDef } from "../modules.js";
-import { createCircuitBreaker, type ICircuitBreaker } from "./circuit-breaker.js";
+import { rateLimit } from "../ratelimit/define-ratelimit.js";
+import type { IRateLimiter } from "../ratelimit/types.js";
+import {
+  createCircuitBreaker,
+  type ICircuitBreaker,
+} from "./circuit-breaker.js";
 import { deliverWebhook, shouldRetryDelivery } from "./delivery.js";
 import { signWebhookPayload } from "./hmac.js";
 import { deregisterWebhook, getRegisteredWebhooks } from "./registry.js";
-import type { WebhookConfig, WebhookDeliveryPayload } from "./types.js";
+import type {
+  WebhookConfig,
+  WebhookDeliveryPayload,
+  WebhookEndpoint,
+} from "./types.js";
 
 export class WebhookEngine implements IOqronModule {
   public readonly name = "webhook";
@@ -39,6 +48,7 @@ export class WebhookEngine implements IOqronModule {
   private lagMonitor: LagMonitor | null = null;
   private reconciler: ReconciliationEngine | null = null;
   private circuitBreaker: ICircuitBreaker | null = null;
+  private outboundLimiters = new Map<string, IRateLimiter>();
 
   private timers: NodeJS.Timeout[] = [];
 
@@ -59,24 +69,36 @@ export class WebhookEngine implements IOqronModule {
     // Version-based config migration (parity with queue-engine/worker-engine)
     for (const d of dispatchers) {
       const codeVersion = d.version ?? 0;
-      const existing = await this.di.storage.get<any>("webhook_instances", d.name);
+      const existing = await this.di.storage.get<any>(
+        "webhook_instances",
+        d.name,
+      );
       const dbVersion = existing?.version ?? 0;
 
       // Downgrade protection — don't overwrite newer DB state with older code
       if (existing && codeVersion < dbVersion) {
         this.logger.warn("Code version is older than DB — skipping overwrite", {
-          name: d.name, codeVersion, dbVersion,
+          name: d.name,
+          codeVersion,
+          dbVersion,
         });
       } else if (existing && codeVersion > dbVersion) {
         this.logger.info("Webhook config version upgraded", {
-          name: d.name, from: dbVersion, to: codeVersion,
+          name: d.name,
+          from: dbVersion,
+          to: codeVersion,
         });
         await this.di.storage.save("webhook_instances", d.name, {
           ...(existing || {}),
           version: codeVersion,
           enabled: existing.enabled ?? true,
         });
-        OqronEventBus.emit("webhook:version-upgraded", d.name, dbVersion, codeVersion);
+        OqronEventBus.emit(
+          "webhook:version-upgraded",
+          d.name,
+          dbVersion,
+          codeVersion,
+        );
       } else if (!existing) {
         // First registration — seed the instance record
         await this.di.storage.save("webhook_instances", d.name, {
@@ -86,7 +108,10 @@ export class WebhookEngine implements IOqronModule {
       }
 
       // Load persisted pause state into memory
-      const instanceState = await this.di.storage.get<any>("webhook_instances", d.name);
+      const instanceState = await this.di.storage.get<any>(
+        "webhook_instances",
+        d.name,
+      );
       if (instanceState && instanceState.enabled === false) {
         this.pausedDispatchers.add(d.name);
       }
@@ -179,9 +204,12 @@ export class WebhookEngine implements IOqronModule {
     // Start cross-node stall scanner (B2) — recovers orphaned jobs from crashed nodes
     const scannerConfig = this.webhookConfig?.crossNodeStallScanner;
     if (scannerConfig) {
-      const scannerOpts = typeof scannerConfig === "object" ? scannerConfig : {};
+      const scannerOpts =
+        typeof scannerConfig === "object" ? scannerConfig : {};
       this.crossNodeScanner = new CrossNodeStallScanner(
-        this.di.storage, this.di.lock, this.logger,
+        this.di.storage,
+        this.di.lock,
+        this.logger,
         {
           intervalMs: scannerOpts.intervalMs ?? 60_000,
           lockPrefix: "webhook",
@@ -212,7 +240,10 @@ export class WebhookEngine implements IOqronModule {
     if (reconConfig) {
       const reconOpts = typeof reconConfig === "object" ? reconConfig : {};
       this.reconciler = new ReconciliationEngine(
-        this.di.storage, this.di.broker, this.di.lock, this.logger,
+        this.di.storage,
+        this.di.broker,
+        this.di.lock,
+        this.logger,
         {
           intervalMs: reconOpts.intervalMs ?? 120_000,
           waitingThresholdMs: reconOpts.waitingThresholdMs ?? 300_000,
@@ -266,45 +297,44 @@ export class WebhookEngine implements IOqronModule {
 
     this.isPolling.add(dispatcher.name);
     try {
-    const queueName = dispatcher.name;
-    const concurrency =
-      dispatcher.concurrency ?? this.webhookConfig?.concurrency ?? 5;
-    const lockTtlMs = this.webhookConfig?.lockTtlMs ?? 30000;
-    const strategy: BrokerStrategy =
-      this.webhookConfig?.strategy ?? "fifo";
+      const queueName = dispatcher.name;
+      const concurrency =
+        dispatcher.concurrency ?? this.webhookConfig?.concurrency ?? 5;
+      const lockTtlMs = this.webhookConfig?.lockTtlMs ?? 30000;
+      const strategy: BrokerStrategy = this.webhookConfig?.strategy ?? "fifo";
 
-    const activeSet = this.activeJobsByDispatcher.get(queueName);
-    const activeCount = activeSet?.size ?? 0;
-    const freeSlots = concurrency - activeCount;
+      const activeSet = this.activeJobsByDispatcher.get(queueName);
+      const activeCount = activeSet?.size ?? 0;
+      const freeSlots = concurrency - activeCount;
 
-    if (freeSlots <= 0) return;
+      if (freeSlots <= 0) return;
 
-    // Claim jobs from the broker
-    const jobIds = await this.di.broker.claim(
-      queueName,
-      this.workerIdStr,
-      freeSlots,
-      lockTtlMs,
-      strategy,
-    );
+      // Claim jobs from the broker
+      const jobIds = await this.di.broker.claim(
+        queueName,
+        this.workerIdStr,
+        freeSlots,
+        lockTtlMs,
+        strategy,
+      );
 
-    for (const jobId of jobIds) {
-      if (!this.running || !this.enabled) {
-        await this.di.broker.nack(queueName, jobId);
-        continue;
+      for (const jobId of jobIds) {
+        if (!this.running || !this.enabled) {
+          await this.di.broker.nack(queueName, jobId);
+          continue;
+        }
+
+        const promise = this.processJob(dispatcher, jobId);
+        this.activeJobs.set(jobId, promise);
+        activeSet?.add(jobId);
+
+        promise
+          .catch((e) => this.logger.error("Job process loop failed", e))
+          .finally(() => {
+            this.activeJobs.delete(jobId);
+            activeSet?.delete(jobId);
+          });
       }
-
-      const promise = this.processJob(dispatcher, jobId);
-      this.activeJobs.set(jobId, promise);
-      activeSet?.add(jobId);
-
-      promise
-        .catch((e) => this.logger.error("Job process loop failed", e))
-        .finally(() => {
-          this.activeJobs.delete(jobId);
-          activeSet?.delete(jobId);
-        });
-    }
     } finally {
       this.isPolling.delete(dispatcher.name);
     }
@@ -444,12 +474,51 @@ export class WebhookEngine implements IOqronModule {
 
       await updateProgress(30); // Payload signed
 
-      // G7: Check circuit breaker before sending
       const endpointKey = `${dispatcher.name}:${payload.endpointName}`;
-      if (this.circuitBreaker && await this.circuitBreaker.isOpen(endpointKey)) {
-        this.logger.warn(`Circuit OPEN for ${endpointKey} — skipping delivery, re-queuing`);
+
+      // G8: Outbound rate limiting per endpoint
+      const limiter = this.resolveOutboundLimiter(
+        dispatcher,
+        payload.endpointName,
+      );
+      if (limiter) {
+        const rlResult = await limiter.check({ key: endpointKey });
+        if (!rlResult.allowed) {
+          const delayMs = rlResult.resetMs || 5000;
+          this.logger.warn(
+            `Outbound rate limit hit for ${endpointKey}, re-queuing in ${delayMs}ms`,
+          );
+          job.logs ??= [];
+          job.logs.push({
+            ts: new Date(),
+            level: "warn",
+            msg: `Rate limited — re-queuing with ${delayMs}ms delay`,
+          });
+          await this.di.storage.save("jobs", jobId, job);
+          const hb = this.heartbeats.get(jobId);
+          if (hb) {
+            await hb.stop();
+            this.heartbeats.delete(jobId);
+          }
+          await this.di.lock.release(lockKey, this.workerIdStr);
+          await this.di.broker.nack(dispatcher.name, jobId, delayMs);
+          return;
+        }
+      }
+
+      // G7: Check circuit breaker before sending
+      if (
+        this.circuitBreaker &&
+        (await this.circuitBreaker.isOpen(endpointKey))
+      ) {
+        this.logger.warn(
+          `Circuit OPEN for ${endpointKey} — skipping delivery, re-queuing`,
+        );
         const hb = this.heartbeats.get(jobId);
-        if (hb) { await hb.stop(); this.heartbeats.delete(jobId); }
+        if (hb) {
+          await hb.stop();
+          this.heartbeats.delete(jobId);
+        }
         await this.di.lock.release(lockKey, this.workerIdStr);
         await this.di.broker.nack(dispatcher.name, jobId, 15000);
         return;
@@ -487,7 +556,9 @@ export class WebhookEngine implements IOqronModule {
         const retryStatusCodes = dispatcher.retries?.retryOnStatus;
         if (shouldRetryDelivery(result.status, retryStatusCodes)) {
           throw Object.assign(
-            new Error(`HTTP ${result.status} Response. Body: ${result.body?.substring(0, 50)}...`),
+            new Error(
+              `HTTP ${result.status} Response. Body: ${result.body?.substring(0, 50)}...`,
+            ),
             { retryAfterMs: result.retryAfterMs },
           );
         } else {
@@ -695,6 +766,9 @@ export class WebhookEngine implements IOqronModule {
     this.reconciler?.stop();
     this.reconciler = null;
 
+    // G8: Cleanup outbound rate limiters
+    this.outboundLimiters.clear();
+
     for (const consumerStop of this.consumersByQueue.values()) {
       await consumerStop();
     }
@@ -773,7 +847,12 @@ export class WebhookEngine implements IOqronModule {
     }
     this.activeJobs.delete(jobId);
     this.abortControllers.delete(jobId);
-    OqronEventBus.emit("job:fail", job?.queueName ?? "unknown", jobId, new Error("Cancelled"));
+    OqronEventBus.emit(
+      "job:fail",
+      job?.queueName ?? "unknown",
+      jobId,
+      new Error("Cancelled"),
+    );
     return true;
   }
 
@@ -805,7 +884,9 @@ export class WebhookEngine implements IOqronModule {
       this.startPolling(config);
     }
     OqronEventBus.emit("webhook:registered", config.name);
-    this.logger.info(`Webhook dispatcher "${config.name}" registered at runtime`);
+    this.logger.info(
+      `Webhook dispatcher "${config.name}" registered at runtime`,
+    );
   }
 
   /** G4: Deregister a dispatcher and stop its polling */
@@ -821,6 +902,101 @@ export class WebhookEngine implements IOqronModule {
     OqronEventBus.emit("webhook:deregistered", name);
     this.logger.info(`Webhook dispatcher "${name}" deregistered`);
     return true;
+  }
+
+  // ── G10: Resend API ─────────────────────────────────────────────────────────
+
+  /** Clone a failed/DLQ webhook job and re-enqueue for delivery. */
+  async resendJob(jobId: string): Promise<string | null> {
+    const original = await this.di.storage.get<OqronJob>("jobs", jobId);
+    if (!original) return null;
+    if (original.status !== "failed") return null;
+
+    const newId = randomUUID();
+    const clone: OqronJob = {
+      ...original,
+      id: newId,
+      status: "waiting",
+      attemptMade: 0,
+      error: undefined,
+      stacktrace: undefined,
+      returnValue: undefined,
+      retriedFromId: jobId,
+      triggeredBy: "retry",
+      startedAt: undefined,
+      finishedAt: undefined,
+      durationMs: undefined,
+      latencyMs: undefined,
+      memoryUsageMb: undefined,
+      processedOn: undefined,
+      queuedAt: new Date(),
+      progressPercent: 0,
+      progressLabel: undefined,
+      workerId: undefined,
+      stalledCount: undefined,
+      createdAt: new Date(),
+      timeline: [
+        {
+          ts: new Date(),
+          from: original.status,
+          to: "waiting" as const,
+          reason: "Manual resend",
+        },
+      ],
+      logs: [],
+      steps: undefined,
+    };
+
+    await this.di.storage.save("jobs", newId, clone);
+    // Annotate the original with lineage
+    await this.di.storage.save("jobs", jobId, {
+      ...original,
+      retryReason: `Resent as ${newId}`,
+    });
+    await this.di.broker.publish(original.queueName, newId);
+    OqronEventBus.emit("job:retried", jobId, newId);
+    this.logger.info(`Webhook job ${jobId} resent as ${newId}`);
+    return newId;
+  }
+
+  // ── G8: Outbound Rate Limiter Helper ────────────────────────────────────────
+
+  /** Resolve the outbound rate limiter for an endpoint (lazy-create or user-provided) */
+  private resolveOutboundLimiter(
+    dispatcher: WebhookConfig,
+    endpointName: string,
+  ): IRateLimiter | null {
+    const endpoints = Array.isArray(dispatcher.endpoints)
+      ? dispatcher.endpoints
+      : [];
+    const ep = endpoints.find((e: WebhookEndpoint) => e.name === endpointName);
+    if (!ep) return null;
+
+    // Option B: User-provided limiter takes precedence
+    if (ep.rateLimiter) return ep.rateLimiter;
+
+    // Option A: Auto-create from simple config
+    if (!ep.rateLimit) return null;
+
+    const key = `${dispatcher.name}:${ep.name}`;
+    const existing = this.outboundLimiters.get(key);
+    if (existing) return existing;
+
+    const created = rateLimit.create({
+      name: `webhook:outbound:${key}`,
+      algorithm: "sliding-window",
+      tiers: [
+        {
+          name: "outbound",
+          key: () => key,
+          max: ep.rateLimit.max,
+          window: ep.rateLimit.window,
+        },
+      ],
+      failOpen: true,
+    });
+    this.outboundLimiters.set(key, created);
+    return created;
   }
 
   async enable(): Promise<void> {

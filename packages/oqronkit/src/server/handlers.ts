@@ -444,6 +444,66 @@ export async function handleAdminRateLimiters(
   return { status: 200, body: { ok: true, limiter: rec, stats } };
 }
 
+// ── Webhook Handlers (G12) ────────────────────────────────────────────────
+
+export async function handleAdminWebhooks(
+  req: MonitorRequest,
+): Promise<MonitorResponse> {
+  const mgr = getManager();
+  if (!mgr)
+    return { status: 503, body: { ok: false, error: "Manager not initialized" } };
+
+  const { name } = req.params;
+
+  // POST actions
+  if (req.method === "POST") {
+    const { action } = req.params;
+
+    if (action === "pause") {
+      const ok = await mgr.pauseWebhookDispatcher(name);
+      return { status: ok ? 200 : 404, body: { ok } };
+    }
+    if (action === "resume") {
+      const ok = await mgr.resumeWebhookDispatcher(name);
+      return { status: ok ? 200 : 404, body: { ok } };
+    }
+
+    // Resend a specific job
+    const { jobId } = req.params;
+    if (jobId) {
+      const newId = await mgr.resendWebhookJob(jobId);
+      if (!newId)
+        return { status: 404, body: { ok: false, error: "Job not found or not in failed/dead-letter state" } };
+      return { status: 200, body: { ok: true, newJobId: newId } };
+    }
+
+    return { status: 400, body: { ok: false, error: "Unknown action" } };
+  }
+
+  // GET sub-resources
+  const { subResource } = req.params;
+
+  if (subResource === "deliveries") {
+    const limit = Number(req.query.limit ?? 50);
+    const offset = Number(req.query.offset ?? 0);
+    const status = req.query.status;
+    const result = await mgr.getWebhookDeliveries(name, { status, limit, offset });
+    return { status: 200, body: { ok: true, ...result } };
+  }
+
+  // GET single dispatcher detail
+  if (name) {
+    const detail = await mgr.getWebhookDispatcherDetail(name);
+    if (!detail)
+      return { status: 404, body: { ok: false, error: "Dispatcher not found" } };
+    return { status: 200, body: { ok: true, dispatcher: detail } };
+  }
+
+  // GET list all dispatchers
+  const dispatchers = await mgr.listWebhookDispatchers();
+  return { status: 200, body: { ok: true, dispatchers } };
+}
+
 // ── Unified Dispatcher ────────────────────────────────────────────────────────
 
 export async function dispatch(req: MonitorRequest): Promise<MonitorResponse> {
@@ -608,6 +668,42 @@ export async function dispatch(req: MonitorRequest): Promise<MonitorResponse> {
   if (rlKeyDeleteMatch && method === "DELETE") {
     req.params = { ...req.params, name: rlKeyDeleteMatch[1], key: rlKeyDeleteMatch[2] };
     return handleAdminRateLimiters(req);
+  }
+
+  // ── Webhook Routes (G12) ──────────────────────────────────────────────────
+
+  // GET  /admin/webhooks — list all dispatchers
+  if (method === "GET" && path === "/admin/webhooks") {
+    req.params = { ...req.params };
+    return handleAdminWebhooks(req);
+  }
+
+  // GET  /admin/webhooks/:name — dispatcher detail
+  const whDetailMatch = path.match(/^\/admin\/webhooks\/([^/]+)$/);
+  if (whDetailMatch && method === "GET") {
+    req.params = { ...req.params, name: whDetailMatch[1] };
+    return handleAdminWebhooks(req);
+  }
+
+  // GET  /admin/webhooks/:name/deliveries — delivery history
+  const whDeliveriesMatch = path.match(/^\/admin\/webhooks\/([^/]+)\/deliveries$/);
+  if (whDeliveriesMatch && method === "GET") {
+    req.params = { ...req.params, name: whDeliveriesMatch[1], subResource: "deliveries" };
+    return handleAdminWebhooks(req);
+  }
+
+  // POST /admin/webhooks/:name/(pause|resume) — dispatcher control
+  const whActionMatch = path.match(/^\/admin\/webhooks\/([^/]+)\/(pause|resume)$/);
+  if (whActionMatch && method === "POST") {
+    req.params = { ...req.params, name: whActionMatch[1], action: whActionMatch[2] };
+    return handleAdminWebhooks(req);
+  }
+
+  // POST /admin/webhooks/jobs/:id/resend — resend a failed job
+  const whResendMatch = path.match(/^\/admin\/webhooks\/jobs\/([^/]+)\/resend$/);
+  if (whResendMatch && method === "POST") {
+    req.params = { ...req.params, jobId: whResendMatch[1] };
+    return handleAdminWebhooks(req);
   }
 
   return { status: 404, body: { ok: false, error: "Not found" } };

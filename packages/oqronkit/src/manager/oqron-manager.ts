@@ -580,4 +580,117 @@ export class OqronManager {
 
     return chain;
   }
+
+  // ── G12: Webhook Management ─────────────────────────────────────────────────
+
+  /** Get the WebhookEngine from the registry (if available) */
+  private getWebhookEngine(): any | null {
+    const registry = OqronRegistry.getInstance();
+    const mod = registry.getAll().find((m) => m.name === "webhook");
+    return mod ?? null;
+  }
+
+  /** List all registered webhook dispatchers */
+  async listWebhookDispatchers(): Promise<
+    Array<{
+      name: string;
+      enabled: boolean;
+      endpointCount: number;
+      version: number;
+    }>
+  > {
+    const { getRegisteredWebhooks } = await import("../webhook/registry.js");
+    const dispatchers = getRegisteredWebhooks();
+    const results: Array<{
+      name: string;
+      enabled: boolean;
+      endpointCount: number;
+      version: number;
+    }> = [];
+
+    for (const d of dispatchers) {
+      const instance = await Storage.get<any>("webhook_instances", d.name);
+      const endpoints = Array.isArray(d.endpoints) ? d.endpoints : [];
+      results.push({
+        name: d.name,
+        enabled: instance?.enabled ?? true,
+        endpointCount: endpoints.length,
+        version: d.version ?? 0,
+      });
+    }
+
+    return results;
+  }
+
+  /** Get detailed info for a single webhook dispatcher */
+  async getWebhookDispatcherDetail(
+    name: string,
+  ): Promise<{
+    name: string;
+    enabled: boolean;
+    version: number;
+    method: string;
+    timeout: number;
+    concurrency: number;
+    endpoints: Array<{ name: string; events: string[]; enabled: boolean }>;
+  } | null> {
+    const { getWebhookByName } = await import("../webhook/registry.js");
+    const d = getWebhookByName(name);
+    if (!d) return null;
+
+    const instance = await Storage.get<any>("webhook_instances", name);
+    const endpoints = Array.isArray(d.endpoints) ? d.endpoints : [];
+
+    return {
+      name: d.name,
+      enabled: instance?.enabled ?? true,
+      version: d.version ?? 0,
+      method: d.method ?? "POST",
+      timeout: d.timeout ?? 30000,
+      concurrency: d.concurrency ?? 10,
+      endpoints: endpoints.map((ep: any) => ({
+        name: ep.name,
+        events: ep.events ?? [],
+        enabled: ep.enabled ?? true,
+      })),
+    };
+  }
+
+  /** Query webhook delivery jobs for a specific dispatcher */
+  async getWebhookDeliveries(
+    dispatcherName: string,
+    opts?: { status?: string; limit?: number; offset?: number },
+  ): Promise<{ jobs: OqronJob[]; total: number }> {
+    const filter: JobFilter = {
+      type: "webhook" as JobType,
+      queueName: dispatcherName,
+      status: opts?.status as JobStatus | undefined,
+      limit: opts?.limit ?? 50,
+      offset: opts?.offset ?? 0,
+    };
+    return this.queryJobs(filter);
+  }
+
+  /** Pause a webhook dispatcher */
+  async pauseWebhookDispatcher(name: string): Promise<boolean> {
+    const engine = this.getWebhookEngine();
+    if (!engine || typeof engine.pauseDispatcher !== "function") return false;
+    await engine.pauseDispatcher(name);
+    return true;
+  }
+
+  /** Resume a webhook dispatcher */
+  async resumeWebhookDispatcher(name: string): Promise<boolean> {
+    const engine = this.getWebhookEngine();
+    if (!engine || typeof engine.resumeDispatcher !== "function") return false;
+    await engine.resumeDispatcher(name);
+    return true;
+  }
+
+  /** Resend a failed/DLQ webhook job */
+  async resendWebhookJob(jobId: string): Promise<string | null> {
+    const engine = this.getWebhookEngine();
+    if (!engine || typeof engine.resendJob !== "function") return null;
+    return engine.resendJob(jobId);
+  }
 }

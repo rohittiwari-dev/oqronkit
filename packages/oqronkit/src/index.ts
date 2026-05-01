@@ -129,6 +129,8 @@ export {
 	deleteWebhook,
 	pauseWebhook,
 	resumeWebhook,
+	// G10: Resend/replay
+	resendWebhook,
 	// Signing utilities (B12/B13)
 	verifyWebhookSignature,
 	signWebhookPayload,

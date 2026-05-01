@@ -204,6 +204,7 @@ describe("Webhook Factory (define-webhook)", () => {
       const jobs = await dispatcher.fire("user.created", { val: "test" });
 
       expect(jobs[0].data.headers).toEqual({
+        "Content-Type": "application/json",
         "x-global": "yes",
         "x-local": "abc",
       });

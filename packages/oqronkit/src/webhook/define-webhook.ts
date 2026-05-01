@@ -406,3 +406,14 @@ export async function resumeWebhook(name: string): Promise<void> {
   });
   OqronEventBus.emit("webhook:resumed", name);
 }
+
+/** G10: Resend a failed or dead-letter webhook delivery. Returns new job ID. */
+export async function resendWebhook(jobId: string): Promise<string | null> {
+  const { OqronRegistry } = await import("../engine/registry.js");
+  const registry = OqronRegistry.getInstance();
+  const engine = registry.getAll().find((m) => m.name === "webhook") as any;
+  if (!engine || typeof engine.resendJob !== "function") {
+    throw new Error("Webhook module not initialized — cannot resend");
+  }
+  return engine.resendJob(jobId);
+}
