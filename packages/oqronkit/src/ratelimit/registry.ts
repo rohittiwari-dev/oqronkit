@@ -9,6 +9,10 @@ export function registerLimiter(engine: RateLimitEngine<any>): void {
   registeredLimiters.set(engine.name, engine);
 }
 
+export function deregisterLimiter(name: string): boolean {
+  return registeredLimiters.delete(name);
+}
+
 export function getLimiter(name: string): RateLimitEngine<any> | undefined {
   return registeredLimiters.get(name);
 }

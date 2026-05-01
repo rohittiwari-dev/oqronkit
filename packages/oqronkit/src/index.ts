@@ -160,6 +160,11 @@ export type {
 	RateLimitEvent,
 	RateLimitSnapshot,
 } from "./ratelimit/types.js";
+export {
+	expressMiddleware,
+	honoMiddleware,
+} from "./ratelimit/middleware.js";
+export type { RateLimitMiddlewareOptions } from "./ratelimit/middleware.js";
 
 // ── Trigger Auto-Discovery ──────────────────────────────────────────────────
 

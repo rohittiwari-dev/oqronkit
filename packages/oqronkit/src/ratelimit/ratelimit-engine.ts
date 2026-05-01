@@ -5,6 +5,7 @@ import type { IStorageEngine } from "../engine/types/engine.js";
 import { FixedWindowAlgorithm } from "./algorithms/fixed-window.js";
 import { SlidingWindowAlgorithm } from "./algorithms/sliding-window.js";
 import { TokenBucketAlgorithm } from "./algorithms/token-bucket.js";
+import { getLimiter as _getLimiter } from "./registry.js";
 import type {
   CheckOptions,
   IRateLimitAlgorithm,
@@ -21,7 +22,6 @@ import type {
 import { buildHeaders } from "./utils/headers.js";
 import { applyJitter } from "./utils/jitter.js";
 import { parseWindow } from "./utils/parse-window.js";
-import { getLimiter as _getLimiter } from "./registry.js";
 
 // ── Storage Key Builders ────────────────────────────────────────────────────
 
@@ -33,6 +33,7 @@ const NS_OVERRIDES = "ratelimit:overrides";
 const NS_BANS = "ratelimit:bans";
 const NS_VIOLATIONS = "ratelimit:violations";
 const NS_WARNINGS = "ratelimit:warnings";
+const NS_CIRCUIT = "ratelimit:circuit";
 
 function overrideId(limiterName: string, tier: string, key: string): string {
   return `${limiterName}:${tier}:${key}`;
@@ -74,6 +75,19 @@ interface OverrideRecord {
 interface WarningFired {
   firedAt: number;
   windowId: number;
+}
+
+// ── Circuit Breaker Record (G2) ─────────────────────────────────────────────
+
+interface CircuitRecord {
+  /** Number of consecutive windows at >= 95% utilization */
+  consecutiveFullWindows: number;
+  /** Epoch ms when burst mode expires. null = circuit is closed (normal). */
+  burstUntil: number | null;
+}
+
+function circuitId(limiterName: string, tier: string, key: string): string {
+  return `${limiterName}:${tier}:${key}`;
 }
 
 // ── Helper: Parse a composite admin key "tierName:resolvedKey" ───────────────
@@ -149,10 +163,7 @@ export class RateLimitEngine<TContext = any> implements IRateLimiter<TContext> {
 
   // ── check() — The Main Entry Point ──────────────────────────────────────
 
-  async check(
-    ctx: TContext,
-    opts?: CheckOptions,
-  ): Promise<RateLimitResult> {
+  async check(ctx: TContext, opts?: CheckOptions): Promise<RateLimitResult> {
     const storage = this.getStorage();
 
     // ── Instance toggle check ───────────────────────────────────────────
@@ -222,11 +233,7 @@ export class RateLimitEngine<TContext = any> implements IRateLimiter<TContext> {
       // ── Stats + event write (fire-and-forget, don't block response) ──
       void this._updateStats(storage, result).catch(() => {});
       if (!result.allowed && !this.dryRun) {
-        void this._writeBlockEvent(
-          storage,
-          result,
-          cost,
-        ).catch(() => {});
+        void this._writeBlockEvent(storage, result, cost).catch(() => {});
       }
       return result;
     } catch (err) {
@@ -256,6 +263,27 @@ export class RateLimitEngine<TContext = any> implements IRateLimiter<TContext> {
       }
       throw err;
     }
+  }
+
+  // ── checkMany() — Batch Check ─────────────────────────────────────────────
+
+  /**
+   * Batch check multiple contexts. Returns results in order.
+   * Stops at first block if `stopOnBlock` is true (default).
+   */
+  async checkMany(
+    contexts: TContext[],
+    opts?: CheckOptions & { stopOnBlock?: boolean },
+  ): Promise<RateLimitResult[]> {
+    const results: RateLimitResult[] = [];
+    const stopOnBlock = opts?.stopOnBlock ?? true;
+
+    for (const ctx of contexts) {
+      const result = await this.check(ctx, opts);
+      results.push(result);
+      if (stopOnBlock && !result.allowed) break;
+    }
+    return results;
   }
 
   // ── Core Evaluation Flow ──────────────────────────────────────────────────
@@ -363,9 +391,7 @@ export class RateLimitEngine<TContext = any> implements IRateLimiter<TContext> {
           NS_BANS,
           banId(this.name, tier.name, resolvedKey),
         );
-        const resetMs = banRec
-          ? Math.max(0, banRec.expiresAt - Date.now())
-          : 0;
+        const resetMs = banRec ? Math.max(0, banRec.expiresAt - Date.now()) : 0;
 
         breakdown.push({
           name: tier.name,
@@ -403,12 +429,21 @@ export class RateLimitEngine<TContext = any> implements IRateLimiter<TContext> {
         continue;
       }
 
-      // Check override for this key
       const overrideRec = await storage.get<OverrideRecord>(
         NS_OVERRIDES,
         overrideId(this.name, tier.name, resolvedKey),
       );
-      const effectiveMax = overrideRec?.max ?? tier.max;
+      let effectiveMax = overrideRec?.max ?? tier.max;
+
+      // Circuit breaker: inflate max during burst mode (G2)
+      if (this.config.circuitBreaker) {
+        effectiveMax = await this._resolveCircuitMax(
+          storage,
+          tier.name,
+          resolvedKey,
+          effectiveMax,
+        );
+      }
 
       // Peek algorithm state (no mutation)
       const peekResult = await this.algorithm.peek(
@@ -419,7 +454,9 @@ export class RateLimitEngine<TContext = any> implements IRateLimiter<TContext> {
       );
 
       const tierAllowed = peekResult.current + cost <= effectiveMax;
-      const finalCurrent = tierAllowed ? peekResult.current + cost : peekResult.current;
+      const finalCurrent = tierAllowed
+        ? peekResult.current + cost
+        : peekResult.current;
 
       breakdown.push({
         name: tier.name,
@@ -464,11 +501,7 @@ export class RateLimitEngine<TContext = any> implements IRateLimiter<TContext> {
       let finalResetMs = blockingTier.resetMs;
 
       // Track violation for penalty escalation
-      if (
-        this.config.penalty &&
-        !blockingTier.banned &&
-        !peekOnly
-      ) {
+      if (this.config.penalty && !blockingTier.banned && !peekOnly) {
         const pResult = await this._recordViolation(
           storage,
           blockingTier.name,
@@ -570,6 +603,8 @@ export class RateLimitEngine<TContext = any> implements IRateLimiter<TContext> {
       }
     }
 
+
+
     // Build the result from the most-consumed tier
     const activeTiers = tierEvals.filter((e) => !e.skipped && !e.banned);
     const result = this._buildAllowedResult(breakdown, false, activeTiers);
@@ -598,7 +633,8 @@ export class RateLimitEngine<TContext = any> implements IRateLimiter<TContext> {
       // Ban expired — clean up
       await storage.delete(NS_BANS, banId(this.name, tier, key));
 
-      // Fire onUnban hook
+      // EventBus + hook
+      OqronEventBus.emit("ratelimit:unbanned", this.name, tier, key);
       if (this.config.penalty?.onUnban) {
         await this.config.penalty.onUnban(key, tier);
       }
@@ -620,7 +656,7 @@ export class RateLimitEngine<TContext = any> implements IRateLimiter<TContext> {
     const cutoff = now - penaltyWindowMs;
 
     // Load existing violations
-    let rec = await storage.get<ViolationRecord>(NS_VIOLATIONS, vid);
+    const rec = await storage.get<ViolationRecord>(NS_VIOLATIONS, vid);
     let timestamps = rec?.timestamps ?? [];
 
     // Prune old violations
@@ -643,6 +679,7 @@ export class RateLimitEngine<TContext = any> implements IRateLimiter<TContext> {
       };
       await storage.save(NS_BANS, banId(this.name, tier, key), {
         ...banRecord,
+        limiterName: this.name,
         createdAt: now + banDurationMs,
       });
 
@@ -704,13 +741,7 @@ export class RateLimitEngine<TContext = any> implements IRateLimiter<TContext> {
       await handler(ctx, { tier, key, current, max, percent });
 
       // EventBus emission
-      OqronEventBus.emit(
-        "ratelimit:warning",
-        this.name,
-        tier,
-        key,
-        percent,
-      );
+      OqronEventBus.emit("ratelimit:warning", this.name, tier, key, percent);
     }
   }
 
@@ -847,10 +878,7 @@ export class RateLimitEngine<TContext = any> implements IRateLimiter<TContext> {
     }
 
     // Clear violations
-    await storage.delete(
-      NS_VIOLATIONS,
-      violationId(this.name, tier, key),
-    );
+    await storage.delete(NS_VIOLATIONS, violationId(this.name, tier, key));
   }
 
   async getStatus(adminKey: string): Promise<RateLimitKeyStatus | null> {
@@ -917,28 +945,21 @@ export class RateLimitEngine<TContext = any> implements IRateLimiter<TContext> {
   ): Promise<void> {
     const { tier, key } = parseAdminKey(adminKey);
     const storage = this.getStorage();
-    await storage.save(
-      NS_OVERRIDES,
-      overrideId(this.name, tier, key),
-      { ...override, tier, key },
-    );
+    await storage.save(NS_OVERRIDES, overrideId(this.name, tier, key), {
+      ...override,
+      tier,
+      key,
+      limiterName: this.name,
+    });
 
     // EventBus emission
-    OqronEventBus.emit(
-      "ratelimit:override",
-      this.name,
-      adminKey,
-      override,
-    );
+    OqronEventBus.emit("ratelimit:override", this.name, adminKey, override);
   }
 
   async clearOverride(adminKey: string): Promise<void> {
     const { tier, key } = parseAdminKey(adminKey);
     const storage = this.getStorage();
-    await storage.delete(
-      NS_OVERRIDES,
-      overrideId(this.name, tier, key),
-    );
+    await storage.delete(NS_OVERRIDES, overrideId(this.name, tier, key));
   }
 
   async ban(adminKey: string, duration?: WindowDuration): Promise<void> {
@@ -951,15 +972,12 @@ export class RateLimitEngine<TContext = any> implements IRateLimiter<TContext> {
       tier,
       key,
     };
-    await storage.save(NS_BANS, banId(this.name, tier, key), banRecord);
+    await storage.save(NS_BANS, banId(this.name, tier, key), {
+      ...banRecord,
+      limiterName: this.name,
+    });
 
-    OqronEventBus.emit(
-      "ratelimit:banned",
-      this.name,
-      tier,
-      key,
-      banDurationMs,
-    );
+    OqronEventBus.emit("ratelimit:banned", this.name, tier, key, banDurationMs);
   }
 
   async unban(adminKey: string): Promise<void> {
@@ -967,9 +985,93 @@ export class RateLimitEngine<TContext = any> implements IRateLimiter<TContext> {
     const storage = this.getStorage();
     await storage.delete(NS_BANS, banId(this.name, tier, key));
 
+    OqronEventBus.emit("ratelimit:unbanned", this.name, tier, key);
+
     if (this.config.penalty?.onUnban) {
       await this.config.penalty.onUnban(key, tier);
     }
+  }
+
+  // ── Circuit Breaker (G2) ──────────────────────────────────────────────────
+
+  /**
+   * Resolve the effective max for a tier+key, applying circuit breaker burst
+   * multiplier if the circuit is currently open.
+   */
+  private async _resolveCircuitMax(
+    storage: IStorageEngine,
+    tier: string,
+    key: string,
+    baseMax: number,
+  ): Promise<number> {
+    const cb = this.config.circuitBreaker!;
+    const cid = circuitId(this.name, tier, key);
+    const rec = await storage.get<CircuitRecord>(NS_CIRCUIT, cid);
+
+    if (!rec?.burstUntil) return baseMax;
+
+    // Check if burst mode is still active
+    if (rec.burstUntil > Date.now()) {
+      return Math.ceil(baseMax * cb.burstMultiplier);
+    }
+
+    // Burst expired — close the circuit
+    rec.burstUntil = null;
+    rec.consecutiveFullWindows = 0;
+    await storage.save(NS_CIRCUIT, cid, rec);
+
+    OqronEventBus.emit("ratelimit:circuit-closed", this.name, tier, key);
+
+    return baseMax;
+  }
+
+  /**
+   * Track consecutive full-utilization windows for a tier+key.
+   * When the threshold is reached, opens the circuit (enables burst mode).
+   */
+  private async _trackCircuit(
+    storage: IStorageEngine,
+    tier: string,
+    key: string,
+    currentUsage: number,
+    max: number,
+  ): Promise<void> {
+    const cb = this.config.circuitBreaker!;
+    const cid = circuitId(this.name, tier, key);
+    const rec = (await storage.get<CircuitRecord>(NS_CIRCUIT, cid)) ?? {
+      consecutiveFullWindows: 0,
+      burstUntil: null,
+    };
+
+    // If already in burst mode, skip tracking
+    if (rec.burstUntil && rec.burstUntil > Date.now()) return;
+
+    const utilizationPercent = currentUsage / max;
+
+    if (utilizationPercent >= 0.95) {
+      rec.consecutiveFullWindows++;
+    } else {
+      // Reset on any non-full window
+      rec.consecutiveFullWindows = 0;
+      await storage.save(NS_CIRCUIT, cid, rec);
+      return;
+    }
+
+    // Check if threshold reached
+    if (rec.consecutiveFullWindows >= cb.consecutiveFullWindows) {
+      const cooldownMs = parseWindow(cb.cooldownWindow);
+      rec.burstUntil = Date.now() + cooldownMs;
+
+      OqronEventBus.emit(
+        "ratelimit:circuit-open",
+        this.name,
+        tier,
+        key,
+        cb.burstMultiplier,
+      );
+    }
+
+    await storage.save(NS_CIRCUIT, cid, rec);
   }
 
   // ── Snapshot Export ──────────────────────────────────────────────────────
@@ -989,9 +1091,13 @@ export class RateLimitEngine<TContext = any> implements IRateLimiter<TContext> {
       this.name,
     );
 
-    // Collect active bans
-    const activeBans: Array<{ tier: string; key: string; expiresAt: number }> = [];
-    const banRecords = await storage.list<BanRecord>(NS_BANS, {});
+    // Collect active bans (scoped to this limiter)
+    const activeBans: Array<{ tier: string; key: string; expiresAt: number }> =
+      [];
+    const banRecords = await storage.list<BanRecord & { limiterName?: string }>(
+      NS_BANS,
+      { limiterName: this.name },
+    );
     const now = Date.now();
     for (const ban of banRecords) {
       if (ban.expiresAt > now) {
@@ -1004,8 +1110,11 @@ export class RateLimitEngine<TContext = any> implements IRateLimiter<TContext> {
     }
 
     // Collect active overrides
-    const activeOverrides: Array<{ tier: string; key: string; max: number }> = [];
-    const overrideRecords = await storage.list<OverrideRecord & { tier?: string; key?: string }>(NS_OVERRIDES, {});
+    const activeOverrides: Array<{ tier: string; key: string; max: number }> =
+      [];
+    const overrideRecords = await storage.list<
+      OverrideRecord & { tier?: string; key?: string; limiterName?: string }
+    >(NS_OVERRIDES, { limiterName: this.name });
     for (const ovr of overrideRecords) {
       if (ovr.max && ovr.tier && ovr.key) {
         activeOverrides.push({
@@ -1081,7 +1190,88 @@ export class RateLimitEngine<TContext = any> implements IRateLimiter<TContext> {
       }
     }
 
+    // ── Adaptive Threshold Suggestions (G1) ──────────────────────────────
+    if (this.config.adaptive && result.breakdown) {
+      this._trackAdaptive(stats, result);
+    }
+
+    // ── Circuit Breaker Tracking (G2) ─────────────────────────────────────
+    if (this.config.circuitBreaker && result.breakdown) {
+      for (const tb of result.breakdown) {
+        if (tb.skipped || tb.max === 0) continue;
+        await this._trackCircuit(storage, tb.name, tb.key, tb.current, tb.max);
+      }
+    }
+
     await storage.save("ratelimit_stats", this.name, stats);
+  }
+
+  // ── Adaptive P95 Tracking ──────────────────────────────────────────────
+
+  /** Max number of usage samples to keep per tier (ring buffer size) */
+  private static readonly ADAPTIVE_BUFFER_SIZE = 20;
+  /** Suggestion emitted when P95 exceeds this threshold */
+  private static readonly ADAPTIVE_P95_THRESHOLD = 0.9;
+  /** Minimum cooldown between suggestions per tier (1 hour) */
+  private static readonly ADAPTIVE_COOLDOWN_MS = 3_600_000;
+  /** Suggested max multiplier (50% increase) */
+  private static readonly ADAPTIVE_MULTIPLIER = 1.5;
+
+  private _trackAdaptive(stats: RateLimitStats, result: RateLimitResult): void {
+    if (!result.breakdown) return;
+
+    stats.usageSamples ??= {};
+    stats.lastSuggestionAt ??= {};
+
+    const now = Date.now();
+
+    for (const tb of result.breakdown) {
+      if (tb.skipped || tb.max === 0) continue;
+
+      const usagePercent = tb.current / tb.max;
+
+      // Push to ring buffer
+      if (!stats.usageSamples[tb.name]) {
+        stats.usageSamples[tb.name] = [];
+      }
+      const samples = stats.usageSamples[tb.name];
+      samples.push(usagePercent);
+
+      // Trim to buffer size
+      if (samples.length > RateLimitEngine.ADAPTIVE_BUFFER_SIZE) {
+        samples.splice(
+          0,
+          samples.length - RateLimitEngine.ADAPTIVE_BUFFER_SIZE,
+        );
+      }
+
+      // Need at least full buffer to compute P95
+      if (samples.length < RateLimitEngine.ADAPTIVE_BUFFER_SIZE) continue;
+
+      // Check cooldown
+      const lastEmit = stats.lastSuggestionAt[tb.name] ?? 0;
+      if (now - lastEmit < RateLimitEngine.ADAPTIVE_COOLDOWN_MS) continue;
+
+      // Compute P95: sort ascending, take 95th percentile index
+      const sorted = [...samples].sort((a, b) => a - b);
+      const p95Index = Math.ceil(sorted.length * 0.95) - 1;
+      const p95 = sorted[p95Index];
+
+      if (p95 >= RateLimitEngine.ADAPTIVE_P95_THRESHOLD) {
+        const suggestedMax = Math.ceil(
+          tb.max * RateLimitEngine.ADAPTIVE_MULTIPLIER,
+        );
+        stats.lastSuggestionAt[tb.name] = now;
+
+        OqronEventBus.emit(
+          "ratelimit:suggestion",
+          this.name,
+          tb.name,
+          suggestedMax,
+          p95,
+        );
+      }
+    }
   }
 
   // ── Telemetry: Block Event Audit Trail ──────────────────────────────────

@@ -357,6 +357,15 @@ export interface IRateLimiter<TContext = any> {
   /** Manually unban a key. */
   unban(key: string): Promise<void>;
 
+  /**
+   * Batch check multiple contexts. Returns results in order.
+   * Stops at first block if `stopOnBlock` is true (default).
+   */
+  checkMany(
+    contexts: TContext[],
+    opts?: CheckOptions & { stopOnBlock?: boolean },
+  ): Promise<RateLimitResult[]>;
+
   /** Export a full snapshot of all keys, bans, overrides for debugging/migration */
   snapshot(): Promise<RateLimitSnapshot>;
 }
@@ -392,6 +401,12 @@ export interface RateLimitStats {
       allowed: number;
     }
   >;
+
+  // ── Adaptive Tracking (G1) ────────────────────────────────────────────
+  /** Rolling usage-% samples per tier (last N windows). Only populated when adaptive=true. */
+  usageSamples?: Record<string, number[]>;
+  /** Timestamp of last suggestion emission per tier. Prevents spam. */
+  lastSuggestionAt?: Record<string, number>;
 }
 
 export interface RateLimitEvent {

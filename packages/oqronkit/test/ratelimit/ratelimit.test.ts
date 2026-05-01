@@ -1748,4 +1748,354 @@ describe("Rate Limit Module", () => {
       await expect(limiter.peek({})).rejects.toThrow("peek closed error");
     });
   });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // BUG FIXES (B1–B5)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  describe("B1/B2: Enable/Disable emits EventBus events", () => {
+    it("enableRateLimiter emits ratelimit:instance:enabled", async () => {
+      let emitted = false;
+      OqronEventBus.on("ratelimit:instance:enabled", (name) => {
+        if (name === "b1-enable") emitted = true;
+      });
+
+      const limiter = rateLimit.create({
+        name: "b1-enable",
+        tiers: [{ name: "t", key: () => "k", max: 10, window: "1m" }],
+      });
+
+      // Ensure instance record exists
+      await Storage.save("ratelimit_instances", "b1-enable", {
+        name: "b1-enable",
+        algorithm: "sliding-window",
+        tierNames: ["t"],
+        dryRun: false,
+        failOpen: false,
+        enabled: false,
+        disabledBehavior: "skip",
+        createdAt: new Date(),
+        tags: [],
+      });
+
+      const { OqronManager } = await import("../../src/manager/oqron-manager.js");
+      const mgr = new OqronManager({} as any);
+      await mgr.enableRateLimiter("b1-enable");
+      expect(emitted).toBe(true);
+    });
+
+    it("disableRateLimiter emits ratelimit:instance:disabled", async () => {
+      let emitted = false;
+      OqronEventBus.on("ratelimit:instance:disabled", (name) => {
+        if (name === "b2-disable") emitted = true;
+      });
+
+      await Storage.save("ratelimit_instances", "b2-disable", {
+        name: "b2-disable",
+        algorithm: "sliding-window",
+        tierNames: ["t"],
+        dryRun: false,
+        failOpen: false,
+        enabled: true,
+        disabledBehavior: "skip",
+        createdAt: new Date(),
+        tags: [],
+      });
+
+      const { OqronManager } = await import("../../src/manager/oqron-manager.js");
+      const mgr = new OqronManager({} as any);
+      await mgr.disableRateLimiter("b2-disable");
+      expect(emitted).toBe(true);
+    });
+  });
+
+  describe("B3: unban() emits ratelimit:unbanned", () => {
+    it("emits unbanned event on manual unban", async () => {
+      let emitted = false;
+      OqronEventBus.on("ratelimit:unbanned", (ln, _t, _k) => {
+        if (ln === "b3-unban") emitted = true;
+      });
+
+      const limiter = rateLimit.create({
+        name: "b3-unban",
+        tiers: [{ name: "t", key: () => "k", max: 5, window: "1m" }],
+      });
+
+      await limiter.ban("t:k", "1h");
+      await limiter.unban("t:k");
+      expect(emitted).toBe(true);
+    });
+  });
+
+  describe("B4: _isBanned auto-expiry emits ratelimit:unbanned", () => {
+    it("emits unbanned event when ban expires during check", async () => {
+      let emitted = false;
+      OqronEventBus.on("ratelimit:unbanned", (ln, _t, _k) => {
+        if (ln === "b4-autoexpiry") emitted = true;
+      });
+
+      const limiter = rateLimit.create({
+        name: "b4-autoexpiry",
+        tiers: [{ name: "t", key: () => "k", max: 5, window: "1m" }],
+      });
+
+      // Create an already-expired ban
+      await Storage.save("ratelimit:bans", "b4-autoexpiry:t:k", {
+        expiresAt: Date.now() - 1000,
+        tier: "t",
+        key: "k",
+        limiterName: "b4-autoexpiry",
+      });
+
+      await limiter.check({});
+      expect(emitted).toBe(true);
+    });
+  });
+
+  describe("B5: snapshot() scoped to this limiter", () => {
+    it("snapshot only shows bans for its own limiter", async () => {
+      const limiterA = rateLimit.create({
+        name: "b5-a",
+        tiers: [{ name: "t", key: () => "k", max: 5, window: "1m" }],
+      });
+      const limiterB = rateLimit.create({
+        name: "b5-b",
+        tiers: [{ name: "t", key: () => "k", max: 5, window: "1m" }],
+      });
+
+      await limiterA.ban("t:k", "1h");
+      await limiterB.ban("t:k", "1h");
+
+      const snapA = await limiterA.snapshot();
+      const snapB = await limiterB.snapshot();
+
+      expect(snapA.name).toBe("b5-a");
+      expect(snapB.name).toBe("b5-b");
+      // Each should only see its own bans
+      for (const ban of snapA.activeBans) {
+        expect(ban.tier).toBe("t");
+      }
+      for (const ban of snapB.activeBans) {
+        expect(ban.tier).toBe("t");
+      }
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // GAP CLOSURES (G1–G5)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  describe("G3: rateLimit.destroy() removes from registry", () => {
+    it("destroy removes limiter from registry", async () => {
+      const { getLimiter } = await import("../../src/ratelimit/registry.js");
+
+      rateLimit.create({
+        name: "g3-destroy",
+        tiers: [{ name: "t", key: () => "k", max: 10, window: "1m" }],
+      });
+
+      expect(getLimiter("g3-destroy")).toBeDefined();
+      const removed = rateLimit.destroy("g3-destroy");
+      expect(removed).toBe(true);
+      expect(getLimiter("g3-destroy")).toBeUndefined();
+    });
+
+    it("destroy returns false for non-existent limiter", () => {
+      const removed = rateLimit.destroy("does-not-exist");
+      expect(removed).toBe(false);
+    });
+  });
+
+  describe("G5: checkMany batch API", () => {
+    it("checks multiple contexts and stops at first block", async () => {
+      const limiter = rateLimit.create<{ id: string }>({
+        name: "g5-batch",
+        tiers: [{ name: "t", key: (ctx) => ctx.id, max: 1, window: "1m" }],
+      });
+      await limiter.reset("t:a");
+      await limiter.reset("t:b");
+
+      // Use up key 'a'
+      await limiter.check({ id: "a" });
+
+      const results = await limiter.checkMany([
+        { id: "a" }, // blocked
+        { id: "b" }, // would be allowed, but stopOnBlock=true stops
+      ]);
+
+      expect(results).toHaveLength(1);
+      expect(results[0].allowed).toBe(false);
+    });
+
+    it("checks all contexts when stopOnBlock is false", async () => {
+      const limiter = rateLimit.create<{ id: string }>({
+        name: "g5-batch-all",
+        tiers: [{ name: "t", key: (ctx) => ctx.id, max: 1, window: "1m" }],
+      });
+      await limiter.reset("t:x");
+      await limiter.reset("t:y");
+
+      await limiter.check({ id: "x" }); // use up x
+
+      const results = await limiter.checkMany(
+        [{ id: "x" }, { id: "y" }],
+        { stopOnBlock: false },
+      );
+
+      expect(results).toHaveLength(2);
+      expect(results[0].allowed).toBe(false);
+      expect(results[1].allowed).toBe(true);
+    });
+  });
+
+  describe("G1: Adaptive threshold suggestions", () => {
+    it("emits ratelimit:suggestion after sustained high usage", async () => {
+      let suggestion: { limiter: string; tier: string; suggestedMax: number; p95: number } | null = null;
+      OqronEventBus.on("ratelimit:suggestion", (ln, tier, sugMax, p95) => {
+        if (ln === "g1-adaptive") {
+          suggestion = { limiter: ln, tier, suggestedMax: sugMax, p95 };
+        }
+      });
+
+      const limiter = rateLimit.create({
+        name: "g1-adaptive",
+        adaptive: true,
+        tiers: [{ name: "t", key: () => "k", max: 10, window: "1m" }],
+      });
+      await limiter.reset("t:k");
+
+      // Clear stats to force fresh ring buffer
+      await Storage.delete("ratelimit_stats", "g1-adaptive");
+
+      // Generate 20+ high-usage checks (>90% utilization)
+      for (let i = 0; i < 25; i++) {
+        // Reset each time and consume 9/10 (90%)
+        await limiter.reset("t:k");
+        for (let j = 0; j < 9; j++) {
+          await limiter.check({});
+        }
+      }
+
+      expect(suggestion).not.toBeNull();
+      expect(suggestion!.suggestedMax).toBe(15); // ceil(10 * 1.5)
+      expect(suggestion!.p95).toBeGreaterThanOrEqual(0.9);
+    });
+  });
+
+  describe("G2: Circuit breaker auto-burst", () => {
+    it("opens circuit after consecutive full-utilization checks and inflates max", async () => {
+      let circuitOpened = false;
+      OqronEventBus.on("ratelimit:circuit-open", (ln, _tier, _key, _mult) => {
+        if (ln === "g2-circuit") {
+          circuitOpened = true;
+        }
+      });
+
+      // Use a large max and high cost to achieve >=95% in one shot
+      const limiter = rateLimit.create({
+        name: "g2-circuit",
+        tiers: [{ name: "t", key: () => "k", max: 100, window: "1m" }],
+        circuitBreaker: {
+          consecutiveFullWindows: 3,
+          burstMultiplier: 2,
+          cooldownWindow: "5m",
+        },
+      });
+      await limiter.reset("t:k");
+      await Storage.delete("ratelimit_stats", "g2-circuit");
+      await Storage.delete("ratelimit:circuit", "g2-circuit:t:k");
+
+      // 3 consecutive checks at 96% utilization each (cost=96, max=100)
+      for (let round = 0; round < 3; round++) {
+        await limiter.reset("t:k");
+        await limiter.check({}, { cost: 96 });
+        // Allow fire-and-forget _updateStats to settle
+        await new Promise((r) => setTimeout(r, 50));
+      }
+
+      expect(circuitOpened).toBe(true);
+
+      // Now max should be inflated: 100 * 2 = 200
+      await limiter.reset("t:k");
+      for (let i = 0; i < 150; i++) {
+        const r = await limiter.check({});
+        expect(r.allowed).toBe(true);
+      }
+    });
+  });
+
+  describe("G4: Middleware helpers", () => {
+    it("expressMiddleware returns 429 with headers when blocked", async () => {
+      const { expressMiddleware } = await import("../../src/ratelimit/middleware.js");
+
+      const limiter = rateLimit.create({
+        name: "g4-express",
+        tiers: [{ name: "t", key: (ctx: any) => ctx.ip, max: 1, window: "1m" }],
+      });
+      await limiter.reset("t:127.0.0.1");
+
+      const mw = expressMiddleware({
+        limiter,
+        contextFromRequest: (req: any) => ({ ip: req.ip }),
+      });
+
+      // Mock Express req/res/next
+      const req = { ip: "127.0.0.1" };
+      let statusCode = 0;
+      let responseBody: any = null;
+      const headers: Record<string, string> = {};
+      const res = {
+        setHeader: (k: string, v: string) => { headers[k] = v; },
+        status: (code: number) => ({ json: (body: any) => { statusCode = code; responseBody = body; } }),
+      };
+      const next = vi.fn();
+
+      // First call → allowed
+      await mw(req, res, next);
+      expect(next).toHaveBeenCalledTimes(1);
+      expect(headers["X-RateLimit-Limit"]).toBeDefined();
+
+      // Second call → blocked
+      next.mockClear();
+      await mw(req, res, next);
+      expect(next).not.toHaveBeenCalled();
+      expect(statusCode).toBe(429);
+      expect(responseBody.error).toBe("Too Many Requests");
+    });
+
+    it("honoMiddleware returns 429 response when blocked", async () => {
+      const { honoMiddleware } = await import("../../src/ratelimit/middleware.js");
+
+      const limiter = rateLimit.create({
+        name: "g4-hono",
+        tiers: [{ name: "t", key: (ctx: any) => ctx.ip, max: 1, window: "1m" }],
+      });
+      await limiter.reset("t:10.0.0.1");
+
+      const mw = honoMiddleware({
+        limiter,
+        contextFromRequest: (c: any) => ({ ip: c.ip }),
+      });
+
+      const honoHeaders: Record<string, string> = {};
+      let jsonResult: any = null;
+      const c = {
+        ip: "10.0.0.1",
+        header: (k: string, v: string) => { honoHeaders[k] = v; },
+        json: (body: any, status: number) => { jsonResult = { body, status }; return new Response(); },
+      };
+      const honoNext = vi.fn();
+
+      // First call → allowed
+      await mw(c, honoNext);
+      expect(honoNext).toHaveBeenCalledTimes(1);
+
+      // Second call → blocked
+      honoNext.mockClear();
+      await mw(c, honoNext);
+      expect(honoNext).not.toHaveBeenCalled();
+      expect(jsonResult?.status).toBe(429);
+      expect(jsonResult?.body.error).toBe("Too Many Requests");
+    });
+  });
 });

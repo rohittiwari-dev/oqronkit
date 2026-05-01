@@ -245,6 +245,7 @@ export class OqronManager {
     if (!rec) return false;
     rec.enabled = true;
     await Storage.save("ratelimit_instances", name, rec);
+    OqronEventBus.emit("ratelimit:instance:enabled", name);
     return true;
   }
 
@@ -256,6 +257,7 @@ export class OqronManager {
     if (!rec) return false;
     rec.enabled = false;
     await Storage.save("ratelimit_instances", name, rec);
+    OqronEventBus.emit("ratelimit:instance:disabled", name);
     return true;
   }
 

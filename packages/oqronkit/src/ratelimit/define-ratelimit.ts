@@ -1,5 +1,5 @@
 import { RateLimitEngine } from "./ratelimit-engine.js";
-import { registerLimiter } from "./registry.js";
+import { registerLimiter, deregisterLimiter } from "./registry.js";
 import type { IRateLimiter, RateLimitConfig } from "./types.js";
 
 /**
@@ -29,5 +29,14 @@ export const rateLimit = {
     const engine = new RateLimitEngine<TContext>(config);
     registerLimiter(engine as RateLimitEngine<any>);
     return engine;
+  },
+
+  /**
+   * Remove a limiter from the global registry.
+   * Use when dynamically destroying limiters at runtime.
+   * @returns true if the limiter was found and removed, false otherwise.
+   */
+  destroy(name: string): boolean {
+    return deregisterLimiter(name);
   },
 };
