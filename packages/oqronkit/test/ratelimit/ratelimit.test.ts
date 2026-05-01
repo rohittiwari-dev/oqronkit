@@ -1779,7 +1779,7 @@ describe("Rate Limit Module", () => {
       });
 
       const { OqronManager } = await import("../../src/manager/oqron-manager.js");
-      const mgr = new OqronManager({} as any);
+      const mgr = OqronManager.from({} as any);
       await mgr.enableRateLimiter("b1-enable");
       expect(emitted).toBe(true);
     });
@@ -1803,7 +1803,7 @@ describe("Rate Limit Module", () => {
       });
 
       const { OqronManager } = await import("../../src/manager/oqron-manager.js");
-      const mgr = new OqronManager({} as any);
+      const mgr = OqronManager.from({} as any);
       await mgr.disableRateLimiter("b2-disable");
       expect(emitted).toBe(true);
     });
