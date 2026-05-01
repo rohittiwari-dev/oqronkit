@@ -114,6 +114,31 @@ export interface JobExecutionContext {
 /** Maximum timeline entries per job before trimming oldest entries (JE1) */
 const MAX_TIMELINE_ENTRIES = 100;
 
+type PreExecutionState = Pick<
+  OqronJob,
+  "status" | "workerId" | "startedAt" | "processedOn" | "attemptMade" | "timeline"
+>;
+
+function capturePreExecutionState(job: OqronJob): PreExecutionState {
+  return {
+    status: job.status,
+    workerId: job.workerId,
+    startedAt: job.startedAt,
+    processedOn: job.processedOn,
+    attemptMade: job.attemptMade,
+    timeline: job.timeline ? [...job.timeline] : undefined,
+  };
+}
+
+function restorePreExecutionState(job: OqronJob, state: PreExecutionState): void {
+  job.status = state.status;
+  job.workerId = state.workerId;
+  job.startedAt = state.startedAt;
+  job.processedOn = state.processedOn;
+  job.attemptMade = state.attemptMade;
+  job.timeline = state.timeline;
+}
+
 /**
  * Shared job execution logic used by both QueueEngine and WorkerEngine.
  *
@@ -277,7 +302,8 @@ export async function executeJob(
   };
 
   // Update state to active
-  const oldStatus = job.status;
+  const previousState = capturePreExecutionState(job);
+  const oldStatus = previousState.status;
   job.status = "active";
   job.workerId = workerId;
   job.startedAt = new Date();
@@ -310,8 +336,8 @@ export async function executeJob(
           ctx.heartbeats.delete(job.id);
         }
         ctx.abortControllers.delete(job.id);
-        // Restore state
-        job.status = oldStatus;
+        // Restore all pre-claim metadata so skipped jobs do not look attempted.
+        restorePreExecutionState(job, previousState);
         await di.storage.save("jobs", job.id, job);
         await di.broker.nack(hc.name, job.id, 1000); // Small delay before retry
         return;
@@ -334,8 +360,8 @@ export async function executeJob(
           ctx.heartbeats.delete(job.id);
         }
         ctx.abortControllers.delete(job.id);
-        // Restore state
-        job.status = oldStatus;
+        // Restore all pre-claim metadata so skipped jobs do not look attempted.
+        restorePreExecutionState(job, previousState);
         await di.storage.save("jobs", job.id, job);
         await di.broker.nack(hc.name, job.id, 2000); // Re-queue with 2s delay
         return;
@@ -711,47 +737,152 @@ export async function executeBatch(
   }
 
   // ── Build contexts for all jobs ────────────────────────────────────────
-  const contexts: Array<{ job: OqronJob; jobCtx: QueueJobContext; abortController: AbortController; getDiscarded: () => boolean }> = [];
+  type BatchExecutionEntry = {
+    job: OqronJob;
+    jobCtx: QueueJobContext;
+    abortController: AbortController;
+    getDiscarded: () => boolean;
+    preflightResult?: PromiseSettledResult<any>;
+  };
+
+  const readyContexts: BatchExecutionEntry[] = [];
+  const preflightFailures: BatchExecutionEntry[] = [];
   for (const job of jobs) {
     job.moduleName = job.moduleName ?? hc.name;
+    const previousState = capturePreExecutionState(job);
+    const { jobCtx, abortController, getDiscarded } = buildJobContext(job, ctx);
+
+    const oldStatus = previousState.status;
     job.status = "active";
     job.startedAt = new Date();
     job.attemptMade = (job.attemptMade ?? 0) + 1;
     job.workerId = workerId;
     job.processedOn = job.startedAt;
+    if (!job.timeline) job.timeline = [];
+    pushTimeline(job, {
+      ts: job.startedAt,
+      from: oldStatus,
+      to: "active",
+      reason: `Worker ${workerId} claimed job`,
+    });
     await di.storage.save("jobs", job.id, job);
+    OqronEventBus.emit("job:start", job.queueName, job.id, hc.name);
 
-    const { jobCtx, abortController, getDiscarded } = buildJobContext(job, ctx);
-    contexts.push({ job, jobCtx, abortController, getDiscarded });
+    if (hc.rateLimiter) {
+      const rlResult = await hc.rateLimiter.check(jobCtx).catch(() => ({ allowed: true }));
+      if (!rlResult.allowed) {
+        logger.info(`Batch job ${job.id} rate-limited, nacking back to broker`);
+        ctx.abortControllers.delete(job.id);
+        restorePreExecutionState(job, previousState);
+        await di.storage.save("jobs", job.id, job);
+        await di.broker.nack(hc.name, job.id, 1000);
+        continue;
+      }
+    }
+
+    if (hc.hooks?.beforeRun) {
+      try {
+        await hc.hooks.beforeRun(jobCtx);
+      } catch (e: any) {
+        const reason = e instanceof Error ? e : new Error(e?.message ?? "beforeRun hook failed");
+        preflightFailures.push({
+          job,
+          jobCtx,
+          abortController,
+          getDiscarded,
+          preflightResult: { status: "rejected", reason },
+        });
+        continue;
+      }
+    }
+
+    if (hc.condition) {
+      const allowed = await Promise.resolve(hc.condition(jobCtx)).catch(() => true);
+      if (!allowed) {
+        logger.info(`Batch job ${job.id} condition gate returned false, nacking back to broker`);
+        ctx.abortControllers.delete(job.id);
+        restorePreExecutionState(job, previousState);
+        await di.storage.save("jobs", job.id, job);
+        await di.broker.nack(hc.name, job.id, 2000);
+        continue;
+      }
+    }
+
+    readyContexts.push({ job, jobCtx, abortController, getDiscarded });
+  }
+
+  const allContexts = [...preflightFailures, ...readyContexts];
+  if (allContexts.length === 0) {
+    if (heartbeat) {
+      await heartbeat.stop();
+    }
+    return;
   }
 
   let results: Array<PromiseSettledResult<any>> | void | undefined;
   let topLevelError: Error | undefined;
+  let batchCompleted = false;
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
 
   try {
-    results = await hc.processBatch(contexts.map((c) => c.jobCtx));
+    if (readyContexts.length > 0) {
+      const processPromise = hc.processBatch(readyContexts.map((c) => c.jobCtx));
+
+      if (typeof hc.timeout === "number") {
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          timeoutHandle = setTimeout(() => {
+            for (const { abortController } of readyContexts) {
+              abortController.abort();
+            }
+            const err = new Error(`Batch exceeded timeout of ${hc.timeout}ms`);
+            err.name = "TimeoutError";
+            reject(err);
+          }, hc.timeout);
+        });
+        results = await Promise.race([processPromise, timeoutPromise]);
+      } else {
+        results = await processPromise;
+      }
+    } else {
+      results = [];
+    }
+    batchCompleted = true;
   } catch (e: any) {
     topLevelError = e instanceof Error ? e : new Error(e?.message ?? "Batch processing failed");
+  } finally {
+    if (timeoutHandle) clearTimeout(timeoutHandle);
   }
 
   // ── Stop Heartbeat & Cleanup Controllers ──────────────────────────────
   if (heartbeat) {
     await heartbeat.stop();
   }
-  for (const { job } of contexts) {
+  for (const { job } of allContexts) {
     ctx.abortControllers.delete(job.id);
   }
 
   // ── Finalize Jobs ─────────────────────────────────────────────────────
   const finishedAt = new Date();
 
-  // If top-level error occurred, synthesize rejected results for all jobs
-  const resolvedResults: Array<PromiseSettledResult<any>> = results
-    ? (Array.isArray(results) ? results : contexts.map(() => ({ status: "fulfilled", value: undefined })))
-    : contexts.map(() => ({ status: "rejected", reason: topLevelError }));
+  // If top-level error occurred, synthesize rejected results for processBatch jobs.
+  const processResults: Array<PromiseSettledResult<any>> = topLevelError
+    ? readyContexts.map(() => ({ status: "rejected", reason: topLevelError }))
+    : Array.isArray(results)
+      ? results
+      : batchCompleted
+        ? readyContexts.map(() => ({ status: "fulfilled", value: undefined }))
+        : readyContexts.map(() => ({
+            status: "rejected",
+            reason: new Error("Batch processing failed"),
+          }));
 
-  for (let i = 0; i < contexts.length; i++) {
-    const { job, getDiscarded } = contexts[i];
+  const resolvedResults: Array<PromiseSettledResult<any>> = [
+    ...preflightFailures.map((entry) => entry.preflightResult!),
+    ...processResults,
+  ];
+
+  for (let i = 0; i < allContexts.length; i++) {
+    const { job, getDiscarded } = allContexts[i];
     // In case the returned array is shorter than contexts array, assume rejected with out-of-bounds error
     const result = resolvedResults[i] ?? { status: "rejected", reason: new Error("processBatch returned fewer results than jobs") };
 

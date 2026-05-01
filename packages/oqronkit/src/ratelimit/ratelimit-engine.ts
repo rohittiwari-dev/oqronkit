@@ -82,8 +82,12 @@ interface WarningFired {
 interface CircuitRecord {
   /** Number of consecutive windows at >= 95% utilization */
   consecutiveFullWindows: number;
+  /** Last limiter window counted toward consecutiveFullWindows. */
+  lastWindowId?: number;
   /** Epoch ms when burst mode expires. null = circuit is closed (normal). */
   burstUntil: number | null;
+  /** Expiry timestamp used by storage GC. */
+  createdAt?: number;
 }
 
 function circuitId(limiterName: string, tier: string, key: string): string {
@@ -161,6 +165,16 @@ export class RateLimitEngine<TContext = any> implements IRateLimiter<TContext> {
     return container.storage;
   }
 
+  private normalizeCost(cost: number, allowZero: boolean): number {
+    const min = allowZero ? 0 : 1;
+    if (!Number.isFinite(cost) || !Number.isInteger(cost) || cost < min) {
+      throw new Error(
+        `[OqronKit:RateLimit] Invalid cost "${cost}". Cost must be a finite integer >= ${min}.`,
+      );
+    }
+    return cost;
+  }
+
   // ── check() — The Main Entry Point ──────────────────────────────────────
 
   async check(ctx: TContext, opts?: CheckOptions): Promise<RateLimitResult> {
@@ -188,6 +202,7 @@ export class RateLimitEngine<TContext = any> implements IRateLimiter<TContext> {
     if (opts?.cost === undefined && this.config.costEstimator) {
       cost = this.config.costEstimator(ctx);
     }
+    cost = this.normalizeCost(cost, false);
 
     // ── DependsOn chaining ──────────────────────────────────────────────
     if (this.config.dependsOn && this.config.dependsOn.length > 0) {
@@ -254,6 +269,7 @@ export class RateLimitEngine<TContext = any> implements IRateLimiter<TContext> {
    */
   async peek(ctx: TContext, cost: number = 0): Promise<RateLimitResult> {
     const storage = this.getStorage();
+    cost = this.normalizeCost(cost, true);
 
     try {
       return await this._evaluate(ctx, cost, storage, true);
@@ -458,7 +474,7 @@ export class RateLimitEngine<TContext = any> implements IRateLimiter<TContext> {
         ? peekResult.current + cost
         : peekResult.current;
 
-      breakdown.push({
+      const breakdownEntry: TierBreakdown = {
         name: tier.name,
         key: resolvedKey,
         current: finalCurrent,
@@ -466,7 +482,9 @@ export class RateLimitEngine<TContext = any> implements IRateLimiter<TContext> {
         remaining: Math.max(0, effectiveMax - finalCurrent),
         allowed: tierAllowed,
         skipped: false,
-      });
+      };
+      (breakdownEntry as any).windowMs = windowMs;
+      breakdown.push(breakdownEntry);
 
       if (!tierAllowed && !blockingTier) {
         blockingTier = {
@@ -573,13 +591,64 @@ export class RateLimitEngine<TContext = any> implements IRateLimiter<TContext> {
     if (!peekOnly && cost > 0) {
       for (const ev of tierEvals) {
         if (!ev.skipped && !ev.banned) {
-          await this.algorithm.consume(
+          const committed = await this.algorithm.consume(
             storage,
             ev.storageKey,
             ev.max,
             ev.windowMs,
             cost,
           );
+          if (!committed.allowed) {
+            const blockedBreakdown = breakdown.map((entry) =>
+              entry.name === ev.tierName && entry.key === ev.key
+                ? {
+                    ...entry,
+                    current: committed.current,
+                    remaining: 0,
+                    allowed: false,
+                  }
+                : entry,
+            );
+            const retryAfterMs = applyJitter(
+              Math.max(0, committed.resetMs),
+              this.jitterFraction,
+            );
+            const retryAfterSecs = Math.ceil(retryAfterMs / 1000);
+            const result: RateLimitResult = {
+              allowed: false,
+              wouldBlock: true,
+              tier: ev.tierName,
+              current: committed.current,
+              limit: ev.max,
+              remaining: 0,
+              resetMs: committed.resetMs,
+              retryAfterSecs,
+              retryAfter: new Date(Date.now() + retryAfterMs),
+              banned: false,
+              skipped: false,
+              instanceDisabled: false,
+              passthrough: false,
+              breakdown: blockedBreakdown,
+              toHeaders: () => buildHeaders(result),
+            };
+            OqronEventBus.emit(
+              "ratelimit:blocked",
+              this.name,
+              ev.tierName,
+              ev.key,
+              result,
+            );
+            return result;
+          }
+          ev.current = committed.current;
+          ev.resetMs = committed.resetMs;
+          const entry = breakdown.find(
+            (b) => b.name === ev.tierName && b.key === ev.key,
+          );
+          if (entry) {
+            entry.current = committed.current;
+            entry.remaining = Math.max(0, ev.max - committed.current);
+          }
         }
       }
     }
@@ -588,7 +657,7 @@ export class RateLimitEngine<TContext = any> implements IRateLimiter<TContext> {
     if (this.config.warnings && !peekOnly) {
       for (const ev of tierEvals) {
         if (ev.skipped || ev.banned) continue;
-        const newCurrent = ev.current + cost;
+        const newCurrent = ev.current;
         const percent = newCurrent / ev.max;
         await this._checkQuotaWarnings(
           ctx,
@@ -879,6 +948,19 @@ export class RateLimitEngine<TContext = any> implements IRateLimiter<TContext> {
 
     // Clear violations
     await storage.delete(NS_VIOLATIONS, violationId(this.name, tier, key));
+
+    // A manual reset clears the algorithm window. Preserve the consecutive
+    // circuit count, but allow the next high-utilization check to count as a
+    // fresh logical window.
+    if (this.config.circuitBreaker) {
+      const cid = circuitId(this.name, tier, key);
+      const rec = await storage.get<CircuitRecord>(NS_CIRCUIT, cid);
+      if (rec) {
+        rec.lastWindowId = undefined;
+        rec.createdAt = Math.max(rec.burstUntil ?? 0, Date.now() + windowMs);
+        await storage.save(NS_CIRCUIT, cid, rec);
+      }
+    }
   }
 
   async getStatus(adminKey: string): Promise<RateLimitKeyStatus | null> {
@@ -1018,6 +1100,7 @@ export class RateLimitEngine<TContext = any> implements IRateLimiter<TContext> {
     // Burst expired — close the circuit
     rec.burstUntil = null;
     rec.consecutiveFullWindows = 0;
+    rec.createdAt = Date.now();
     await storage.save(NS_CIRCUIT, cid, rec);
 
     OqronEventBus.emit("ratelimit:circuit-closed", this.name, tier, key);
@@ -1035,10 +1118,12 @@ export class RateLimitEngine<TContext = any> implements IRateLimiter<TContext> {
     key: string,
     currentUsage: number,
     max: number,
+    windowMs: number,
   ): Promise<void> {
     const cb = this.config.circuitBreaker!;
     const cid = circuitId(this.name, tier, key);
-    const rec = (await storage.get<CircuitRecord>(NS_CIRCUIT, cid)) ?? {
+    const existing = await storage.get<CircuitRecord>(NS_CIRCUIT, cid);
+    const rec = existing ?? {
       consecutiveFullWindows: 0,
       burstUntil: null,
     };
@@ -1046,13 +1131,20 @@ export class RateLimitEngine<TContext = any> implements IRateLimiter<TContext> {
     // If already in burst mode, skip tracking
     if (rec.burstUntil && rec.burstUntil > Date.now()) return;
 
+    const now = Date.now();
     const utilizationPercent = currentUsage / max;
+    const currentWindowId = Math.floor(now / Math.max(1, windowMs));
 
     if (utilizationPercent >= 0.95) {
-      rec.consecutiveFullWindows++;
+      if (rec.lastWindowId !== currentWindowId) {
+        rec.consecutiveFullWindows++;
+        rec.lastWindowId = currentWindowId;
+      }
     } else {
-      // Reset on any non-full window
+      if (!existing) return;
       rec.consecutiveFullWindows = 0;
+      rec.lastWindowId = currentWindowId;
+      rec.createdAt = now + windowMs;
       await storage.save(NS_CIRCUIT, cid, rec);
       return;
     }
@@ -1060,7 +1152,7 @@ export class RateLimitEngine<TContext = any> implements IRateLimiter<TContext> {
     // Check if threshold reached
     if (rec.consecutiveFullWindows >= cb.consecutiveFullWindows) {
       const cooldownMs = parseWindow(cb.cooldownWindow);
-      rec.burstUntil = Date.now() + cooldownMs;
+      rec.burstUntil = now + cooldownMs;
 
       OqronEventBus.emit(
         "ratelimit:circuit-open",
@@ -1071,6 +1163,7 @@ export class RateLimitEngine<TContext = any> implements IRateLimiter<TContext> {
       );
     }
 
+    rec.createdAt = Math.max(rec.burstUntil ?? 0, now + windowMs);
     await storage.save(NS_CIRCUIT, cid, rec);
   }
 
@@ -1096,11 +1189,13 @@ export class RateLimitEngine<TContext = any> implements IRateLimiter<TContext> {
       [];
     const banRecords = await storage.list<BanRecord & { limiterName?: string }>(
       NS_BANS,
-      { limiterName: this.name },
     );
     const now = Date.now();
     for (const ban of banRecords) {
-      if (ban.expiresAt > now) {
+      if (
+        (ban.limiterName === undefined || ban.limiterName === this.name) &&
+        ban.expiresAt > now
+      ) {
         activeBans.push({
           tier: ban.tier,
           key: ban.key,
@@ -1114,9 +1209,14 @@ export class RateLimitEngine<TContext = any> implements IRateLimiter<TContext> {
       [];
     const overrideRecords = await storage.list<
       OverrideRecord & { tier?: string; key?: string; limiterName?: string }
-    >(NS_OVERRIDES, { limiterName: this.name });
+    >(NS_OVERRIDES);
     for (const ovr of overrideRecords) {
-      if (ovr.max && ovr.tier && ovr.key) {
+      if (
+        (ovr.limiterName === undefined || ovr.limiterName === this.name) &&
+        ovr.max !== undefined &&
+        ovr.tier &&
+        ovr.key
+      ) {
         activeOverrides.push({
           tier: ovr.tier,
           key: ovr.key,
@@ -1199,7 +1299,14 @@ export class RateLimitEngine<TContext = any> implements IRateLimiter<TContext> {
     if (this.config.circuitBreaker && result.breakdown) {
       for (const tb of result.breakdown) {
         if (tb.skipped || tb.max === 0) continue;
-        await this._trackCircuit(storage, tb.name, tb.key, tb.current, tb.max);
+        await this._trackCircuit(
+          storage,
+          tb.name,
+          tb.key,
+          tb.current,
+          tb.max,
+          (tb as any).windowMs ?? 60_000,
+        );
       }
     }
 

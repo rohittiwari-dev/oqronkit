@@ -402,7 +402,11 @@ export const OqronKit = {
 		);
 		try {
 			await Promise.race([stopPromise, timeoutPromise]);
+			TelemetryManager.getInstance().stop();
 			await stopEngine();
+			OqronRegistry.getInstance()._reset();
+			_config = null;
+			_logger = null;
 			log.info("OqronKit stopped.");
 		} catch (err) {
 			log.error("Error during stop", { error: String(err) });

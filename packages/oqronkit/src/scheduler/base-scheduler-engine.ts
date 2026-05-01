@@ -268,9 +268,12 @@ export abstract class BaseSchedulerEngine<
 	}
 
 	async stop(): Promise<void> {
-		if (this.tickTimer) clearInterval(this.tickTimer);
+		if (this.tickTimer) {
+			clearInterval(this.tickTimer);
+			this.tickTimer = undefined;
+		}
 		if (this.leader) await this.leader.stop();
-		this.stallDetector.stop();
+		this.stallDetector?.stop();
 		this.lagMonitor.stop();
 		this.metrics.stop();
 
@@ -609,14 +612,12 @@ export abstract class BaseSchedulerEngine<
 						"hold";
 
 					const nextRun = this.computeNextRun(def, now);
-					if (nextRun) {
-						await this.di.storage.save(this.storageNamespace, def.name, {
-							...record,
-							nextRunAt: nextRun,
-							lastRunAt: now,
-							type: this.moduleType,
-						});
-					}
+					await this.di.storage.save(this.storageNamespace, def.name, {
+						...record,
+						nextRunAt: nextRun,
+						lastRunAt: now,
+						type: this.moduleType,
+					});
 
 					if (behavior === "skip") continue;
 
@@ -643,6 +644,17 @@ export abstract class BaseSchedulerEngine<
 				//  Condition guard hook
 				if (!(await this.shouldFire(def, record))) {
 					this.logger.debug("Skipping fire — condition guard returned false", { name: def.name });
+					let guardNext = this.computeNextRun(def, now);
+					if (guardNext && def.jitterMs && def.jitterMs > 0) {
+						const jitter = Math.floor(Math.random() * def.jitterMs);
+						guardNext = new Date(guardNext.getTime() + jitter);
+					}
+					await this.di.storage.save(this.storageNamespace, def.name, {
+						...record,
+						nextRunAt: guardNext,
+						lastRunAt: now,
+						type: this.moduleType,
+					});
 					continue;
 				}
 
@@ -655,15 +667,17 @@ export abstract class BaseSchedulerEngine<
 								name: def.name,
 							});
 							// Still advance the pointer to prevent re-firing
-							const rlNext = this.computeNextRun(def, now);
-							if (rlNext) {
-								await this.di.storage.save(this.storageNamespace, def.name, {
-									...record,
-									nextRunAt: rlNext,
-									lastRunAt: now,
-									type: this.moduleType,
-								});
+							let rlNext = this.computeNextRun(def, now);
+							if (rlNext && def.jitterMs && def.jitterMs > 0) {
+								const jitter = Math.floor(Math.random() * def.jitterMs);
+								rlNext = new Date(rlNext.getTime() + jitter);
 							}
+							await this.di.storage.save(this.storageNamespace, def.name, {
+								...record,
+								nextRunAt: rlNext,
+								lastRunAt: now,
+								type: this.moduleType,
+							});
 							continue;
 						}
 					} catch (err) {

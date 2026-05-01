@@ -377,6 +377,7 @@ export class ScheduleEngine extends BaseSchedulerEngine<ScheduleDefinition> {
     });
 
     this.lagMonitor.start();
+    this.metrics.start();
     this.stallDetector.start(
       () => Array.from(this.activeJobs.values()).map((j) => ({
         key: j.lockKey, ownerId: this.nodeId,

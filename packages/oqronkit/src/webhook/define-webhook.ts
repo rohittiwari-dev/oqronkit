@@ -155,7 +155,7 @@ export function webhook<T = any>(
       const heldJobs = await di.storage.list<any>(
         "jobs",
         {
-          moduleName: "webhook",
+          moduleName: config.name,
           queueName: config.name,
           status: "paused",
           pausedReason: "disabled-hold",
@@ -351,7 +351,6 @@ export function webhook<T = any>(
 /** Create a new webhook dispatcher at runtime */
 export async function createWebhook<T = any>(config: WebhookConfig<T>): Promise<IWebhookDispatcher<T>> {
   const di = OqronContainer.get();
-  registerWebhook(config as any);
   await di.storage.save("webhook_instances", config.name, {
     version: config.version ?? 0,
     enabled: true,

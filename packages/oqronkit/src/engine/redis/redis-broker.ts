@@ -8,8 +8,10 @@ const ATOMIC_CLAIM_FIFO_LUA = `
 local id = redis.call("lpop", KEYS[1])
 if id == false then return nil end
 local lockKey = ARGV[1] .. id
-redis.call("set", lockKey, ARGV[2], "PX", ARGV[3], "NX")
-return id
+local locked = redis.call("set", lockKey, ARGV[2], "PX", ARGV[3], "NX")
+if locked then return id end
+redis.call("lpush", KEYS[1], id)
+return nil
 `;
 
 /**
@@ -19,8 +21,10 @@ const ATOMIC_CLAIM_LIFO_LUA = `
 local id = redis.call("rpop", KEYS[1])
 if id == false then return nil end
 local lockKey = ARGV[1] .. id
-redis.call("set", lockKey, ARGV[2], "PX", ARGV[3], "NX")
-return id
+local locked = redis.call("set", lockKey, ARGV[2], "PX", ARGV[3], "NX")
+if locked then return id end
+redis.call("rpush", KEYS[1], id)
+return nil
 `;
 
 /**
@@ -30,9 +34,12 @@ const ATOMIC_CLAIM_PRIORITY_LUA = `
 local result = redis.call("zpopmin", KEYS[1], 1)
 if #result == 0 then return nil end
 local id = result[1]
+local score = result[2]
 local lockKey = ARGV[1] .. id
-redis.call("set", lockKey, ARGV[2], "PX", ARGV[3], "NX")
-return id
+local locked = redis.call("set", lockKey, ARGV[2], "PX", ARGV[3], "NX")
+if locked then return id end
+redis.call("zadd", KEYS[1], score, id)
+return nil
 `;
 
 /**
@@ -267,7 +274,15 @@ export class RedisBroker implements IBrokerEngine {
 
     // Atomically set the lock
     const lockKey = this.getLockKey(id);
-    await this.redis.set(lockKey, consumerId, "PX", lockTtlMs, "NX");
+    const locked = await this.redis.set(lockKey, consumerId, "PX", lockTtlMs, "NX");
+    if (locked !== "OK") {
+      if (strategy === "lifo") {
+        await this.redis.rpush(qkey, id);
+      } else {
+        await this.redis.lpush(qkey, id);
+      }
+      return null;
+    }
 
     return id;
   }

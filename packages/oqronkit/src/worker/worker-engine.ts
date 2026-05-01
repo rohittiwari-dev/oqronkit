@@ -528,9 +528,11 @@ export class WorkerEngine implements IOqronModule {
 
 			if (w.processBatch && validJobs.length > 0) {
 				// Batch execution path
-				const p = this.delegateExecuteBatch(validJobs, w).then(() => {
+				const p = this.delegateExecuteBatch(validJobs, w).then(async () => {
 					const durationMs = Date.now() - startTs;
-					validJobs.forEach(j => OqronEventBus.emit("worker:job:completed", w.topic, j.id, durationMs));
+					await Promise.all(validJobs.map((j) =>
+						this.emitExecutionMetric(w.topic, j.id, durationMs),
+					));
 				}).catch(() => {
 					const durationMs = Date.now() - startTs;
 					validJobs.forEach(j => OqronEventBus.emit("worker:job:failed", w.topic, j.id, durationMs));
@@ -546,7 +548,7 @@ export class WorkerEngine implements IOqronModule {
 				for (const job of validJobs) {
 					const p = this.delegateExecuteJob(job, w).then(() => {
 						const durationMs = Date.now() - startTs;
-						OqronEventBus.emit("worker:job:completed", w.topic, job.id, durationMs);
+						return this.emitExecutionMetric(w.topic, job.id, durationMs);
 					}).catch(() => {
 						const durationMs = Date.now() - startTs;
 						OqronEventBus.emit("worker:job:failed", w.topic, job.id, durationMs);
@@ -559,6 +561,15 @@ export class WorkerEngine implements IOqronModule {
 			}
 		} finally {
 			this.isPolling.delete(w.topic);
+		}
+	}
+
+	private async emitExecutionMetric(topic: string, jobId: string, durationMs: number): Promise<void> {
+		const job = await this.di.storage.get<OqronJob>("jobs", jobId);
+		if (job?.status === "completed") {
+			OqronEventBus.emit("worker:job:completed", topic, jobId, durationMs);
+		} else if (job?.status === "failed") {
+			OqronEventBus.emit("worker:job:failed", topic, jobId, durationMs);
 		}
 	}
 

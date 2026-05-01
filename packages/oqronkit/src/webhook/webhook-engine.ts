@@ -166,9 +166,7 @@ export class WebhookEngine implements IOqronModule {
         );
         this.heartbeats.get(jobId)?.stop();
         this.heartbeats.delete(jobId);
-        const dispatcherName = dispatchers.find((_d) =>
-          this.activeJobs.has(jobId),
-        )?.name;
+        const dispatcherName = this.getDispatcherForActiveJob(jobId);
         if (dispatcherName) {
           this.di.storage
             .get<any>("jobs", jobId)
@@ -253,6 +251,22 @@ export class WebhookEngine implements IOqronModule {
       );
       this.reconciler.start();
     }
+  }
+
+  private getDispatcherForActiveJob(jobId: string): string | undefined {
+    for (const [dispatcherName, jobs] of this.activeJobsByDispatcher.entries()) {
+      if (jobs.has(jobId)) return dispatcherName;
+    }
+    return undefined;
+  }
+
+  private async finishJobExecution(jobId: string): Promise<void> {
+    const hb = this.heartbeats.get(jobId);
+    if (hb) {
+      await hb.stop();
+      this.heartbeats.delete(jobId);
+    }
+    this.abortControllers.delete(jobId);
   }
 
   private startPolling(dispatcher: WebhookConfig) {
@@ -349,16 +363,6 @@ export class WebhookEngine implements IOqronModule {
     const hbMs = this.webhookConfig?.heartbeatMs ?? 5000;
     const trackProgress = this.webhookConfig?.trackProgress !== false;
 
-    const acquired = await this.di.lock.acquire(
-      lockKey,
-      this.workerIdStr,
-      ttlMs,
-    );
-    if (!acquired) {
-      await this.di.broker.nack(dispatcher.name, jobId, 1000);
-      return;
-    }
-
     const heartbeat = new HeartbeatWorker(
       this.di.lock,
       this.logger,
@@ -367,8 +371,15 @@ export class WebhookEngine implements IOqronModule {
       ttlMs,
       hbMs,
     );
-    heartbeat.start();
+    const acquired = await heartbeat.start();
+    if (!acquired) {
+      await this.di.broker.nack(dispatcher.name, jobId, 1000);
+      return;
+    }
     this.heartbeats.set(jobId, heartbeat);
+
+    const abortController = new AbortController();
+    this.abortControllers.set(jobId, abortController);
 
     const job = await this.di.storage.get<OqronJob<WebhookDeliveryPayload>>(
       "jobs",
@@ -376,17 +387,13 @@ export class WebhookEngine implements IOqronModule {
     );
 
     if (!job) {
-      await heartbeat.stop();
-      this.heartbeats.delete(jobId);
-      await this.di.lock.release(lockKey, this.workerIdStr);
+      await this.finishJobExecution(jobId);
       await this.di.broker.ack(dispatcher.name, jobId);
       return;
     }
 
     if (job.status === "paused" || job.status === "completed") {
-      await heartbeat.stop();
-      this.heartbeats.delete(jobId);
-      await this.di.lock.release(lockKey, this.workerIdStr);
+      await this.finishJobExecution(jobId);
       await this.di.broker.ack(dispatcher.name, jobId);
       return;
     }
@@ -401,9 +408,7 @@ export class WebhookEngine implements IOqronModule {
         jobEnv: job.environment,
         workerEnv: this.config.environment,
       });
-      await heartbeat.stop();
-      this.heartbeats.delete(jobId);
-      await this.di.lock.release(lockKey, this.workerIdStr);
+      await this.finishJobExecution(jobId);
       await this.di.broker.nack(dispatcher.name, jobId);
       return;
     }
@@ -418,9 +423,7 @@ export class WebhookEngine implements IOqronModule {
         jobProject: job.project,
         workerProject: this.config.project,
       });
-      await heartbeat.stop();
-      this.heartbeats.delete(jobId);
-      await this.di.lock.release(lockKey, this.workerIdStr);
+      await this.finishJobExecution(jobId);
       await this.di.broker.nack(dispatcher.name, jobId);
       return;
     }
@@ -475,11 +478,16 @@ export class WebhookEngine implements IOqronModule {
       await updateProgress(30); // Payload signed
 
       const endpointKey = `${dispatcher.name}:${payload.endpointName}`;
+      const endpoint = await this.resolveEndpointConfig(
+        dispatcher,
+        payload.endpointName,
+      );
 
       // G8: Outbound rate limiting per endpoint
       const limiter = this.resolveOutboundLimiter(
         dispatcher,
         payload.endpointName,
+        endpoint,
       );
       if (limiter) {
         const rlResult = await limiter.check({ key: endpointKey });
@@ -495,12 +503,7 @@ export class WebhookEngine implements IOqronModule {
             msg: `Rate limited — re-queuing with ${delayMs}ms delay`,
           });
           await this.di.storage.save("jobs", jobId, job);
-          const hb = this.heartbeats.get(jobId);
-          if (hb) {
-            await hb.stop();
-            this.heartbeats.delete(jobId);
-          }
-          await this.di.lock.release(lockKey, this.workerIdStr);
+          await this.finishJobExecution(jobId);
           await this.di.broker.nack(dispatcher.name, jobId, delayMs);
           return;
         }
@@ -514,14 +517,13 @@ export class WebhookEngine implements IOqronModule {
         this.logger.warn(
           `Circuit OPEN for ${endpointKey} — skipping delivery, re-queuing`,
         );
-        const hb = this.heartbeats.get(jobId);
-        if (hb) {
-          await hb.stop();
-          this.heartbeats.delete(jobId);
-        }
-        await this.di.lock.release(lockKey, this.workerIdStr);
+        await this.finishJobExecution(jobId);
         await this.di.broker.nack(dispatcher.name, jobId, 15000);
         return;
+      }
+
+      if (abortController.signal.aborted) {
+        throw new Error("Cancelled");
       }
 
       await updateProgress(50); // HTTP request sent
@@ -534,6 +536,10 @@ export class WebhookEngine implements IOqronModule {
         bodyStr,
         dispatcher.timeout ?? 30000,
       );
+
+      if (abortController.signal.aborted) {
+        throw new Error("Cancelled");
+      }
 
       await updateProgress(70); // Response received
 
@@ -550,7 +556,7 @@ export class WebhookEngine implements IOqronModule {
         await this.circuitBreaker?.recordSuccess(endpointKey);
         await updateProgress(90); // Validated
         // Success
-        await this.handleSuccess(dispatcher, job, result, lockKey);
+        await this.handleSuccess(dispatcher, job, result);
       } else {
         await this.circuitBreaker?.recordFailure(endpointKey);
         const retryStatusCodes = dispatcher.retries?.retryOnStatus;
@@ -567,7 +573,6 @@ export class WebhookEngine implements IOqronModule {
             dispatcher,
             job,
             new Error(`Unretryable HTTP ${result.status} status`),
-            lockKey,
           );
         }
       }
@@ -575,7 +580,11 @@ export class WebhookEngine implements IOqronModule {
       // Record circuit breaker failure on exceptions (network errors, timeouts)
       const endpointKey = `${dispatcher.name}:${job.data?.endpointName}`;
       await this.circuitBreaker?.recordFailure(endpointKey);
-      await this.handleRetry(dispatcher, job, e, lockKey);
+      if (abortController.signal.aborted) {
+        await this.handleHardFail(dispatcher, job, new Error("Cancelled"));
+      } else {
+        await this.handleRetry(dispatcher, job, e);
+      }
     }
   }
 
@@ -583,7 +592,6 @@ export class WebhookEngine implements IOqronModule {
     dispatcher: WebhookConfig,
     job: OqronJob<WebhookDeliveryPayload>,
     result: any,
-    lockKey: string,
   ) {
     job.status = "completed";
     job.finishedAt = new Date();
@@ -616,12 +624,7 @@ export class WebhookEngine implements IOqronModule {
       filterValue: dispatcher.name,
     });
 
-    const hb = this.heartbeats.get(job.id);
-    if (hb) {
-      await hb.stop();
-      this.heartbeats.delete(job.id);
-    }
-    await this.di.lock.release(lockKey, this.workerIdStr);
+    await this.finishJobExecution(job.id);
     await this.di.broker.ack(dispatcher.name, job.id);
 
     OqronEventBus.emit("job:success", dispatcher.name, job.id);
@@ -631,7 +634,6 @@ export class WebhookEngine implements IOqronModule {
     dispatcher: WebhookConfig,
     job: OqronJob<WebhookDeliveryPayload>,
     error: Error,
-    lockKey: string,
   ) {
     const errorMsg = error instanceof Error ? error.message : String(error);
     job.logs ??= [];
@@ -647,7 +649,7 @@ export class WebhookEngine implements IOqronModule {
       : maxRetries;
 
     if (job.attemptMade > effectiveMaxRetries) {
-      await this.handleHardFail(dispatcher, job, error, lockKey);
+      await this.handleHardFail(dispatcher, job, error);
     } else {
       // Retry
       const backoffOpts: BackoffOptions | undefined = dispatcher.retries
@@ -683,12 +685,7 @@ export class WebhookEngine implements IOqronModule {
 
       await this.di.storage.save("jobs", job.id, job);
 
-      const hb = this.heartbeats.get(job.id);
-      if (hb) {
-        await hb.stop();
-        this.heartbeats.delete(job.id);
-      }
-      await this.di.lock.release(lockKey, this.workerIdStr);
+      await this.finishJobExecution(job.id);
 
       await this.di.broker.nack(dispatcher.name, job.id, backoffMs);
     }
@@ -698,7 +695,6 @@ export class WebhookEngine implements IOqronModule {
     dispatcher: WebhookConfig,
     job: OqronJob<WebhookDeliveryPayload>,
     error: Error,
-    lockKey: string,
   ) {
     job.status = "failed";
     job.error = error.message;
@@ -739,12 +735,7 @@ export class WebhookEngine implements IOqronModule {
       filterValue: dispatcher.name,
     });
 
-    const hb = this.heartbeats.get(job.id);
-    if (hb) {
-      await hb.stop();
-      this.heartbeats.delete(job.id);
-    }
-    await this.di.lock.release(lockKey, this.workerIdStr);
+    await this.finishJobExecution(job.id);
     await this.di.broker.ack(dispatcher.name, job.id);
 
     OqronEventBus.emit("job:fail", dispatcher.name, job.id, error);
@@ -826,6 +817,7 @@ export class WebhookEngine implements IOqronModule {
     ac.abort();
 
     const job = await this.di.storage.get<OqronJob>("jobs", jobId);
+    const dispatcherName = job?.queueName ?? this.getDispatcherForActiveJob(jobId);
     if (job) {
       job.status = "failed";
       job.error = "Cancelled by operator";
@@ -840,16 +832,17 @@ export class WebhookEngine implements IOqronModule {
       await this.di.storage.save("jobs", jobId, job);
     }
 
-    const hb = this.heartbeats.get(jobId);
-    if (hb) {
-      await hb.stop();
-      this.heartbeats.delete(jobId);
-    }
+    await this.finishJobExecution(jobId);
     this.activeJobs.delete(jobId);
-    this.abortControllers.delete(jobId);
+    for (const jobs of this.activeJobsByDispatcher.values()) {
+      jobs.delete(jobId);
+    }
+    if (dispatcherName) {
+      await this.di.broker.ack(dispatcherName, jobId);
+    }
     OqronEventBus.emit(
       "job:fail",
-      job?.queueName ?? "unknown",
+      dispatcherName ?? "unknown",
       jobId,
       new Error("Cancelled"),
     );
@@ -962,14 +955,26 @@ export class WebhookEngine implements IOqronModule {
   // ── G8: Outbound Rate Limiter Helper ────────────────────────────────────────
 
   /** Resolve the outbound rate limiter for an endpoint (lazy-create or user-provided) */
+  private async resolveEndpointConfig(
+    dispatcher: WebhookConfig,
+    endpointName: string,
+  ): Promise<WebhookEndpoint | null> {
+    const endpoints = Array.isArray(dispatcher.endpoints)
+      ? dispatcher.endpoints
+      : await dispatcher.endpoints();
+    return endpoints.find((endpoint) => endpoint.name === endpointName) ?? null;
+  }
+
   private resolveOutboundLimiter(
     dispatcher: WebhookConfig,
     endpointName: string,
+    endpointOverride: WebhookEndpoint | null,
   ): IRateLimiter | null {
-    const endpoints = Array.isArray(dispatcher.endpoints)
-      ? dispatcher.endpoints
-      : [];
-    const ep = endpoints.find((e: WebhookEndpoint) => e.name === endpointName);
+    const ep = endpointOverride ?? (
+      Array.isArray(dispatcher.endpoints)
+        ? dispatcher.endpoints.find((e: WebhookEndpoint) => e.name === endpointName)
+        : undefined
+    );
     if (!ep) return null;
 
     // Option B: User-provided limiter takes precedence

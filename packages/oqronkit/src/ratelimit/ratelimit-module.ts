@@ -160,6 +160,7 @@ export class RateLimitModule implements IOqronModule {
         "ratelimit:bans",
         "ratelimit:violations",
         "ratelimit:warnings",
+        "ratelimit:circuit",
       ];
       for (const ns of gcNamespaces) {
         await storage.prune(ns, now);

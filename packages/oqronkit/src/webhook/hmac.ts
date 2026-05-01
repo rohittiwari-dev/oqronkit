@@ -47,7 +47,7 @@ export function verifyWebhookSignature(
 
   const timestamp = parseInt(timestampStr, 10);
   if (Number.isNaN(timestamp)) return false;
-  if (Date.now() - timestamp > toleranceMs) return false;
+  if (Math.abs(Date.now() - timestamp) > toleranceMs) return false;
 
   const payloadToSign = `${timestamp}.${body}`;
   const hmac = createHmac(algorithm, secret);

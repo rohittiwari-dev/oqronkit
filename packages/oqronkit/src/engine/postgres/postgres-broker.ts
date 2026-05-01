@@ -95,6 +95,8 @@ export class PostgresBroker implements IBrokerEngine {
     strategy: BrokerStrategy = "fifo",
   ): Promise<string[]> {
     await this.ensureTable();
+    if (await this.isPaused(brokerName)) return [];
+
     const lockUntil = new Date(Date.now() + lockTtlMs).toISOString();
     const now = new Date().toISOString();
 
@@ -117,6 +119,7 @@ export class PostgresBroker implements IBrokerEngine {
       `WITH candidates AS (
         SELECT id FROM ${this.tableName}
         WHERE broker_name = $1
+          AND id <> '__paused__'
           AND run_at <= $2::timestamptz
           AND (locked_by IS NULL OR locked_until < $2::timestamptz)
         ORDER BY ${orderBy}
@@ -194,6 +197,16 @@ export class PostgresBroker implements IBrokerEngine {
       `DELETE FROM ${this.tableName} WHERE broker_name = $1 AND id = '__paused__'`,
       [brokerName],
     );
+  }
+
+  private async isPaused(brokerName: string): Promise<boolean> {
+    const result = await this.pool.query(
+      `SELECT 1 FROM ${this.tableName}
+       WHERE broker_name = $1 AND id = '__paused__'
+       LIMIT 1`,
+      [brokerName],
+    );
+    return result.rows.length > 0;
   }
 
   /**

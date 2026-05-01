@@ -156,7 +156,7 @@ export class OqronManager {
    */
   async enableInstance(type: JobType, name: string): Promise<boolean> {
     if (type === "task" || type === ("queue" as any)) {
-      await Storage.save("queue_instances", name, { enabled: true });
+      await this.resumeQueue(name);
       return true;
     }
     if (type === "cron" || type === "schedule") {
@@ -182,7 +182,7 @@ export class OqronManager {
    */
   async disableInstance(type: JobType, name: string): Promise<boolean> {
     if (type === "task" || type === ("queue" as any)) {
-      await Storage.save("queue_instances", name, { enabled: false });
+      await this.pauseQueue(name);
       return true;
     }
     if (type === "cron" || type === "schedule") {
@@ -321,10 +321,30 @@ export class OqronManager {
   }
 
   async pauseQueue(name: string): Promise<void> {
+    const queueEngine = OqronRegistry.getInstance().getAll().find((m) => m.name === "queue") as any;
+    if (queueEngine && typeof queueEngine.pauseQueue === "function") {
+      await queueEngine.pauseQueue(name);
+    } else {
+      const existing = await Storage.get<any>("queue_instances", name);
+      await Storage.save("queue_instances", name, {
+        ...(existing || {}),
+        enabled: false,
+      });
+    }
     await Broker.pause(name);
   }
 
   async resumeQueue(name: string): Promise<void> {
+    const queueEngine = OqronRegistry.getInstance().getAll().find((m) => m.name === "queue") as any;
+    if (queueEngine && typeof queueEngine.resumeQueue === "function") {
+      await queueEngine.resumeQueue(name);
+    } else {
+      const existing = await Storage.get<any>("queue_instances", name);
+      await Storage.save("queue_instances", name, {
+        ...(existing || {}),
+        enabled: true,
+      });
+    }
     await Broker.resume(name);
   }
 
@@ -332,7 +352,6 @@ export class OqronManager {
     const failedJobs = await Storage.list<OqronJob>(
       "jobs",
       { queueName: name, status: "failed" },
-      { limit: 1000 },
     );
 
     let retried = 0;

@@ -54,8 +54,8 @@ export class MemoryStore implements IStorageEngine {
 
     // Sort by createdAt descending (newest first)
     results.sort((a: any, b: any) => {
-      const aTime = a.createdAt?.getTime?.() ?? 0;
-      const bTime = b.createdAt?.getTime?.() ?? 0;
+      const aTime = this.toEpochMs(a.createdAt) ?? 0;
+      const bTime = this.toEpochMs(b.createdAt) ?? 0;
       return bTime - aTime;
     });
 
@@ -142,10 +142,8 @@ export class MemoryStore implements IStorageEngine {
       // Null/undefined fields never match comparison operators
       if (raw === null || raw === undefined) return false;
 
-      const a = raw instanceof Date ? raw.getTime() : raw;
-      const b = cond.value instanceof Date
-        ? (cond.value as Date).getTime()
-        : cond.value;
+      const a = this.toEpochMs(raw) ?? raw;
+      const b = this.toEpochMs(cond.value) ?? cond.value;
 
       switch (cond.op) {
         case "$lt":  if (!(a < (b as any))) return false; break;
@@ -156,5 +154,15 @@ export class MemoryStore implements IStorageEngine {
       }
     }
     return true;
+  }
+
+  private toEpochMs(value: unknown): number | undefined {
+    if (value instanceof Date) return value.getTime();
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "string") {
+      const parsed = new Date(value).getTime();
+      return Number.isNaN(parsed) ? undefined : parsed;
+    }
+    return undefined;
   }
 }
