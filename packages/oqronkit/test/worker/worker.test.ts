@@ -5,11 +5,15 @@ import { MemoryBroker } from "../../src/engine/memory/memory-broker.js";
 import { MemoryLock } from "../../src/engine/memory/memory-lock.js";
 import { MemoryStore } from "../../src/engine/memory/memory-store.js";
 import { queue } from "../../src/queue/define-queue.js";
+import { getRegisteredQueues } from "../../src/queue/registry.js";
 import { worker } from "../../src/worker/define-worker.js";
+import { getRegisteredWorkers } from "../../src/worker/registry.js";
 import { WorkerEngine } from "../../src/worker/worker-engine.js";
 
 describe("Distributed Worker (Consumer-Only)", () => {
   beforeEach(() => {
+    getRegisteredQueues().splice(0);
+    getRegisteredWorkers().splice(0);
     const store = new MemoryStore();
     const broker = new MemoryBroker();
     const lock = new MemoryLock();
@@ -21,6 +25,8 @@ describe("Distributed Worker (Consumer-Only)", () => {
 
   afterEach(() => {
     OqronContainer.reset();
+    getRegisteredQueues().splice(0);
+    getRegisteredWorkers().splice(0);
   });
 
   it("should create a worker and return an IWorker without `.add`", () => {
@@ -67,6 +73,37 @@ describe("Distributed Worker (Consumer-Only)", () => {
     expect(processedUrl).toBe("https://example.com/movie.mp4");
 
     await engine.stop();
+  });
+
+  it("warns when a worker topic overlaps a self-handler queue", async () => {
+    queue<{ x: number }>({
+      name: "shared-consumer-topic",
+      handler: async () => {},
+    });
+    worker<{ x: number }>({
+      topic: "shared-consumer-topic",
+      handler: async () => {},
+    });
+
+    const logger = {
+      info: vi.fn(),
+      warn: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+      child: vi.fn().mockReturnThis(),
+    };
+    const engine = new WorkerEngine(
+      { project: "test", environment: "test" },
+      logger as any,
+      { module: "worker", heartbeatMs: 50 },
+    );
+
+    await engine.init();
+
+    expect(logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("self-handler queue"),
+      { topics: ["shared-consumer-topic"] },
+    );
   });
 
   it("should enforce worker concurrency limits", async () => {

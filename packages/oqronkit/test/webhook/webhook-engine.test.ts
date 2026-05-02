@@ -399,6 +399,34 @@ describe("WebhookEngine", () => {
 
   // ── processJob: DLQ ──────────────────────────────────────────────────
 
+  it("does not use legacy payload.security as a signing fallback", async () => {
+    const signSpy = vi
+      .spyOn(hmac, "signWebhookPayload")
+      .mockResolvedValue("t=123,v1=legacy");
+
+    const baseJob = createMockJob();
+    const job = createMockJob({
+      data: {
+        ...baseJob.data,
+        security: { signingSecret: "legacy-secret" },
+      } as any,
+    });
+    mockDi.storage.get.mockResolvedValueOnce(job);
+
+    const config = {
+      name: "test-dispatcher",
+      endpoints: [
+        { name: "ep1", url: "http://example.com/webhook", events: ["*"] },
+      ],
+    };
+
+    const engine = createEngine();
+    await engine["processJob"](config as any, "job-1");
+
+    expect(signSpy).not.toHaveBeenCalled();
+    expect(JSON.stringify(delivery.deliverWebhook.mock.calls[0][2])).not.toContain("legacy");
+  });
+
   it("should invoke deadLetter.onDead when all retries exhausted", async () => {
     const onDead = vi.fn();
     const job = createMockJob({ attemptMade: 3 });

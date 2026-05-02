@@ -100,7 +100,6 @@ export interface WebhookDeliveryPayload<T = any> {
   headers: Record<string, string>;
   body: T;
   transformedBody?: any;
-  security?: WebhookSecurity;
   idempotencyKey: string;
   timestamp: number;
 }

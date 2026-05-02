@@ -1,5 +1,8 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { initEngine } from "../../src/engine/core.js";
+import { createLogger } from "../../src/engine/index.js";
+import { MemoryLock } from "../../src/engine/memory/memory-lock.js";
+import { MemoryStore } from "../../src/engine/memory/memory-store.js";
 import { schedule } from "../../src/scheduler/define-schedule.js";
 import {
   _registerSchedule,
@@ -7,6 +10,7 @@ import {
 } from "../../src/scheduler/registry-schedule.js";
 import { _attachScheduleEngine } from "../../src/scheduler/define-schedule.js";
 import type { ScheduleDefinition } from "../../src/engine/index.js";
+import { ScheduleEngine } from "../../src/scheduler/schedule-engine.js";
 
 const config = { project: "test", environment: "test" };
 
@@ -182,6 +186,9 @@ describe("Schedule — trigger()/schedule() with mock engine", () => {
     // runAt should be set to now (immediate fire)
     expect(arg.runAt).toBeDefined();
     expect(arg.runAt instanceof Date).toBe(true);
+    expect(arg.every).toBeUndefined();
+    expect(arg.recurring).toBeUndefined();
+    expect(arg.rrule).toBeUndefined();
   });
 
   it("trigger() with nameSuffix creates a unique name", async () => {
@@ -254,6 +261,17 @@ describe("Schedule — trigger()/schedule() with mock engine", () => {
     ).rejects.toThrow(/runAfter/);
   });
 
+  it("schedule() rejects calls without explicit timing", async () => {
+    const s = schedule({
+      name: "runtime-no-timing",
+      handler: async () => {},
+    });
+    _drainPendingSchedules();
+
+    await expect(s.schedule()).rejects.toThrow(/without timing/);
+    expect(mockEngine.registerDynamic).not.toHaveBeenCalled();
+  });
+
   it("cancel() calls engine.cancel with definition name", async () => {
     const s = schedule({
       name: "cancel-sched",
@@ -264,6 +282,51 @@ describe("Schedule — trigger()/schedule() with mock engine", () => {
 
     await s.cancel();
     expect(mockEngine.cancel).toHaveBeenCalledWith("cancel-sched");
+  });
+});
+
+describe("Schedule — trigger()/schedule() with real engine", () => {
+  const logger = createLogger({ enabled: false }, { module: "schedule-real-engine-test" });
+
+  beforeEach(() => {
+    _drainPendingSchedules();
+    _attachScheduleEngine(null);
+  });
+
+  afterEach(() => {
+    _attachScheduleEngine(null);
+  });
+
+  it("trigger() strips inherited base timing before registering a one-shot dynamic schedule", async () => {
+    const storage = new MemoryStore();
+    const lock = new MemoryLock();
+    const engine = new ScheduleEngine(
+      [],
+      logger,
+      "test",
+      "default",
+      {},
+      { storage, lock } as any,
+    );
+    await engine.init();
+    _attachScheduleEngine(engine);
+
+    const s = schedule({
+      name: "real-trigger",
+      every: { minutes: 5 },
+      handler: async () => {},
+    });
+    _drainPendingSchedules();
+
+    await s.trigger({ nameSuffix: "manual" });
+
+    const record = await storage.get<any>("schedule_schedules", "real-trigger:manual");
+    expect(record).toBeDefined();
+    expect(record.runAt).toBeInstanceOf(Date);
+    expect(record.every).toBeUndefined();
+    expect(record.recurring).toBeUndefined();
+    expect(record.rrule).toBeUndefined();
+    expect(record.nextRunAt).toBeDefined();
   });
 });
 

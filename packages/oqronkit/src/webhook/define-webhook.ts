@@ -22,6 +22,12 @@ async function resolveEndpoints(
   return await input();
 }
 
+function endpointForStorage(endpoint: WebhookEndpoint): Omit<WebhookEndpoint, "security"> {
+  const persisted: Partial<WebhookEndpoint> = { ...endpoint };
+  delete persisted.security;
+  return persisted as Omit<WebhookEndpoint, "security">;
+}
+
 export function webhook<T = any>(
   config: WebhookConfig<T>,
 ): IWebhookDispatcher<T> {
@@ -297,12 +303,13 @@ export function webhook<T = any>(
       // the array is dynamic (which is the point of the feature, to use dynamic functions).
       // However, we save it into the webhook_endpoints DB table so `getEndpoints` could merge it
       // or dynamic functions can query it.
+      const persistedEndpoint = endpointForStorage(endpoint);
       await di.storage.save(
         "webhook_endpoints",
         `${config.name}:${endpoint.name}`,
         {
           dispatcherName: config.name,
-          ...endpoint,
+          ...persistedEndpoint,
           enabled: endpoint.enabled !== false,
         },
       );

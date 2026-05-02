@@ -108,6 +108,40 @@ describe("Dynamic CRUD API (G1)", () => {
 			).rejects.toThrow();
 		});
 
+		it("upsert() rejects cron definitions without exactly one timing strategy", async () => {
+			const engine = makeCronEngine();
+			await engine.init();
+
+			await expect(
+				engine.upsert({
+					name: "no-timing-cron",
+					handler: async () => {},
+				} as any),
+			).rejects.toThrow(/exactly one timing strategy/);
+
+			await expect(
+				engine.upsert({
+					name: "mixed-timing-cron",
+					expression: "*/5 * * * *",
+					intervalMs: 5000,
+					handler: async () => {},
+				} as any),
+			).rejects.toThrow(/exactly one timing strategy/);
+		});
+
+		it("upsert() rejects invalid intervalMs values", async () => {
+			const engine = makeCronEngine();
+			await engine.init();
+
+			await expect(
+				engine.upsert({
+					name: "bad-interval-cron",
+					intervalMs: -1,
+					handler: async () => {},
+				} as any),
+			).rejects.toThrow(/positive finite/);
+		});
+
 		it("upsert() preserves operational state (runCount, etc.) on update", async () => {
 			const engine = makeCronEngine([{
 				name: "counter-cron",

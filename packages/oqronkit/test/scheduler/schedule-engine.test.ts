@@ -528,20 +528,38 @@ describe("ScheduleEngine", () => {
         await module.stop();
     });
 
-    it("triggerManual() fires definition asynchronously", async () => {
-        const def = {
-          name: "manual-cron",
-          every: { seconds: 10 },
+	    it("triggerManual() fires definition asynchronously", async () => {
+	        const def = {
+	          name: "manual-cron",
+	          every: { seconds: 10 },
           handler: async () => {},
         };
         const module = new ScheduleEngine([def], logger, "test", "default", {}, container);
         const fired = await module.triggerManual("manual-cron");
         expect(fired).toBe(true);
-        const noExist = await module.triggerManual("unknown");
-        expect(noExist).toBe(false);
-    });
+	        const noExist = await module.triggerManual("unknown");
+	        expect(noExist).toBe(false);
+	    });
 
-    it("enable() and disable() functions", async () => {
+	    it("triggerManual() respects paused schedule state", async () => {
+	        const def = {
+	          name: "manual-paused",
+	          every: { seconds: 10 },
+	          handler: async () => {},
+	        };
+	        const module = new ScheduleEngine([def], logger, "test", "default", {}, container);
+	        await storage.save("schedule_schedules", "manual-paused", {
+	          name: "manual-paused",
+	          paused: true,
+	        });
+
+	        const fired = await module.triggerManual("manual-paused");
+	        expect(fired).toBe(true);
+	        await Promise.resolve();
+	        expect(module["activeJobs"].size).toBe(0);
+	    });
+
+	    it("enable() and disable() functions", async () => {
        const module = new ScheduleEngine([], logger, "test", "default", {}, container);
        await module.disable();
        expect(module.enabled).toBe(false);

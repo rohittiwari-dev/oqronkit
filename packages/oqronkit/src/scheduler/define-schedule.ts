@@ -9,6 +9,7 @@ import type {
   ScheduleRecurring,
 } from "../engine/index.js";
 import type { DisabledBehavior } from "../engine/types/config.types.js";
+import { validateEvery } from "./every-utils.js";
 import { _registerSchedule } from "./registry-schedule.js";
 
 /** Internal extension for dynamic definitions that carry a baseName */
@@ -86,32 +87,6 @@ type ScheduleTimingOptions = {
   rrule?: string;
   every?: EveryConfig;
 };
-
-function validateEvery(every: EveryConfig | undefined): void {
-  if (!every) return;
-
-  let ms = 0;
-  const multipliers: Record<keyof EveryConfig, number> = {
-    weeks: 604_800_000,
-    days: 86_400_000,
-    hours: 3_600_000,
-    minutes: 60_000,
-    seconds: 1_000,
-  };
-
-  for (const field of Object.keys(multipliers) as Array<keyof EveryConfig>) {
-    const value = every[field];
-    if (value === undefined) continue;
-    if (!Number.isFinite(value) || value < 0) {
-      throw new Error("[OqronKit] `every` values must be finite non-negative numbers");
-    }
-    ms += value * multipliers[field];
-  }
-
-  if (ms <= 0) {
-    throw new Error("[OqronKit] `every` config must resolve to a positive interval");
-  }
-}
 
 function validateTimingOptions(
   opts: ScheduleTimingOptions & Record<string, unknown>,
@@ -203,7 +178,14 @@ export const schedule = <TPayload = unknown>(
       );
     }
 
-    const dynamicDef: InternalScheduleDefinition = { ...def } as InternalScheduleDefinition;
+    const dynamicDef: InternalScheduleDefinition = {
+      ...def,
+      runAt: undefined,
+      recurring: undefined,
+      rrule: undefined,
+      every: undefined,
+    } as InternalScheduleDefinition;
+
     if (opts) {
       validateTimingOptions(
         opts as EnqueueOptions<TPayload> & Record<string, unknown>,
@@ -214,6 +196,18 @@ export const schedule = <TPayload = unknown>(
       if (opts.rrule) dynamicDef.rrule = opts.rrule;
       if (opts.every) dynamicDef.every = opts.every;
       if ("payload" in opts) dynamicDef.payload = opts.payload;
+    }
+
+    if (
+      !defaultImmediate &&
+      !opts?.runAt &&
+      !opts?.recurring &&
+      !opts?.rrule &&
+      !opts?.every
+    ) {
+      throw new Error(
+        `[OqronKit] Cannot schedule "${options.name}" without timing. Provide runAt, every, recurring, or rrule, or use trigger() for an immediate one-shot run.`,
+      );
     }
 
     // SAFETY: Always isolate dynamic triggers from the base singleton.

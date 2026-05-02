@@ -9,6 +9,7 @@ import type {
 } from "../engine/index.js";
 import type { DisabledBehavior } from "../engine/types/config.types.js";
 import { cronParser } from "./cron-compat.js";
+import { everyToIntervalMs } from "./every-utils.js";
 
 import { _registerCron } from "./registry.js";
 
@@ -54,20 +55,6 @@ export type DefineCronOptions = CronScheduleConfig & {
 };
 
 // ── Helpers ─────────────────────────────────────────────────────────────────────
-
-function everyToIntervalMs(every: EveryConfig): number {
-  let ms = 0;
-  if (every.weeks) ms += every.weeks * 604_800_000;
-  if (every.days) ms += every.days * 86_400_000;
-  if (every.seconds) ms += every.seconds * 1_000;
-  if (every.minutes) ms += every.minutes * 60_000;
-  if (every.hours) ms += every.hours * 3_600_000;
-  if (ms <= 0)
-    throw new Error(
-      "[OqronKit] `every` config must resolve to a positive interval",
-    );
-  return ms;
-}
 
 // ── Factory ─────────────────────────────────────────────────────────────────────
 

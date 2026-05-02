@@ -483,10 +483,10 @@ export class WebhookEngine implements IOqronModule {
       }
       const retryConfig = this.resolveRetryConfig(dispatcher, endpoint);
 
-      // Sign payload if security is configured
-      const security = await this.resolveSecurity(
-        endpoint.security ?? dispatcher.security ?? payload.security,
-      );
+	      // Sign payload if security is configured
+	      const security = await this.resolveSecurity(
+	        endpoint.security ?? dispatcher.security,
+	      );
       if (security) {
         const ts = payload.timestamp || startTs;
         const signature = await signWebhookPayload(

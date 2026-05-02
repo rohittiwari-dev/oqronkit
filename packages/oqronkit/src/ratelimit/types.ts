@@ -360,6 +360,8 @@ export interface IRateLimiter<TContext = any> {
   /**
    * Batch check multiple contexts. Returns results in order.
    * Stops at first block if `stopOnBlock` is true (default).
+   * This is sequential, not all-or-none: earlier allowed contexts consume quota
+   * even if a later context is blocked.
    */
   checkMany(
     contexts: TContext[],

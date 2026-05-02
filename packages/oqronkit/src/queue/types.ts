@@ -214,6 +214,8 @@ export interface QueueConfig<T = any, R = any> {
   /**
    * Execution timeout in milliseconds.
    * If the handler does not fulfill within this time, it is aborted and fails.
+   * JavaScript cannot forcibly stop a running promise; long-running handlers
+   * should observe `ctx.signal` to avoid late side effects after timeout.
    */
   timeout?: number;
 
@@ -257,7 +259,8 @@ export interface IQueue<T = any, R = any> {
   add(data: T, opts?: OqronJobOptions): Promise<OqronJob<T, R>>;
 
   /**
-   * Push multiple payloads onto the queue in a single call.
+   * Push multiple payloads onto the queue sequentially.
+   * This is a partial-success API: jobs added before a later failure remain queued.
    */
   addBulk(items: Array<{ data: T; opts?: OqronJobOptions }>): Promise<OqronJob<T, R>[]>;
 

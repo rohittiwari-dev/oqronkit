@@ -16,6 +16,7 @@ import {
   DEFAULT_TICK_INTERVAL_MS,
 } from "./constants.js";
 import { _attachScheduleEngine } from "./define-schedule.js";
+import { everyToIntervalMs as everyConfigToIntervalMs } from "./every-utils.js";
 
 /**
  * ScheduleEngine — schedules jobs via RRule, every, runAt, recurring.
@@ -113,30 +114,7 @@ export class ScheduleEngine extends BaseSchedulerEngine<ScheduleDefinition> {
   private everyToIntervalMs(def: ScheduleDefinition): number {
     const every = def.every;
     if (!every) return 0;
-
-    let ms = 0;
-    const multipliers = {
-      weeks: 604_800_000,
-      days: 86_400_000,
-      hours: 3_600_000,
-      minutes: 60_000,
-      seconds: 1_000,
-    };
-
-    for (const field of Object.keys(multipliers) as Array<keyof typeof multipliers>) {
-      const value = every[field];
-      if (value === undefined) continue;
-      if (!Number.isFinite(value) || value < 0) {
-        throw new Error("[OqronKit] `every` values must be finite non-negative numbers");
-      }
-      ms += value * multipliers[field];
-    }
-
-    if (ms <= 0) {
-      throw new Error("[OqronKit] `every` config must resolve to a positive interval");
-    }
-
-    return ms;
+    return everyConfigToIntervalMs(every);
   }
 
   protected computeNextRun(def: ScheduleDefinition, from: Date): Date | null {

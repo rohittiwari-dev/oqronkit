@@ -97,9 +97,9 @@ describe("Webhook Factory (define-webhook)", () => {
 
       const jobs = await dispatcher.fire("user.created", { id: 1 });
 
-      expect(jobs[0].data.security).toBeUndefined();
+      expect((jobs[0].data as any).security).toBeUndefined();
       const savedJob = mockDi.storage.save.mock.calls[0][2];
-      expect(savedJob.data.security).toBeUndefined();
+      expect((savedJob.data as any).security).toBeUndefined();
       expect(JSON.stringify(savedJob)).not.toContain("super-secret");
     });
 
@@ -452,6 +452,25 @@ describe("Webhook Factory (define-webhook)", () => {
           enabled: true,
         }),
       );
+    });
+
+    it("does not persist endpoint signing secrets via addEndpoint()", async () => {
+      const config: WebhookConfig = {
+        name: "ep-secret-mgmt",
+        endpoints: [],
+      };
+      const dispatcher = webhook<any>(config);
+
+      await dispatcher.addEndpoint({
+        name: "new-ep",
+        url: "http://new.com",
+        events: ["user.*"],
+        security: { signingSecret: "dynamic-secret" },
+      });
+
+      const savedEndpoint = mockDi.storage.save.mock.calls[0][2];
+      expect(savedEndpoint.security).toBeUndefined();
+      expect(JSON.stringify(savedEndpoint)).not.toContain("dynamic-secret");
     });
 
     it("should remove an endpoint via removeEndpoint()", async () => {

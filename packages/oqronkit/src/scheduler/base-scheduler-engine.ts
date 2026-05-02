@@ -319,13 +319,46 @@ export abstract class BaseSchedulerEngine<
 		this.logger.info(`${this.name} engine stopped`);
 	}
 
-	async triggerManual(scheduleId: string): Promise<boolean> {
-		const def = this.getDefinition(scheduleId);
-		if (!def) return false;
-		this.logger.info("Manual trigger requested", { scheduleId });
-		void this.fire(def);
-		return true;
-	}
+		async triggerManual(scheduleId: string): Promise<boolean> {
+			const def = this.getDefinition(scheduleId);
+			if (!def) return false;
+			this.logger.info("Manual trigger requested", { scheduleId });
+			if (this.leader && !this.leader.isLeader) {
+				this.logger.warn("Manual trigger skipped because this node is not leader", { scheduleId });
+				return true;
+			}
+			const record =
+				(await this.di.storage.get<any>(this.storageNamespace, scheduleId)) ??
+				{ name: scheduleId, paused: def.status === "paused" };
+			if (!this.canTickRecord(def, record)) {
+				this.logger.warn("Manual trigger skipped because this node does not own the schedule", { scheduleId });
+				return true;
+			}
+			if (record.paused) {
+				this.logger.warn("Manual trigger skipped because schedule is paused", { scheduleId });
+				return true;
+			}
+			if (!(await this.shouldFire(def, record))) {
+				this.logger.debug("Manual trigger skipped because condition guard returned false", { scheduleId });
+				return true;
+			}
+			if (def.rateLimiter) {
+				try {
+					const result = await def.rateLimiter.check({ name: def.name });
+					if (!result.allowed) {
+						this.logger.debug("Manual trigger skipped because rate limiter blocked it", { scheduleId });
+						return true;
+					}
+				} catch (err) {
+					this.logger.warn("Manual trigger rate limiter check failed - proceeding with fire", {
+						scheduleId,
+						err: String(err),
+					});
+				}
+			}
+			void this.fire(def);
+			return true;
+		}
 
 	async enable(): Promise<void> {
 		this.enabled = true;

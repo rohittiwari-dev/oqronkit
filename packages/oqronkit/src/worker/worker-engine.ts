@@ -17,6 +17,7 @@ import {
   type JobHandlerConfig,
 } from "../engine/utils/job-executor.js";
 import type { WorkerModuleDef } from "../modules.js";
+import { getRegisteredQueues } from "../queue/registry.js";
 import { deregisterWorker, getRegisteredWorkers, registerWorker as registryRegister } from "./registry.js";
 import type { WorkerConfig } from "./types.js";
 
@@ -58,6 +59,7 @@ export class WorkerEngine implements IOqronModule {
 		this.logger.info(
 			`Initialized WorkerEngine covering ${ws.length} topics`,
 		);
+		this.warnForSharedConsumerTopics(ws);
 
 		// Version-based config migration (§10.2 parity with schedule-engine)
 		for (const w of ws) {
@@ -98,6 +100,28 @@ export class WorkerEngine implements IOqronModule {
 				this.pausedTopics.add(w.topic);
 			}
 		}
+	}
+
+	private warnForSharedConsumerTopics(workers: WorkerConfig[]): void {
+		const selfHandlerTopics = new Set(
+			getRegisteredQueues()
+				.filter((q) => q.handler || q.processBatch)
+				.map((q) => q.name),
+		);
+		const conflicts = [
+			...new Set(
+				workers
+					.map((w) => w.topic)
+					.filter((topic) => selfHandlerTopics.has(topic)),
+			),
+		];
+
+		if (conflicts.length === 0) return;
+
+		this.logger.warn(
+			"Worker topic also has a self-handler queue; both engines may compete for the same broker jobs.",
+			{ topics: conflicts },
+		);
 	}
 
 	async start(): Promise<void> {

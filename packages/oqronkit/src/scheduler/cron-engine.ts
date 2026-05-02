@@ -80,7 +80,18 @@ export class CronEngine extends BaseSchedulerEngine<CronDefinition> {
 	}
 
 	protected validateDefinition(def: CronDefinition): void {
-		if (def.expression) {
+		const timingCount =
+			(def.expression !== undefined ? 1 : 0) +
+			(def.intervalMs !== undefined ? 1 : 0);
+
+		if (timingCount !== 1) {
+			throw new OqronError(
+				"ERR_INVALID_CRON",
+				`Cron schedule "${def.name}" must specify exactly one timing strategy: expression or intervalMs.`,
+			);
+		}
+
+		if (def.expression !== undefined) {
 			try {
 				validateExpression(def.expression);
 			} catch (err: any) {
@@ -89,6 +100,16 @@ export class CronEngine extends BaseSchedulerEngine<CronDefinition> {
 					`Invalid cron expression for schedule "${def.name}": ${def.expression}. Error: ${err.message}`,
 				);
 			}
+		}
+
+		if (
+			def.intervalMs !== undefined &&
+			(!Number.isFinite(def.intervalMs) || def.intervalMs <= 0)
+		) {
+			throw new OqronError(
+				"ERR_INVALID_CRON",
+				`Cron schedule "${def.name}" intervalMs must be a positive finite number.`,
+			);
 		}
 	}
 
