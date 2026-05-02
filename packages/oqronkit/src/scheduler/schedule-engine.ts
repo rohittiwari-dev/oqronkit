@@ -18,10 +18,10 @@ import {
 import { _attachScheduleEngine } from "./define-schedule.js";
 
 /**
- * ScheduleEngine — schedules jobs via RRule, every, runAt, runAfter, recurring.
+ * ScheduleEngine — schedules jobs via RRule, every, runAt, recurring.
  *
  * Extends BaseSchedulerEngine with schedule-specific logic:
- * - `computeNextRun` uses RRule/every/runAt/runAfter/recurring + jitter
+ * - `computeNextRun` uses RRule/every/runAt/recurring + jitter
  * - `handleLeaderInit` has misfire threshold + onMissedFire hooks
  * - Supports dynamic registration via `registerDynamic()`
  * - Supports sharded leader election for multi-region
@@ -81,20 +81,69 @@ export class ScheduleEngine extends BaseSchedulerEngine<ScheduleDefinition> {
     this.schedules.delete(name);
   }
 
+  protected validateDefinition(def: ScheduleDefinition): void {
+    if ("runAfter" in (def as ScheduleDefinition & Record<string, unknown>)) {
+      throw new Error(
+        `[OqronKit] Schedule "${def.name}" uses removed option "runAfter". Use "runAt" for one-shot schedules or "every" for recurring intervals.`,
+      );
+    }
+
+    const timingCount = [
+      def.runAt,
+      def.recurring,
+      def.rrule,
+      def.every,
+    ].filter((value) => value !== undefined).length;
+
+    if (timingCount > 1) {
+      throw new Error(
+        `[OqronKit] Schedule "${def.name}" must use only one timing strategy: runAt, every, recurring, or rrule.`,
+      );
+    }
+
+    if (def.runAt && Number.isNaN(new Date(def.runAt).getTime())) {
+      throw new Error(`[OqronKit] Schedule "${def.name}" has an invalid runAt date`);
+    }
+
+    if (def.every) {
+      this.everyToIntervalMs(def);
+    }
+  }
+
+  private everyToIntervalMs(def: ScheduleDefinition): number {
+    const every = def.every;
+    if (!every) return 0;
+
+    let ms = 0;
+    const multipliers = {
+      weeks: 604_800_000,
+      days: 86_400_000,
+      hours: 3_600_000,
+      minutes: 60_000,
+      seconds: 1_000,
+    };
+
+    for (const field of Object.keys(multipliers) as Array<keyof typeof multipliers>) {
+      const value = every[field];
+      if (value === undefined) continue;
+      if (!Number.isFinite(value) || value < 0) {
+        throw new Error("[OqronKit] `every` values must be finite non-negative numbers");
+      }
+      ms += value * multipliers[field];
+    }
+
+    if (ms <= 0) {
+      throw new Error("[OqronKit] `every` config must resolve to a positive interval");
+    }
+
+    return ms;
+  }
+
   protected computeNextRun(def: ScheduleDefinition, from: Date): Date | null {
     try {
       if (def.runAt) {
         const d = new Date(def.runAt);
         return d > from ? d : null; // One-shot: null after firing prevents re-fire loop
-      }
-
-      if (def.runAfter) {
-        const add =
-          (def.runAfter.days ?? 0) * 86400000 +
-          (def.runAfter.hours ?? 0) * 3600000 +
-          (def.runAfter.minutes ?? 0) * 60000 +
-          (def.runAfter.seconds ?? 0) * 1000;
-        return new Date(from.getTime() + add);
       }
 
       if (def.rrule) {
@@ -125,16 +174,7 @@ export class ScheduleEngine extends BaseSchedulerEngine<ScheduleDefinition> {
       }
 
       if (def.every) {
-        const add =
-          (def.every.weeks ?? 0) * 604_800_000 +
-          (def.every.days ?? 0) * 86_400_000 +
-          (def.every.hours ?? 0) * 3_600_000 +
-          (def.every.minutes ?? 0) * 60_000 +
-          (def.every.seconds ?? 0) * 1_000;
-        if (add <= 0) {
-          this.logger.error("Invalid `every` config — resolves to zero interval", { name: def.name });
-          return null;
-        }
+        const add = this.everyToIntervalMs(def);
         const jitterFactor = DEFAULT_INTERVAL_JITTER_FACTOR;
         if (jitterFactor > 0) {
           const jitter = add * jitterFactor * (2 * Math.random() - 1);
@@ -161,7 +201,7 @@ export class ScheduleEngine extends BaseSchedulerEngine<ScheduleDefinition> {
       for (const record of allSchedules) {
         const def = this.schedules.get(record.name);
         if (!def) continue;
-        if (def.runAt || def.runAfter) continue;
+        if (def.runAt) continue;
 
         if (
           record.nextRunAt &&
@@ -245,6 +285,8 @@ export class ScheduleEngine extends BaseSchedulerEngine<ScheduleDefinition> {
   }
 
   private async upsertAndSeed(def: ScheduleDefinition, now: Date) {
+    this.validateDefinition(def);
+
     const existing = await this.di.storage.get<any>(this.storageNamespace, def.name);
 
     const codeVersion = def.version ?? 0;
@@ -306,7 +348,6 @@ export class ScheduleEngine extends BaseSchedulerEngine<ScheduleDefinition> {
       const cmp = (a: any, b: any) => JSON.stringify(a) === JSON.stringify(b);
       if (!cmp(existing.every, def.every) ||
           !cmp(existing.runAt, def.runAt) ||
-          !cmp(existing.runAfter, def.runAfter) ||
           existing.rrule !== def.rrule ||
           !cmp(existing.recurring, def.recurring)) {
         shouldRecompute = true;

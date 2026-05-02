@@ -29,13 +29,6 @@ export { LagMonitor } from "./lag-monitor.js";
 
 // ── Lock Infrastructure ──────────────────────────────────────────────────────
 export { CrossNodeStallScanner } from "./lock/cross-node-stall-scanner.js";
-
-// ── Reconciliation ───────────────────────────────────────────────────────────
-export { ReconciliationEngine, type ReconciliationConfig } from "./utils/reconciliation-engine.js";
-
-// ── Sandbox ──────────────────────────────────────────────────────────────────
-export { SandboxedProcessor, type SandboxedProcessorConfig, type SandboxResult } from "./sandbox/sandboxed-processor.js";
-
 // ── Logger (voltlog-io) ──────────────────────────────────────────────────────
 export type {
   Logger,
@@ -43,10 +36,14 @@ export type {
   OqronLoggerConfig,
 } from "./logger/index.js";
 export { createLogger } from "./logger/index.js";
-
 // ── Registry ─────────────────────────────────────────────────────────────────
 export { OqronRegistry } from "./registry.js";
-
+// ── Sandbox ──────────────────────────────────────────────────────────────────
+export {
+  SandboxedProcessor,
+  type SandboxedProcessorConfig,
+  type SandboxResult,
+} from "./sandbox/sandboxed-processor.js";
 // ── Types ────────────────────────────────────────────────────────────────────
 export type {
   ClusteringConfig,
@@ -69,8 +66,6 @@ export type {
   ILockAdapter,
   IStorageEngine,
   ListOptions,
-} from "./types/engine.js";
-export type {
   WhereCondition,
   WhereOp,
 } from "./types/engine.js";
@@ -96,7 +91,6 @@ export type {
   ScheduleDefinition,
   ScheduleHooks,
   ScheduleRecurring,
-  ScheduleRunAfter,
 } from "./types/scheduler.types.js";
 export type { BackoffOptions } from "./utils/backoffs.js";
 // ── Utilities ────────────────────────────────────────────────────────────────
@@ -106,3 +100,8 @@ export {
   keepHistoryToRemoveConfig,
   pruneAfterCompletion,
 } from "./utils/job-retention.js";
+// ── Reconciliation ───────────────────────────────────────────────────────────
+export {
+  type ReconciliationConfig,
+  ReconciliationEngine,
+} from "./utils/reconciliation-engine.js";

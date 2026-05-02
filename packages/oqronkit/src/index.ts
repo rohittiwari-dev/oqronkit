@@ -56,7 +56,6 @@ export type {
 	ScheduleDefinition,
 	ScheduleHooks,
 	ScheduleRecurring,
-	ScheduleRunAfter,
 } from "./engine/index.js";
 // ── Re-exports: single source of truth for ALL user-facing APIs ─────────────
 export {

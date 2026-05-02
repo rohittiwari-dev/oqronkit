@@ -24,6 +24,7 @@ describe("ScheduleEngine", () => {
 
   describe("Lifecycle and init()", () => {
     it("initializes schedules and computes nextRunAt", async () => {
+      const now = Date.now();
       const module = new ScheduleEngine(
         [
           {
@@ -44,6 +45,48 @@ describe("ScheduleEngine", () => {
       const saved = await storage.get<any>("schedule_schedules", "test-cron");
       expect(saved).toBeDefined();
       expect(saved.nextRunAt).toBeDefined();
+      const delta = new Date(saved.nextRunAt).getTime() - now;
+      expect(delta).toBeGreaterThanOrEqual(5 * 60_000 * 0.95);
+      expect(delta).toBeLessThanOrEqual(5 * 60_000 * 1.05);
+    });
+
+    it("rejects removed runAfter definitions", async () => {
+      const module = new ScheduleEngine(
+        [
+          {
+            name: "removed-run-after",
+            runAfter: { seconds: 1 },
+            handler: async () => {},
+          } as any,
+        ],
+        logger,
+        "test",
+        "default",
+        {},
+        container,
+      );
+
+      await expect(module.init()).rejects.toThrow(/runAfter/);
+    });
+
+    it("rejects mixed timing strategies", async () => {
+      const module = new ScheduleEngine(
+        [
+          {
+            name: "mixed-timing",
+            runAt: new Date(Date.now() + 1000),
+            every: { minutes: 1 },
+            handler: async () => {},
+          } as any,
+        ],
+        logger,
+        "test",
+        "default",
+        {},
+        container,
+      );
+
+      await expect(module.init()).rejects.toThrow(/one timing strategy/);
     });
 
     it("does not overwrite nextRunAt if it already exists", async () => {

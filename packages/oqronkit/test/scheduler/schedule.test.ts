@@ -32,7 +32,7 @@ describe("Schedule — defineSchedule()", () => {
   it("sets default missedFire and overlap policies", () => {
     schedule({
       name: "defaults-sched",
-      runAfter: { hours: 1 },
+      every: { hours: 1 },
       handler: async () => {},
     });
 
@@ -80,6 +80,45 @@ describe("Schedule — defineSchedule()", () => {
     expect(pending[0].tags).toEqual(["billing", "nightly"]);
     expect(pending[0].payload).toEqual({ reportId: 42 });
     expect(pending[0].retries?.max).toBe(5);
+  });
+
+  it("rejects the removed runAfter option", () => {
+    expect(() =>
+      schedule({
+        name: "removed-run-after",
+        runAfter: { seconds: 1 },
+        handler: async () => {},
+      } as any),
+    ).toThrow(/runAfter/);
+  });
+
+  it("rejects mixed timing strategies", () => {
+    expect(() =>
+      schedule({
+        name: "mixed-timing",
+        runAt: new Date(Date.now() + 1000),
+        every: { minutes: 1 },
+        handler: async () => {},
+      } as any),
+    ).toThrow(/one timing strategy/);
+  });
+
+  it("rejects invalid every intervals", () => {
+    expect(() =>
+      schedule({
+        name: "zero-every",
+        every: { seconds: 0 },
+        handler: async () => {},
+      }),
+    ).toThrow(/positive interval/);
+
+    expect(() =>
+      schedule({
+        name: "negative-every",
+        every: { seconds: -1 },
+        handler: async () => {},
+      }),
+    ).toThrow(/finite non-negative/);
   });
 });
 
@@ -201,6 +240,18 @@ describe("Schedule — trigger()/schedule() with mock engine", () => {
 
     const arg = mockEngine.registerDynamic.mock.calls[0][0];
     expect(arg.payload).toBe(false);
+  });
+
+  it("schedule() rejects removed runAfter overrides", async () => {
+    const s = schedule({
+      name: "runtime-run-after",
+      handler: async () => {},
+    });
+    _drainPendingSchedules();
+
+    await expect(
+      s.schedule({ runAfter: { seconds: 1 } } as any),
+    ).rejects.toThrow(/runAfter/);
   });
 
   it("cancel() calls engine.cancel with definition name", async () => {

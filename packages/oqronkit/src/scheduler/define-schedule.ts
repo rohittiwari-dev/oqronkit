@@ -1,4 +1,5 @@
 import type {
+  EveryConfig,
   IScheduleContext,
   MissedFirePolicy,
   OverlapPolicy,
@@ -6,7 +7,6 @@ import type {
   ScheduleDefinition,
   ScheduleHooks,
   ScheduleRecurring,
-  ScheduleRunAfter,
 } from "../engine/index.js";
 import type { DisabledBehavior } from "../engine/types/config.types.js";
 import { _registerSchedule } from "./registry-schedule.js";
@@ -18,10 +18,9 @@ interface InternalScheduleDefinition extends ScheduleDefinition {
 
 type EnqueueOptions<TPayload> = {
   runAt?: Date;
-  runAfter?: ScheduleRunAfter;
   recurring?: ScheduleRecurring;
   rrule?: string;
-  every?: { weeks?: number; days?: number; minutes?: number; hours?: number; seconds?: number };
+  every?: EveryConfig;
   payload?: TPayload;
   nameSuffix?: string; // Optional suffix for dynamic names (e.g. queue pattern)
 };
@@ -36,10 +35,9 @@ export type ScheduleInstance<TPayload> = ScheduleDefinition<TPayload> & {
 export type DefineScheduleOptions<TPayload> = {
   name: string;
   runAt?: Date;
-  runAfter?: ScheduleRunAfter;
   recurring?: ScheduleRecurring;
   rrule?: string;
-  every?: { weeks?: number; days?: number; minutes?: number; hours?: number; seconds?: number };
+  every?: EveryConfig;
   timezone?: string;
   missedFire?: MissedFirePolicy;
   maxMissedRuns?: number;
@@ -82,6 +80,65 @@ interface IScheduleEngineRef {
   cancel(name: string): Promise<void>;
 }
 
+type ScheduleTimingOptions = {
+  runAt?: Date;
+  recurring?: ScheduleRecurring;
+  rrule?: string;
+  every?: EveryConfig;
+};
+
+function validateEvery(every: EveryConfig | undefined): void {
+  if (!every) return;
+
+  let ms = 0;
+  const multipliers: Record<keyof EveryConfig, number> = {
+    weeks: 604_800_000,
+    days: 86_400_000,
+    hours: 3_600_000,
+    minutes: 60_000,
+    seconds: 1_000,
+  };
+
+  for (const field of Object.keys(multipliers) as Array<keyof EveryConfig>) {
+    const value = every[field];
+    if (value === undefined) continue;
+    if (!Number.isFinite(value) || value < 0) {
+      throw new Error("[OqronKit] `every` values must be finite non-negative numbers");
+    }
+    ms += value * multipliers[field];
+  }
+
+  if (ms <= 0) {
+    throw new Error("[OqronKit] `every` config must resolve to a positive interval");
+  }
+}
+
+function validateTimingOptions(
+  opts: ScheduleTimingOptions & Record<string, unknown>,
+  name: string,
+): void {
+  if ("runAfter" in opts) {
+    throw new Error(
+      `[OqronKit] Schedule "${name}" uses removed option "runAfter". Use "runAt" for one-shot schedules or "every" for recurring intervals.`,
+    );
+  }
+
+  const timingCount = [
+    opts.runAt,
+    opts.recurring,
+    opts.rrule,
+    opts.every,
+  ].filter((value) => value !== undefined).length;
+
+  if (timingCount > 1) {
+    throw new Error(
+      `[OqronKit] Schedule "${name}" must use only one timing strategy: runAt, every, recurring, or rrule.`,
+    );
+  }
+
+  validateEvery(opts.every);
+}
+
 // Global reference that the engine will attach at boot time
 // so that `trigger()` and `schedule()` work.
 const engineRef: { current: IScheduleEngineRef | null } = { current: null };
@@ -97,10 +154,14 @@ export function _attachScheduleEngine(engine: IScheduleEngineRef | null) {
 export const schedule = <TPayload = unknown>(
   options: DefineScheduleOptions<TPayload>,
 ): ScheduleInstance<TPayload> => {
+  validateTimingOptions(
+    options as DefineScheduleOptions<TPayload> & Record<string, unknown>,
+    options.name,
+  );
+
   const def: ScheduleDefinition<TPayload> = {
     name: options.name,
     runAt: options.runAt,
-    runAfter: options.runAfter,
     recurring: options.recurring,
     rrule: options.rrule,
     every: options.every,
@@ -144,8 +205,11 @@ export const schedule = <TPayload = unknown>(
 
     const dynamicDef: InternalScheduleDefinition = { ...def } as InternalScheduleDefinition;
     if (opts) {
+      validateTimingOptions(
+        opts as EnqueueOptions<TPayload> & Record<string, unknown>,
+        options.name,
+      );
       if (opts.runAt) dynamicDef.runAt = opts.runAt;
-      if (opts.runAfter) dynamicDef.runAfter = opts.runAfter;
       if (opts.recurring) dynamicDef.recurring = opts.recurring;
       if (opts.rrule) dynamicDef.rrule = opts.rrule;
       if (opts.every) dynamicDef.every = opts.every;
@@ -161,7 +225,6 @@ export const schedule = <TPayload = unknown>(
     if (
       defaultImmediate &&
       !opts?.runAt &&
-      !opts?.runAfter &&
       !opts?.recurring &&
       !opts?.rrule &&
       !opts?.every

@@ -1,5 +1,6 @@
 import type { DisabledBehavior } from "./config.types.js";
 import type {
+  EveryConfig,
   MissedFirePolicy,
   OverlapPolicy,
   RetryConfig,
@@ -12,13 +13,6 @@ export interface ScheduleRecurring {
   dayOfMonth?: number;
   at?: { hour: number; minute: number };
   months?: number[]; // e.g. [1, 4, 7, 10]
-}
-
-export interface ScheduleRunAfter {
-  days?: number;
-  hours?: number;
-  minutes?: number;
-  seconds?: number;
 }
 
 export interface ScheduleHooks<TPayload = unknown> {
@@ -63,13 +57,13 @@ export interface ScheduleDefinition<TPayload = unknown> {
   /** Schema version — bump when changing schedule config to trigger a controlled migration. */
   version?: number;
 
-  // Schedule configurations
+  // Schedule configurations. `runAt` is one-shot; `every`, `recurring`, and
+  // `rrule` are recurring. Task-only definitions can omit timing and be fired
+  // later via `trigger()`.
   runAt?: Date;
-  /** Repeating relative interval. For one-shot delayed schedules, use runAt. */
-  runAfter?: ScheduleRunAfter;
   recurring?: ScheduleRecurring;
   rrule?: string;
-  every?: { weeks?: number; days?: number; minutes?: number; hours?: number; seconds?: number };
+  every?: EveryConfig;
 
   // Execution Logic
   timezone?: string;
@@ -109,4 +103,3 @@ export interface ScheduleDefinition<TPayload = unknown> {
   /**  Optional rate limiter. If check() returns { allowed: false }, fire is skipped. */
   rateLimiter?: { check(ctx: any): Promise<{ allowed: boolean }> };
 }
-
