@@ -1,0 +1,26 @@
+{
+  "title": "OqronKit",
+  "icon": "Library",
+  "pages": [
+    "index",
+    "installation",
+    "quickstart",
+    "architecture",
+    "---Modules---",
+    "task-queue",
+    "distributed-worker",
+    "scheduler",
+    "rate-limiter",
+    "webhook",
+    "batch",
+    "workflow",
+    "saga",
+    "pipeline",
+    "pubsub",
+    "cache",
+    "ingest",
+    "---Infrastructure---",
+    "adapters",
+    "crash-safety"
+  ]
+}

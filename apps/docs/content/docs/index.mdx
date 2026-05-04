@@ -1,0 +1,44 @@
+---
+title: Introduction
+description: Overview of OqronKit v1 Enterprise Release
+---
+
+# Introduction to OqronKit
+
+OqronKit is an industry-grade, crash-safe, and framework-agnostic backend orchestration and distributed processing engine for Node.js.
+
+## The Problem
+
+Modern distributed systems require robust mechanisms for background computation. Developers often face challenges with:
+
+- **Scaling:** Moving from a monolithic application to a decoupled microservice architecture often requires significant code rewrites.
+- **Reliability:** Ensuring jobs are not lost when worker processes crash (e.g., OOM errors, SIGKILL).
+- **Consistency:** Maintaining state and strict idempotency across distributed nodes.
+- **Tooling Sprawl:** Piecing together disparate libraries for queuing, batching, rate limiting, and workflows.
+
+## The OqronKit Solution
+
+OqronKit solves these challenges by providing a unified, adapter-driven architecture with 12 core enterprise modules.
+
+### Core Architectural Philosophy
+
+1. **Native Horizontal Scaling & Microservices:** Every module is natively designed for massive horizontal scaling. Using an In-Memory adapter runs the code cleanly as a monolith on one server. Connecting a Redis/Postgres adapter instantly transforms the application into a decoupled, distributed microservice architecture without changing the business logic.
+2. **Server Independence (Senders vs Processors):** Senders (API Nodes) and Processors (Worker Nodes) are strictly decoupled. A module definition can exist purely as a `producer` or a `consumer`.
+3. **Adapter-Driven Architecture (No Direct DB Calls):** All interaction with persistence layers routes through standard adapters (`IOqronAdapter`, `ILockAdapter`, `IQueueAdapter`), ensuring framework agnosticism.
+4. **Crash-Safety via Heartbeat Locks:** Built-in `StallDetector` and heartbeat intervals ensure that jobs from crashed workers are automatically reclaimed and retried safely.
+5. **Strict Idempotency:** Guaranteed state consistency before and immediately after job/step completions.
+
+## The 12 Enterprise Modules
+
+1. **Task Queue:** Unified, simple queue for monolithic setups.
+2. **Distributed Worker:** Decoupled queue pushing and worker polling.
+3. **Batch:** Accumulator buffering (`maxSize` or `maxWaitMs`).
+4. **RateLimit:** Sliding-window distributed limits.
+5. **Workflow (DAG):** Complex dependency grids.
+6. **Stack:** LIFO rollback migration sequences.
+7. **Saga:** Distributed microservice transactions with compensation chains.
+8. **Pipeline:** Streaming ETL with backpressure.
+9. **Webhook:** Webhook dispatch with DLQ and cryptographic signing.
+10. **PubSub:** Durable topics and fan-out consumer groups.
+11. **Cache:** Stampede-protected hierarchical memory tiers.
+12. **Ingest:** Ultra-fast, low-latency event-driven functions (similar to Inngest).

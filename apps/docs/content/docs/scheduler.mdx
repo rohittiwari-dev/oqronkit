@@ -1,0 +1,227 @@
+---
+title: Scheduler
+description: Cron, RRule, one-shot, and repeating interval schedules
+icon: Clock
+---
+
+# Scheduler
+
+OqronKit provides two scheduling APIs: `cron()` for fixed infrastructure jobs, and `schedule()` for dynamic, data-driven scheduling.
+
+## Cron vs Schedule
+
+| | `cron()` | `schedule()` |
+|---|---|---|
+| **Trigger** | Time-driven (expression/every) | Data-driven (API-triggered) |
+| **Payload** | None | Typed generic payload |
+| **Dynamic dispatch** | No | `.trigger()` / `.schedule()` |
+| **Conditions** | No | `condition: async (ctx) => boolean` |
+| **Best for** | Sweeps, cleanup, metrics | Drip campaigns, delayed actions |
+
+---
+
+## Cron
+
+### Expression-based
+
+```ts title="triggers/crons.ts"
+import { cron, type ICronContext } from 'oqronkit'
+
+export const dailyReport = cron({
+  name: 'daily-analytics-report',
+  expression: '0 8 * * *',       // Every day at 8 AM
+  timezone: 'Asia/Kolkata',
+
+  priority: 1,                    // Lower = fires first among simultaneous crons
+  version: 2,                     // Bump to trigger config migration
+  missedFire: 'run-once',         // Recover missed fires
+  overlap: 'skip',                // Skip if previous run is still active
+  guaranteedWorker: true,         // Heartbeat crash-safety
+  timeout: 120_000,
+
+  tags: ['analytics', 'reporting'],
+  keepHistory: 30,
+  keepFailedHistory: true,
+
+  hooks: {
+    beforeRun: async (ctx) => {
+      ctx.log.info('📊 Report generation starting...')
+    },
+    afterRun: async (ctx, result) => {
+      ctx.log.info('✅ Report completed', { duration: `${ctx.duration}ms` })
+    },
+    onError: async (ctx, error) => {
+      ctx.log.error('🔥 Report FAILED', { error: error.message })
+    },
+    onMissedFire: async (ctx, missedAt) => {
+      ctx.log.warn('⏰ Missed fire recovered', { missedAt: missedAt.toISOString() })
+    },
+  },
+
+  handler: async (ctx: ICronContext) => {
+    ctx.progress(10, 'Querying raw events')
+    ctx.progress(50, 'Aggregating metrics')
+    ctx.progress(100, 'Done')
+    return { rowsProcessed: 154_200, tenants: 42 }
+  },
+})
+```
+
+### Interval-based (`every`)
+
+```ts
+export const healthCheck = cron({
+  name: 'health-check-ping',
+  every: { seconds: 10 },
+  jitterMs: 3_000,      // Prevent thundering herd across cluster
+  priority: 100,         // Low priority — never block critical crons
+  missedFire: 'skip',
+  overlap: 'run',
+  keepHistory: false,
+
+  handler: async (ctx: ICronContext) => {
+    ctx.log.debug('💓 Health check', {
+      memoryMb: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
+    })
+    return { status: 'ok' }
+  },
+})
+```
+
+---
+
+## Schedule
+
+### One-off (`runAt`)
+
+```ts title="triggers/scheduler.ts"
+import { schedule, type IScheduleContext } from 'oqronkit'
+
+export const dataMigration = schedule({
+  name: 'data-migration-v2',
+  runAt: new Date('2026-12-01T00:00:00Z'),
+  guaranteedWorker: true,
+  priority: 0,
+
+  handler: async (ctx: IScheduleContext) => {
+    ctx.progress(50, 'Migrating rows')
+    return { rowsMigrated: 54_000 }
+  },
+})
+```
+
+### Repeating interval (`every`)
+
+```ts
+export const metricsAgg = schedule({
+  name: 'metrics-aggregation',
+  every: { minutes: 5 },
+  jitterMs: 15_000,
+  priority: 20,
+  overlap: 'skip',
+
+  handler: async (ctx) => {
+    ctx.log('info', '📈 Aggregating metrics')
+    return { eventsProcessed: 142_000 }
+  },
+})
+```
+
+### Recurring calendar (`recurring`)
+
+```ts
+export const quarterlyReview = schedule({
+  name: 'quarterly-financial-review',
+  recurring: {
+    frequency: 'monthly',
+    dayOfMonth: 1,
+    at: { hour: 9, minute: 0 },
+    months: [1, 4, 7, 10],
+  },
+  timezone: 'Europe/London',
+
+  condition: async (ctx) => {
+    const day = new Date().getDay()
+    return day > 0 && day < 6 // Skip weekends
+  },
+
+  handler: async (ctx) => {
+    return { mrr: 284_500, churnRate: 2.1 }
+  },
+})
+```
+
+### iCalendar (`rrule`)
+
+```ts
+export const payrollRun = schedule({
+  name: 'payroll-processing',
+  rrule: 'FREQ=MONTHLY;BYDAY=-1FR',  // Last Friday of every month
+  guaranteedWorker: true,
+  priority: 0,
+  maxConcurrent: 1,
+
+  handler: async (ctx) => {
+    ctx.progress(40, 'Calculating taxes')
+    ctx.progress(100, 'Payroll complete')
+    return { employeesPaid: 324 }
+  },
+})
+```
+
+### Dynamic Templates (`.trigger()` / `.schedule()`)
+
+Define a schedule with **no timer** — it only fires when you call `.trigger()` or `.schedule()` with a payload:
+
+```ts
+export const onboardingEmail = schedule<{
+  userId: string
+  template: string
+  email: string
+}>({
+  name: 'onboarding-email',
+  // No every/runAt/recurring — this is a TEMPLATE
+
+  handler: async (ctx) => {
+    const { userId, template, email } = ctx.payload
+    ctx.log('info', `Sending ${template} to ${email}`)
+    return { sent: true }
+  },
+})
+
+// Usage from your API:
+await onboardingEmail.trigger({
+  payload: { userId: 'u_123', template: 'welcome', email: 'user@ex.com' },
+})
+
+await onboardingEmail.schedule({
+  nameSuffix: 'u_123-tips',
+  runAfter: { days: 3 },
+  payload: { userId: 'u_123', template: 'day3-tips', email: 'user@ex.com' },
+})
+```
+
+## Configuration Reference
+
+| Option | Type | Description |
+|---|---|---|
+| `name` | `string` | Unique schedule identifier |
+| `expression` | `string` | UNIX cron expression (cron only) |
+| `every` | `EveryConfig` | Interval: `weeks`, `days`, `hours`, `minutes`, `seconds` |
+| `runAt` | `Date` | One-shot execution at a specific time |
+| `recurring` | `ScheduleRecurring` | Semantic calendar builder |
+| `rrule` | `string` | RFC 5545 recurrence rule |
+| `timezone` | `string` | IANA timezone |
+| `missedFire` | `'skip' \| 'run-once' \| 'run-all'` | Behavior for missed fires |
+| `overlap` | `'skip' \| 'run'` | Overlap handling |
+| `jitterMs` | `number` | Random jitter to prevent thundering herd |
+| `priority` | `number` | Lower = fires first |
+| `version` | `number` | Bump to trigger config migration |
+| `rateLimiter` | `{ check() }` | Optional rate limit gate |
+| `condition` | `(ctx) => boolean` | Conditional execution (schedule only) |
+| `maxConcurrent` | `number` | Max parallel runs |
+
+## Next Steps
+
+- [Rate Limiter](/docs/rate-limiter) — Protect schedules with rate limits
+- [Crash Safety](/docs/crash-safety) — How schedules survive worker crashes

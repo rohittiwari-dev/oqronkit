@@ -1,0 +1,63 @@
+---
+title: Adapters
+description: Storage, Broker, and Lock adapter configuration
+icon: Database
+---
+
+# Adapters
+
+OqronKit's adapter system provides swappable persistence backends. The same job definitions work identically across in-memory, Redis, and PostgreSQL — zero code changes needed.
+
+## Three Adapter Interfaces
+
+| Interface | Responsibility | Methods |
+|-----------|---------------|---------|
+| `IStorageEngine` | Job records, schedules, history | `save`, `get`, `list`, `delete`, `count` |
+| `IBrokerEngine` | Job signaling, queue transport | `publish`, `claim`, `ack`, `nack`, `pause`, `resume` |
+| `ILockAdapter` | Distributed locking | `acquire`, `release`, `renew`, `isLocked` |
+
+## In-Memory (Development)
+
+Zero-dependency. Ships built-in. Perfect for local development and testing.
+
+```ts
+await OqronKit.init({
+  config: {
+    modules: [queueModule, cronModule],
+    // In-memory is the default — no adapter config needed
+  },
+})
+```
+
+## Redis (Production)
+
+High-throughput adapter for distributed deployments using Redis Sorted Sets for the broker and Redlock for distributed locking.
+
+## PostgreSQL (Production)
+
+ACID-compliant adapter using JSONB+GIN indexes for storage and PostgreSQL Advisory Locks.
+
+## Custom Adapters
+
+Implement the adapter interfaces to plug in any backend:
+
+```ts
+import { OqronContainer } from 'oqronkit'
+
+const container = new OqronContainer(
+  myCustomStorage,  // IStorageEngine
+  myCustomBroker,   // IBrokerEngine
+  myCustomLock,     // ILockAdapter
+)
+```
+
+## Global Singleton vs Multi-Instance
+
+```ts
+// Global singleton (default):
+await OqronKit.init({ config: { /* ... */ } })
+const di = OqronContainer.get()
+
+// Multi-instance (advanced — isolated adapters):
+const container = new OqronContainer(myStore, myBroker, myLock)
+```

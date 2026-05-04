@@ -1,0 +1,52 @@
+---
+title: Workflow (DAG)
+description: Complex job dependency graphs with parent-child relationships
+icon: GitBranch
+---
+
+# Workflow (DAG)
+
+The Workflow module enables complex job dependency grids where child jobs wait for parent jobs to complete before executing — forming a Directed Acyclic Graph (DAG).
+
+> **Roadmap Module** — Workflow is part of the v1 Enterprise release roadmap. Basic DAG support via `dependsOn` is available today in the Queue module.
+
+## Using DAGs Today
+
+Job dependencies are available via the `dependsOn` option in `queue().add()`:
+
+```ts
+import { queue } from 'oqronkit'
+
+const extractQueue = queue({ name: 'extract', handler: async (ctx) => { /* ... */ } })
+const transformQueue = queue({ name: 'transform', handler: async (ctx) => { /* ... */ } })
+
+// Parent jobs
+const extract1 = await extractQueue.add({ source: 'users.csv' })
+const extract2 = await extractQueue.add({ source: 'orders.csv' })
+
+// Child waits for both parents to complete
+const transform = await transformQueue.add(
+  { mergeFrom: ['users', 'orders'] },
+  { dependsOn: [extract1.id, extract2.id] }
+)
+```
+
+## Parent Failure Policies
+
+| Policy | Behavior |
+|--------|----------|
+| `'block'` (default) | Child stays in `waiting-children` indefinitely |
+| `'cascade-fail'` | Child immediately marked as `failed` |
+| `'ignore'` | Child proceeds as if parent succeeded |
+
+```ts
+await transformQueue.add(data, {
+  dependsOn: [parentId],
+  parentFailurePolicy: 'cascade-fail',
+})
+```
+
+## Next Steps
+
+- [Saga](/docs/saga) — Distributed transactions with compensation chains
+- [Task Queue](/docs/task-queue) — Simple background processing

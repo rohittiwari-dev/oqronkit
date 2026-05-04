@@ -1,0 +1,270 @@
+@import "tailwindcss";
+@import "fumadocs-ui/css/neutral.css";
+@import "fumadocs-ui/css/preset.css";
+
+@theme {
+  --font-sans: var(--font-inter);
+  --font-heading: var(--font-outfit);
+
+  --color-fd-primary: var(--color-fd-primary);
+  --color-fd-foreground: var(--color-fd-foreground);
+  --color-fd-background: var(--color-fd-background);
+  --color-fd-muted: var(--color-fd-muted);
+  --color-fd-muted-foreground: var(--color-fd-muted-foreground);
+  --color-fd-popover: var(--color-fd-popover);
+  --color-fd-popover-foreground: var(--color-fd-popover-foreground);
+  --color-fd-card: var(--color-fd-card);
+  --color-fd-card-foreground: var(--color-fd-card-foreground);
+  --color-fd-border: var(--color-fd-border);
+  --color-fd-input: var(--color-fd-input);
+  --color-fd-accent: var(--color-fd-accent);
+  --color-fd-accent-foreground: var(--color-fd-accent-foreground);
+  --color-fd-destructive: var(--color-fd-destructive);
+  --color-fd-destructive-foreground: var(--color-fd-destructive-foreground);
+  --color-fd-ring: var(--color-fd-ring);
+  --radius-fd-radius: var(--radius-fd-radius);
+}
+
+/* Apply Heading Font Globally */
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family: var(--font-heading);
+}
+
+:root {
+  --color-fd-background: hsl(30 20% 99%);
+  --color-fd-foreground: hsl(20 15% 12%);
+  --color-fd-card: hsl(0 0% 100%);
+  --color-fd-card-foreground: hsl(20 15% 12%);
+  --color-fd-popover: hsl(0 0% 100%);
+  --color-fd-popover-foreground: hsl(20 15% 12%);
+  --color-fd-primary: hsl(347 77% 50%);
+  --color-fd-primary-foreground: hsl(0 0% 100%);
+  --color-fd-secondary: hsl(30 20% 96%);
+  --color-fd-secondary-foreground: hsl(20 15% 12%);
+  --color-fd-muted: hsl(30 14% 95%);
+  --color-fd-muted-foreground: hsl(20 8% 46%);
+  --color-fd-accent: hsl(347 60% 96%);
+  --color-fd-accent-foreground: hsl(347 77% 40%);
+  --color-fd-destructive: hsl(0 84.2% 60.2%);
+  --color-fd-destructive-foreground: hsl(0 0% 98%);
+  --color-fd-border: hsl(30 10% 91%);
+  --color-fd-input: hsl(30 10% 91%);
+  --color-fd-ring: hsl(347 77% 50%);
+  --radius-fd-radius: 0.75rem;
+}
+
+.dark {
+  --color-fd-background: hsl(
+    20 6% 10%
+  );
+  --color-fd-foreground: hsl(0 0% 98%);
+
+  /* Glassmorphic Card Backgrounds (Semi-transparent) */
+  --color-fd-card: hsl(20 4% 12% / 0.4);
+  --color-fd-card-foreground: hsl(0 0% 98%);
+  --color-fd-popover: hsl(20 4% 12% / 0.6);
+  --color-fd-popover-foreground: hsl(0 0% 98%);
+
+  --color-fd-primary: hsl(347 77% 60%);
+  --color-fd-primary-foreground: hsl(0 0% 98%);
+  --color-fd-secondary: hsl(20 3.7% 18% / 0.5);
+  --color-fd-secondary-foreground: hsl(0 0% 98%);
+  --color-fd-muted: hsl(20 3.7% 18% / 0.5);
+  --color-fd-muted-foreground: hsl(20 5% 64.9%);
+  --color-fd-accent: hsl(20 3.7% 18% / 0.5);
+  --color-fd-accent-foreground: hsl(0 0% 98%);
+  --color-fd-destructive: hsl(0 62.8% 30.6%);
+  --color-fd-destructive-foreground: hsl(0 0% 98%);
+  --color-fd-border: hsl(20 3.7% 20% / 0.5);
+  --color-fd-input: hsl(20 3.7% 20% / 0.5);
+  --color-fd-ring: hsl(347 77% 60%);
+}
+
+/* Dynamic Gradient Background — warm tones */
+body {
+  background-color: var(--color-fd-background);
+  background-image:
+    radial-gradient(ellipse at 15% 15%, hsl(347 60% 96%) 0%, transparent 50%),
+    radial-gradient(ellipse at 80% 20%, hsl(30 60% 96%) 0%, transparent 40%),
+    radial-gradient(ellipse at 50% 80%, hsl(340 50% 97%) 0%, transparent 40%);
+  background-attachment: fixed;
+}
+
+.dark body {
+  background-image:
+    radial-gradient(
+      circle at 15% 50%,
+      hsla(347, 50%, 18%, 0.4),
+      transparent 25%
+    ),
+    radial-gradient(
+      circle at 85% 30%,
+      hsla(25, 50%, 18%, 0.3),
+      transparent 25%
+    );
+}
+
+/* Glassmorphism Utilities */
+.fd-card,
+.fd-popover,
+header,
+aside {
+  @apply bg-fd-background/70 backdrop-blur-xl border-fd-border/40 saturate-150;
+  box-shadow: 0 4px 30px rgba(0, 0, 0, 0.03);
+}
+
+header {
+  /* position: sticky; */
+  top: 0;
+  z-index: 50;
+  @apply bg-transparent! backdrop-blur-none! shadow-none! border-none! fixed! w-full!;
+}
+
+/* Themed Scrollbar */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+
+*:hover {
+  scrollbar-color: color-mix(
+      in srgb,
+      var(--color-fd-muted-foreground) 40%,
+      transparent
+    )
+    transparent;
+}
+
+/* Webkit Scrollbar (Chrome, Safari, Edge) */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-transparent!;
+}
+
+::-webkit-scrollbar-button {
+  display: none;
+}
+
+::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: 9999px;
+}
+
+*:hover::-webkit-scrollbar-thumb {
+  background: color-mix(
+    in srgb,
+    var(--color-fd-muted-foreground) 35%,
+    transparent
+  );
+}
+
+*:hover::-webkit-scrollbar-thumb:hover {
+  background: color-mix(
+    in srgb,
+    var(--color-fd-muted-foreground) 60%,
+    transparent
+  );
+}
+
+*:hover::-webkit-scrollbar-thumb:active {
+  background: var(--color-fd-primary);
+}
+
+/* Hide scrollbar by default, show on hover (sidebar) */
+.scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+
+.scrollbar-thin:hover {
+  scrollbar-color: var(--color-fd-border) transparent;
+}
+
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background: transparent;
+}
+
+.scrollbar-thin:hover::-webkit-scrollbar-thumb {
+  background: var(--color-fd-border);
+}
+
+.scrollbar-thin:hover::-webkit-scrollbar-thumb:hover {
+  background: var(--color-fd-muted-foreground);
+}
+
+/* =========================================
+   FUMADOCS UI OVERRIDES FOR DOCS REDESIGN
+   ========================================= */
+
+/* Transparent / Glass Nav & Sidebar base */
+.fd-nav {
+  @apply backdrop-blur-xl bg-transparent! border-b border-fd-border/30!;
+}
+
+.fd-sidebar,
+.fd-toc {
+  @apply bg-transparent! border-fd-border/30!;
+}
+
+.fd-sidebar {
+  @apply border-r;
+}
+
+/* Sidebar Active Item — warm rose accent */
+.fd-sidebar [data-active="true"] {
+  @apply bg-rose-500/10! text-rose-600! dark:text-rose-400! font-medium border border-rose-500/20! shadow-sm shadow-rose-500/5 relative;
+}
+
+/* Add a mini indicator dot for active sidebar links */
+.fd-sidebar [data-active="true"]::before {
+  content: "";
+  @apply absolute left-1 top-1/2 -translate-y-1/2 w-1 h-1 rounded-full bg-rose-500;
+}
+
+/* Fix text colors inside active items */
+.fd-sidebar [data-active="true"] * {
+  @apply text-rose-600/90! dark:text-rose-400/90!;
+}
+
+/* Hover effects for inactive sidebar items */
+.fd-sidebar a:not([data-active="true"]):hover {
+  @apply bg-fd-card text-fd-foreground shadow-sm border border-fd-border/50;
+}
+
+/* TOC active item */
+.fd-toc [data-active="true"] {
+  @apply text-rose-600! dark:text-rose-400! font-semibold;
+}
+
+/* =========================================
+   CUSTOM ANIMATIONS
+   ========================================= */
+
+/* Animated gradient text */
+@keyframes gradient-x {
+  0% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+  100% { background-position: 0% 50%; }
+}
+
+.animate-gradient-x {
+  animation: gradient-x 4s ease infinite;
+}
+
+/* Shimmer sweep on buttons */
+@keyframes shimmer {
+  100% { transform: translateX(200%); }
+}
+
+.group:hover .group-hover\:animate-shimmer {
+  animation: shimmer 1.2s ease-in-out;
+}

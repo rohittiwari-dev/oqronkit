@@ -1,0 +1,60 @@
+---
+title: Saga
+description: Distributed transactions with compensation chains
+icon: RefreshCw
+---
+
+# Saga
+
+The Saga module coordinates distributed microservice transactions with automatic compensation (rollback) chains when any step fails.
+
+> **Roadmap Module** — Saga is part of the v1 Enterprise release roadmap. This page documents the planned API. Implementation is in progress.
+
+## Planned API
+
+```ts
+import { saga } from 'oqronkit'
+
+const orderSaga = saga({
+  name: 'create-order',
+  steps: [
+    {
+      name: 'reserve-inventory',
+      execute: async (ctx) => {
+        return await inventoryService.reserve(ctx.data.items)
+      },
+      compensate: async (ctx, result) => {
+        await inventoryService.release(result.reservationId)
+      },
+    },
+    {
+      name: 'charge-payment',
+      execute: async (ctx) => {
+        return await paymentService.charge(ctx.data.amount)
+      },
+      compensate: async (ctx, result) => {
+        await paymentService.refund(result.chargeId)
+      },
+    },
+    {
+      name: 'send-confirmation',
+      execute: async (ctx) => {
+        await emailService.send(ctx.data.customerEmail, 'order-confirmed')
+      },
+      // No compensate — emails can't be unsent
+    },
+  ],
+})
+
+// Execute the saga
+await orderSaga.execute({
+  items: [{ sku: 'A1', qty: 2 }],
+  amount: 99.99,
+  customerEmail: 'user@example.com',
+})
+```
+
+## Next Steps
+
+- [Workflow](/docs/workflow) — Job dependency graphs
+- [Crash Safety](/docs/crash-safety) — How sagas survive process crashes

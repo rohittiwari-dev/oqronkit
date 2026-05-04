@@ -1,0 +1,37 @@
+---
+title: Batch
+description: Accumulate and process jobs in configurable batch windows
+icon: Layers
+---
+
+# Batch
+
+The Batch module accumulates incoming items and flushes them as a single batch when either a count threshold (`maxSize`) or a time window (`maxWaitMs`) is reached.
+
+> **Roadmap Module** — Batch is part of the v1 Enterprise release roadmap. This page documents the planned API. Implementation is in progress.
+
+## Planned API
+
+```ts
+import { batch } from 'oqronkit'
+
+const analyticsFlush = batch<AnalyticsEvent>({
+  name: 'analytics-flush',
+  maxSize: 500,        // Flush when 500 events accumulate
+  maxWaitMs: 10_000,   // Or every 10 seconds, whichever comes first
+
+  handler: async (ctx) => {
+    const events = ctx.batch // Array of accumulated items
+    await insertBulk(events)
+    return { flushed: events.length }
+  },
+})
+
+// Push individual items — they're buffered until flush conditions are met
+await analyticsFlush.add({ event: 'page.view', userId: 'u_123' })
+```
+
+## Next Steps
+
+- [Task Queue](/docs/task-queue) — For immediate, per-job processing
+- [Workflow](/docs/workflow) — For complex job dependency graphs
