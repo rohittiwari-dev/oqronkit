@@ -182,9 +182,41 @@ export class QueueEngine implements IOqronModule {
                     error: String(e),
                   });
                 }
+
+                // E4: Check maxStalledCount — fail permanently if exceeded
+                const maxStalled =
+                  this.queueConfig?.maxStalledCount ??
+                  (typeof this.queueConfig?.crossNodeStallScanner === "object"
+                    ? this.queueConfig.crossNodeStallScanner.maxStalledCount
+                    : undefined) ??
+                  3;
+                if (job.stalledCount >= maxStalled) {
+                  this.logger.error(
+                    `Job ${jobId} exceeded maxStalledCount (${maxStalled}) — failing permanently`,
+                    { jobId, stalledCount: job.stalledCount },
+                  );
+                  job.status = "failed";
+                  job.error = `Max stall count exceeded (${maxStalled})`;
+                  job.finishedAt = new Date();
+                  job.timeline.push({
+                    ts: new Date(),
+                    from: "stalled",
+                    to: "failed",
+                    reason: job.error,
+                  });
+                  await this.di.storage.save("jobs", jobId, job);
+                  await this.di.broker.ack(queueName!, jobId);
+                  OqronEventBus.emit(
+                    "job:fail",
+                    queueName!,
+                    jobId,
+                    new Error(job.error),
+                  );
+                  return;
+                }
               }
             })
-            .finally(() => {
+            .then(() => {
               OqronEventBus.emit("job:stalled", queueName!, jobId);
               void this.di.broker.nack(queueName, jobId);
             });
@@ -300,22 +332,17 @@ export class QueueEngine implements IOqronModule {
       jobs.delete(jobId);
     }
 
-    // Mark job as failed/cancelled in storage
+    // E3: Mark job as cancelled (not "failed") for explicit cancellation
     const job = await this.di.storage.get<OqronJob>("jobs", jobId);
     if (job) {
-      job.status = "failed";
+      job.status = "cancelled";
       job.error = "Cancelled";
       job.finishedAt = new Date();
       await this.di.storage.save("jobs", jobId, job);
 
       // Ack from broker so it's not re-processed
       await this.di.broker.ack(job.queueName, jobId);
-      OqronEventBus.emit(
-        "job:fail",
-        job.queueName,
-        jobId,
-        new Error("Cancelled"),
-      );
+      OqronEventBus.emit("job:cancelled", job.queueName, jobId);
     }
 
     return true;
@@ -408,7 +435,12 @@ export class QueueEngine implements IOqronModule {
    */
   async pauseQueue(name: string): Promise<void> {
     this.pausedQueues.add(name);
-    await this.di.storage.save("queue_instances", name, { enabled: false });
+    // E5: Read-modify-write to preserve existing metadata (version, createdAt, etc.)
+    const existing = await this.di.storage.get<any>("queue_instances", name);
+    await this.di.storage.save("queue_instances", name, {
+      ...(existing || {}),
+      enabled: false,
+    });
     OqronEventBus.emit("queue:paused", name);
     this.logger.info(`Queue "${name}" paused`);
   }
@@ -418,8 +450,16 @@ export class QueueEngine implements IOqronModule {
    */
   async resumeQueue(name: string): Promise<void> {
     this.pausedQueues.delete(name);
-    await this.di.storage.save("queue_instances", name, { enabled: true });
-    while (true) {
+    // E5: Read-modify-write to preserve existing metadata (version, createdAt, etc.)
+    const existing = await this.di.storage.get<any>("queue_instances", name);
+    await this.di.storage.save("queue_instances", name, {
+      ...(existing || {}),
+      enabled: true,
+    });
+    // E6: Safety cap to prevent infinite loop in edge cases
+    let batchCount = 0;
+    while (batchCount < 20) {
+      batchCount++;
       const batch = await this.di.storage.list<OqronJob>(
         "jobs",
         {

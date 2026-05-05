@@ -1,3 +1,4 @@
+import { OqronEventBus } from "../events/event-bus.js";
 import type { Logger } from "../logger/index.js";
 import type {
   IBrokerEngine,
@@ -5,7 +6,6 @@ import type {
   IStorageEngine,
 } from "../types/engine.js";
 import type { OqronJob } from "../types/job.types.js";
-import { OqronEventBus } from "../events/event-bus.js";
 
 /**
  * Phase 4: Storage-Broker Reconciliation Engine

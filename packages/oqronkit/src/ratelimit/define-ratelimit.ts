@@ -1,5 +1,5 @@
 import { RateLimitEngine } from "./ratelimit-engine.js";
-import { registerLimiter, deregisterLimiter } from "./registry.js";
+import { deregisterLimiter, registerLimiter } from "./registry.js";
 import type { IRateLimiter, RateLimitConfig } from "./types.js";
 
 /**

@@ -1,11 +1,11 @@
-import type { OqronConfig } from "../engine/types/config.types.js";
-import type { RateLimitModuleDef } from "../modules.js";
-import type { IOqronModule } from "../engine/types/module.types.js";
-import type { Logger } from "../engine/index.js";
 import { OqronContainer } from "../engine/container.js";
 import { OqronEventBus } from "../engine/events/event-bus.js";
-import type { RateLimitInstanceRecord, RateLimitStats } from "./types.js";
+import type { Logger } from "../engine/index.js";
+import type { OqronConfig } from "../engine/types/config.types.js";
+import type { IOqronModule } from "../engine/types/module.types.js";
+import type { RateLimitModuleDef } from "../modules.js";
 import { getRegisteredLimiters } from "./registry.js";
+import type { RateLimitInstanceRecord, RateLimitStats } from "./types.js";
 
 /**
  * RateLimitModule — The single owner of the rate-limit management plane.

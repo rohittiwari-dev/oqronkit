@@ -278,22 +278,17 @@ export class WorkerEngine implements IOqronModule {
       jobs.delete(jobId);
     }
 
-    // Mark job as failed/cancelled in storage
+    // E3: Mark job as cancelled (not "failed") for explicit cancellation
     const job = await this.di.storage.get<OqronJob>("jobs", jobId);
     if (job) {
-      job.status = "failed";
+      job.status = "cancelled";
       job.error = "Cancelled";
       job.finishedAt = new Date();
       await this.di.storage.save("jobs", jobId, job);
 
       // Ack from broker so it's not re-processed
       await this.di.broker.ack(job.queueName, jobId);
-      OqronEventBus.emit(
-        "job:fail",
-        job.queueName,
-        jobId,
-        new Error("Cancelled"),
-      );
+      OqronEventBus.emit("job:cancelled", job.queueName, jobId);
     }
 
     return true;

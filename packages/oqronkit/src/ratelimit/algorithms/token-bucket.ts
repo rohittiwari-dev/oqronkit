@@ -99,7 +99,7 @@ export class TokenBucketAlgorithm implements IRateLimitAlgorithm {
   ): Promise<{ current: number; resetMs: number }> {
     const now = Date.now();
 
-    let bucket = await storage.get<BucketState>(NAMESPACE, storageKey);
+    const bucket = await storage.get<BucketState>(NAMESPACE, storageKey);
     if (!bucket) {
       return { current: 0, resetMs: 0 };
     }

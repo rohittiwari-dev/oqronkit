@@ -1,5 +1,5 @@
+export { CrossNodeStallScanner } from "./cross-node-stall-scanner.js";
 export { HeartbeatWorker } from "./heartbeat-worker.js";
 export { LeaderElection } from "./leader-election.js";
 export { ShardedLeaderElection } from "./sharded-leader.js";
 export { StallDetector } from "./stall-detector.js";
-export { CrossNodeStallScanner } from "./cross-node-stall-scanner.js";

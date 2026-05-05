@@ -1,15 +1,17 @@
 import { randomUUID } from "node:crypto";
-import { HeartbeatWorker } from "../lock/heartbeat-worker.js";
-import type { Logger } from "../logger/index.js";
-import type { OqronJob } from "../types/job.types.js";
 import type { QueueJobContext } from "../../queue/types.js";
 import type { OqronContainer } from "../container.js";
 import { OqronEventBus } from "../events/event-bus.js";
+import { HeartbeatWorker } from "../lock/heartbeat-worker.js";
+import type { Logger } from "../logger/index.js";
+import type {
+  OqronJob,
+  OqronJobOptions,
+  RemoveOnConfig,
+} from "../types/job.types.js";
 import { calculateBackoff } from "./backoffs.js";
 import { DependencyResolver } from "./dependency-resolver.js";
 import { pruneAfterCompletion } from "./job-retention.js";
-import type { RemoveOnConfig } from "../types/job.types.js";
-import type { OqronJobOptions } from "../types/job.types.js";
 
 // ── Shared configuration shape ──────────────────────────────────────────────
 // Both QueueConfig and WorkerConfig expose overlapping execution settings.
@@ -438,23 +440,24 @@ export async function executeJob(
     const activeHandler = hc.handler!;
     const executePromise = activeHandler(jobCtx);
 
-    if (typeof hc.timeout === "number") {
-      const timeoutPromise = new Promise((_, reject) => {
-        timeoutHandle = setTimeout(() => {
-          abortController.abort();
-          const err = new Error(`Job exceeded timeout of ${hc.timeout}ms`);
-          err.name = "TimeoutError";
-          reject(err);
-        }, hc.timeout);
-      });
+    try {
+      if (typeof hc.timeout === "number") {
+        const timeoutPromise = new Promise((_, reject) => {
+          timeoutHandle = setTimeout(() => {
+            abortController.abort();
+            const err = new Error(`Job exceeded timeout of ${hc.timeout}ms`);
+            err.name = "TimeoutError";
+            reject(err);
+          }, hc.timeout);
+        });
 
-      result = await Promise.race([executePromise, timeoutPromise]);
-    } else {
-      result = await executePromise;
-    }
-
-    if (timeoutHandle) {
-      clearTimeout(timeoutHandle);
+        result = await Promise.race([executePromise, timeoutPromise]);
+      } else {
+        result = await executePromise;
+      }
+    } finally {
+      // E1: Always clear timeout — even if handler throws — to prevent timer leak
+      if (timeoutHandle) clearTimeout(timeoutHandle);
     }
 
     if (internalDiscarded) {
@@ -536,6 +539,18 @@ export async function executeJob(
   if (heartbeat) {
     await heartbeat.stop();
     ctx.heartbeats.delete(job.id);
+  }
+
+  // ── E2: Cancellation finality — re-read from storage if aborted ─────
+  if (abortController.signal.aborted) {
+    const fresh = await di.storage.get<OqronJob>("jobs", job.id);
+    if (fresh?.status === "cancelled") {
+      // Manager wrote "cancelled" during execution — respect it
+      logger.info(
+        `Job ${job.id} was cancelled by manager — honouring cancellation`,
+      );
+      return;
+    }
   }
 
   // ── Finalize ─────────────────────────────────────────────────────────

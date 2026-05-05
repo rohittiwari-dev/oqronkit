@@ -85,40 +85,56 @@ export {
   type QueueModuleConfig,
   type QueueModuleDef,
   queueModule,
+  type RateLimitModuleConfig,
+  type RateLimitModuleDef,
+  rateLimitModule,
   type SchedulerModuleConfig,
   type SchedulerModuleDef,
   scheduleModule,
   type WebhookModuleConfig,
   type WebhookModuleDef,
-  webhookModule,
   type WorkerModuleConfig,
   type WorkerModuleDef,
+  webhookModule,
   workerModule,
-  type RateLimitModuleDef,
-  type RateLimitModuleConfig,
-  rateLimitModule,
 } from "./modules.js";
-export { worker } from "./worker/define-worker.js";
-export type { IWorker, WorkerConfig } from "./worker/types.js";
-export {
-  WorkerMetrics,
-  type WorkerMetricEntry,
-  type WorkerMetricsSnapshot,
-} from "./worker/worker-metrics.js";
-export { applyGlobalTags as applyGlobalWorkerTags } from "./worker/registry.js";
 export { queue } from "./queue/define-queue.js";
+export {
+  type QueueMetricEntry,
+  QueueMetrics as QueueModuleMetrics,
+  type QueueMetricsSnapshot,
+} from "./queue/queue-metrics.js";
+export { applyGlobalTags as applyGlobalQueueTags } from "./queue/registry.js";
 export type {
   IPublisherQueue,
   IQueue,
   QueueConfig,
   QueueJobContext,
 } from "./queue/types.js";
+export { rateLimit } from "./ratelimit/define-ratelimit.js";
+export type { RateLimitMiddlewareOptions } from "./ratelimit/middleware.js";
 export {
-  QueueMetrics as QueueModuleMetrics,
-  type QueueMetricEntry,
-  type QueueMetricsSnapshot,
-} from "./queue/queue-metrics.js";
-export { applyGlobalTags as applyGlobalQueueTags } from "./queue/registry.js";
+  expressMiddleware,
+  honoMiddleware,
+} from "./ratelimit/middleware.js";
+export type {
+  CheckOptions,
+  IRateLimiter,
+  PenaltyConfig,
+  QuotaUsage,
+  QuotaWarnings,
+  RateLimitAlgorithm,
+  RateLimitConfig,
+  RateLimitEvent,
+  RateLimitInstanceRecord,
+  RateLimitKeyStatus,
+  RateLimitResult,
+  RateLimitSnapshot,
+  RateLimitStats,
+  RateLimitTier,
+  TierBreakdown,
+  WindowDuration,
+} from "./ratelimit/types.js";
 export {
   cron,
   type DefineCronOptions,
@@ -127,7 +143,23 @@ export {
   schedule,
 } from "./scheduler/index.js";
 export {
+  type CircuitBreakerConfig,
+  type CircuitState,
+  // Circuit breaker (G7)
+  createCircuitBreaker,
+  // Dynamic CRUD (B14)
+  createWebhook,
+  deleteWebhook,
+  type ICircuitBreaker,
   type IWebhookDispatcher,
+  pauseWebhook,
+  // G10: Resend/replay
+  resendWebhook,
+  resumeWebhook,
+  signWebhookPayload,
+  updateWebhook,
+  // Signing utilities (B12/B13)
+  verifyWebhookSignature,
   type WebhookConfig,
   type WebhookDeliveryPayload,
   type WebhookDeliveryResult,
@@ -138,48 +170,15 @@ export {
   type WebhookSecurity,
   type WebhookSecurityInput,
   webhook,
-  // Dynamic CRUD (B14)
-  createWebhook,
-  updateWebhook,
-  deleteWebhook,
-  pauseWebhook,
-  resumeWebhook,
-  // G10: Resend/replay
-  resendWebhook,
-  // Signing utilities (B12/B13)
-  verifyWebhookSignature,
-  signWebhookPayload,
-  // Circuit breaker (G7)
-  createCircuitBreaker,
-  type ICircuitBreaker,
-  type CircuitBreakerConfig,
-  type CircuitState,
 } from "./webhook/index.js";
-
-export { rateLimit } from "./ratelimit/define-ratelimit.js";
-export type {
-  IRateLimiter,
-  RateLimitConfig,
-  RateLimitResult,
-  RateLimitTier,
-  RateLimitKeyStatus,
-  RateLimitAlgorithm,
-  CheckOptions,
-  PenaltyConfig,
-  QuotaWarnings,
-  QuotaUsage,
-  TierBreakdown,
-  WindowDuration,
-  RateLimitInstanceRecord,
-  RateLimitStats,
-  RateLimitEvent,
-  RateLimitSnapshot,
-} from "./ratelimit/types.js";
+export { worker } from "./worker/define-worker.js";
+export { applyGlobalTags as applyGlobalWorkerTags } from "./worker/registry.js";
+export type { IWorker, WorkerConfig } from "./worker/types.js";
 export {
-  expressMiddleware,
-  honoMiddleware,
-} from "./ratelimit/middleware.js";
-export type { RateLimitMiddlewareOptions } from "./ratelimit/middleware.js";
+  type WorkerMetricEntry,
+  WorkerMetrics,
+  type WorkerMetricsSnapshot,
+} from "./worker/worker-metrics.js";
 
 // ── Trigger Auto-Discovery ──────────────────────────────────────────────────
 

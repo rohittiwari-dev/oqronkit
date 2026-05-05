@@ -9,11 +9,6 @@ import {
   OqronEventBus,
 } from "../engine/index.js";
 import {
-  SchedulerMetrics,
-  type SchedulerMetricsSnapshot,
-  type ScheduleMetrics,
-} from "./scheduler-metrics.js";
-import {
   HeartbeatWorker,
   LeaderElection,
   StallDetector,
@@ -37,6 +32,11 @@ import {
   DEFAULT_TICK_INTERVAL_MS,
   STALL_GRACE_MS,
 } from "./constants.js";
+import {
+  type ScheduleMetrics,
+  SchedulerMetrics,
+  type SchedulerMetricsSnapshot,
+} from "./scheduler-metrics.js";
 
 // ── Shared types ─────────────────────────────────────────────────────────────
 

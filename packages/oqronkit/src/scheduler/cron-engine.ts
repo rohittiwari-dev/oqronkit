@@ -2,7 +2,7 @@ import {
   CronContext,
   type CronDefinition,
   type Logger,
-  OqronContainer,
+  type OqronContainer,
   OqronError,
   OqronEventBus,
 } from "../engine/index.js";
@@ -237,7 +237,7 @@ export class CronEngine extends BaseSchedulerEngine<CronDefinition> {
       }
 
       // Same version: standard upsert (preserve nextRunAt if config unchanged)
-      let shouldRecompute =
+      const shouldRecompute =
         existing &&
         (existing.expression !== def.expression ||
           existing.intervalMs !== def.intervalMs);

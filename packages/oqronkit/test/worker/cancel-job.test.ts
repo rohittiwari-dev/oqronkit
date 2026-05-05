@@ -18,7 +18,7 @@ describe("WorkerEngine — cancelActiveJob (B6)", () => {
 
   afterEach(() => { OqronContainer.reset(); });
 
-  it("cancels a running job and marks it failed", async () => {
+  it("cancels a running job and marks it cancelled", async () => {
     let jobId = "";
     worker<{ x: number }>({
       topic: "cancel-topic",
@@ -42,10 +42,10 @@ describe("WorkerEngine — cancelActiveJob (B6)", () => {
     const cancelled = await engine.cancelActiveJob(job.id);
     expect(cancelled).toBe(true);
 
-    // Verify job is marked failed in storage
+    // Verify job is marked cancelled in storage
     const di = OqronContainer.get();
     const updated = await di.storage.get<OqronJob>("jobs", job.id);
-    expect(updated?.status).toBe("failed");
+    expect(updated?.status).toBe("cancelled");
     expect(updated?.error).toBe("Cancelled");
 
     await engine.stop();

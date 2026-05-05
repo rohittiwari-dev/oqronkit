@@ -12,13 +12,13 @@ import type {
   JobType,
   OqronJob,
 } from "../engine/types/job.types.js";
+import { getLimiter } from "../ratelimit/registry.js";
 import type {
   RateLimitEvent,
   RateLimitInstanceRecord,
   RateLimitKeyStatus,
   RateLimitStats,
 } from "../ratelimit/types.js";
-import { getLimiter } from "../ratelimit/registry.js";
 
 // ── Result types ────────────────────────────────────────────────────────────
 
@@ -33,6 +33,7 @@ export interface QueueMetrics {
   waiting: number;
   completed: number;
   failed: number;
+  cancelled: number;
   delayed: number;
   paused: number;
 }
@@ -330,19 +331,22 @@ export class OqronManager {
     const offset = opts.offset ?? 0;
 
     // Fetch metrics counts via parallel count queries — NOT full-scan
-    const [active, waiting, completed, failed, delayed] = await Promise.all([
-      Storage.count("jobs", { queueName: name, status: "active" }),
-      Storage.count("jobs", { queueName: name, status: "waiting" }),
-      Storage.count("jobs", { queueName: name, status: "completed" }),
-      Storage.count("jobs", { queueName: name, status: "failed" }),
-      Storage.count("jobs", { queueName: name, status: "delayed" }),
-    ]);
+    const [active, waiting, completed, failed, cancelled, delayed] =
+      await Promise.all([
+        Storage.count("jobs", { queueName: name, status: "active" }),
+        Storage.count("jobs", { queueName: name, status: "waiting" }),
+        Storage.count("jobs", { queueName: name, status: "completed" }),
+        Storage.count("jobs", { queueName: name, status: "failed" }),
+        Storage.count("jobs", { queueName: name, status: "cancelled" }),
+        Storage.count("jobs", { queueName: name, status: "delayed" }),
+      ]);
 
     const metricsResult: QueueMetrics = {
       active,
       waiting,
       completed,
       failed,
+      cancelled,
       delayed,
       paused: 0,
     };
