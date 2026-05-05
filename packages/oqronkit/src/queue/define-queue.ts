@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
-import { OqronContainer, OqronRegistry } from "../engine/index.js";
 import { OqronEventBus } from "../engine/events/event-bus.js";
+import { OqronContainer, OqronRegistry } from "../engine/index.js";
 import type { OqronJob } from "../engine/types/job.types.js";
 import { DependencyResolver } from "../engine/utils/dependency-resolver.js";
 import { registerQueue } from "./registry.js";
@@ -64,7 +64,12 @@ export function queue<T = any, R = any>(
         held.status = "waiting";
         held.pausedReason = undefined;
         await di.storage.save("jobs", held.id, held);
-        await di.broker.publish(config.name, held.id, undefined, held.opts?.priority);
+        await di.broker.publish(
+          config.name,
+          held.id,
+          undefined,
+          held.opts?.priority,
+        );
       }
     }
   }
@@ -126,9 +131,7 @@ export function queue<T = any, R = any>(
               ? "delayed"
               : "waiting",
       pausedReason:
-        !isInstanceEnabled && behavior === "hold"
-          ? "disabled-hold"
-          : undefined,
+        !isInstanceEnabled && behavior === "hold" ? "disabled-hold" : undefined,
       data,
       opts: opts ?? {},
       attemptMade: 0,
@@ -183,7 +186,23 @@ export function queue<T = any, R = any>(
         opts!.dependsOn!,
         di.lock,
       );
-      // Don't publish to broker — job stays in waiting-children until parents finish
+
+      // Bug #10: Check if all parents are already completed — promote immediately
+      const ready = await DependencyResolver.canProceed(
+        di.storage,
+        opts!.dependsOn!,
+      );
+      if (ready) {
+        job.status = "waiting";
+        await di.storage.save("jobs", jobId, job);
+        const effectivePriority = opts?.priority ?? config.priority;
+        await di.broker.publish(
+          config.name,
+          jobId,
+          undefined,
+          effectivePriority,
+        );
+      }
     } else if (job.status !== "paused") {
       // 3. Transport — apply default priority from config if not specified per-job
       const effectivePriority = opts?.priority ?? config.priority;
@@ -221,11 +240,9 @@ export function queue<T = any, R = any>(
       const di = OqronContainer.get();
       const query: any = { queueName: config.name };
       if (filter?.status) query.status = filter.status;
-      return di.storage.list<OqronJob<T, R>>(
-        "jobs",
-        query,
-        { limit: filter?.limit ?? 100 },
-      );
+      return di.storage.list<OqronJob<T, R>>("jobs", query, {
+        limit: filter?.limit ?? 100,
+      });
     },
 
     count: async (status) => {
@@ -241,7 +258,9 @@ export function queue<T = any, R = any>(
       if (engine && typeof engine.pauseQueue === "function") {
         await engine.pauseQueue(config.name);
       } else {
-        await di.storage.save("queue_instances", config.name, { enabled: false });
+        await di.storage.save("queue_instances", config.name, {
+          enabled: false,
+        });
         OqronEventBus.emit("queue:paused", config.name);
       }
       await di.broker.pause(config.name);
@@ -253,7 +272,9 @@ export function queue<T = any, R = any>(
       if (engine && typeof engine.resumeQueue === "function") {
         await engine.resumeQueue(config.name);
       } else {
-        await di.storage.save("queue_instances", config.name, { enabled: true });
+        await di.storage.save("queue_instances", config.name, {
+          enabled: true,
+        });
         OqronEventBus.emit("queue:resumed", config.name);
       }
       await di.broker.resume(config.name);
@@ -276,7 +297,9 @@ export function queue<T = any, R = any>(
       if (engine && typeof engine.pauseQueue === "function") {
         await engine.pauseQueue(config.name);
       } else {
-        await di.storage.save("queue_instances", config.name, { enabled: false });
+        await di.storage.save("queue_instances", config.name, {
+          enabled: false,
+        });
       }
       await di.broker.pause(config.name);
 

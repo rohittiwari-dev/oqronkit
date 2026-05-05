@@ -167,6 +167,26 @@ export class OqronManager {
         const actualNs = def.type === "cron" ? "cron_schedules" : "schedule_schedules";
         def.paused = false;
         await Storage.save(actualNs, name, def);
+
+        // Bug #11: Release held jobs on resume — mirror queue's releaseHeldJobs pattern
+        while (true) {
+          const batch = await Storage.list<any>(
+            "jobs",
+            {
+              moduleName: name,
+              status: "paused",
+              pausedReason: "disabled-hold",
+            },
+            { limit: 100 },
+          );
+          if (batch.length === 0) break;
+          for (const held of batch) {
+            held.status = "waiting";
+            held.pausedReason = undefined;
+            await Storage.save("jobs", held.id, held);
+          }
+        }
+
         OqronEventBus.emit("schedule:resumed", name);
         return true;
       }

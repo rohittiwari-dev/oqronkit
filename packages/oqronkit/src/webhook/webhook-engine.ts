@@ -389,6 +389,14 @@ export class WebhookEngine implements IOqronModule {
       this.workerIdStr,
       ttlMs,
       hbMs,
+      // Bug #1: Also extend broker claim lock on each heartbeat tick
+      async () => {
+        try {
+          await this.di.broker.extendLock(jobId, this.workerIdStr, ttlMs, dispatcher.name);
+        } catch {
+          // Broker extendLock failure is non-fatal
+        }
+      },
     );
     const acquired = await heartbeat.start();
     if (!acquired) {
@@ -912,7 +920,9 @@ export class WebhookEngine implements IOqronModule {
   /** G4 / B7: Pause a specific dispatcher — stops claiming new jobs */
   async pauseDispatcher(name: string): Promise<void> {
     this.pausedDispatchers.add(name);
-    await this.di.storage.save("webhook_instances", name, { enabled: false });
+    // Bug #21: Merge with existing record to preserve metadata
+    const existing = await this.di.storage.get<any>("webhook_instances", name);
+    await this.di.storage.save("webhook_instances", name, { ...(existing || {}), enabled: false });
     await this.di.broker.pause(name);
     OqronEventBus.emit("webhook:paused", name);
     this.logger.info(`Webhook dispatcher "${name}" paused`);
@@ -921,7 +931,9 @@ export class WebhookEngine implements IOqronModule {
   /** G4 / B7: Resume a paused dispatcher */
   async resumeDispatcher(name: string): Promise<void> {
     this.pausedDispatchers.delete(name);
-    await this.di.storage.save("webhook_instances", name, { enabled: true });
+    // Bug #21: Merge with existing record to preserve metadata
+    const existing = await this.di.storage.get<any>("webhook_instances", name);
+    await this.di.storage.save("webhook_instances", name, { ...(existing || {}), enabled: true });
     await this.di.broker.resume(name);
     OqronEventBus.emit("webhook:resumed", name);
     this.logger.info(`Webhook dispatcher "${name}" resumed`);
@@ -1008,7 +1020,7 @@ export class WebhookEngine implements IOqronModule {
       ...original,
       retryReason: `Resent as ${newId}`,
     });
-    await this.di.broker.publish(original.queueName, newId);
+    await this.di.broker.publish(original.queueName, newId, undefined, original.opts?.priority);
     OqronEventBus.emit("job:retried", jobId, newId);
     this.logger.info(`Webhook job ${jobId} resent as ${newId}`);
     return newId;

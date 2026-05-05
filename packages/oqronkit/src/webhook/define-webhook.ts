@@ -189,6 +189,17 @@ export function webhook<T = any>(
         opts!.dependsOn!,
         di.lock,
       );
+
+      // Bug #10: Check if all parents are already completed — promote immediately
+      const ready = await DependencyResolver.canProceed(
+        di.storage,
+        opts!.dependsOn!,
+      );
+      if (ready) {
+        job.status = "waiting";
+        await di.storage.save("jobs", jobId, job);
+        await di.broker.publish(config.name, jobId, undefined, opts?.priority);
+      }
     } else if (job.status !== "paused") {
       // 3. Transport
       await di.broker.publish(
@@ -413,14 +424,36 @@ export async function resumeWebhook(name: string): Promise<void> {
   const engine = OqronRegistry.getInstance().get("webhook") as any;
   if (engine && typeof engine.resumeDispatcher === "function") {
     await engine.resumeDispatcher(name);
-    return;
+  } else {
+    const existing = await di.storage.get<any>("webhook_instances", name);
+    await di.storage.save("webhook_instances", name, {
+      ...(existing || {}),
+      enabled: true,
+    });
+    await di.broker.resume(name);
   }
-  const existing = await di.storage.get<any>("webhook_instances", name);
-  await di.storage.save("webhook_instances", name, {
-    ...(existing || {}),
-    enabled: true,
-  });
-  await di.broker.resume(name);
+
+  // Bug #20: Release held jobs on resume
+  while (true) {
+    const batch = await di.storage.list<OqronJob>(
+      "jobs",
+      {
+        moduleName: name,
+        queueName: name,
+        status: "paused",
+        pausedReason: "disabled-hold",
+      },
+      { limit: 100 },
+    );
+    if (batch.length === 0) break;
+    for (const held of batch) {
+      held.status = "waiting";
+      held.pausedReason = undefined;
+      await di.storage.save("jobs", held.id, held);
+      await di.broker.publish(name, held.id, undefined, held.opts?.priority);
+    }
+  }
+
   OqronEventBus.emit("webhook:resumed", name);
 }
 
