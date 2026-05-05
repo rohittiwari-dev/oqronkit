@@ -507,8 +507,8 @@ export const metricsAggregation = schedule({
   every: { minutes: 5 },
 
   // ── NEW: Jitter + priority ──
-  jitterMs: 15_000,  // Spread across 15s window in cluster
-  priority: 20,      // Medium priority — after billing, before cache
+  jitterMs: 15_000, // Spread across 15s window in cluster
+  priority: 20, // Medium priority — after billing, before cache
 
   overlap: "skip",
   missedFire: "skip",

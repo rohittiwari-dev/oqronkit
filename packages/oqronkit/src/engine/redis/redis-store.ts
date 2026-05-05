@@ -1,5 +1,9 @@
 import type { Redis } from "ioredis";
-import type { IStorageEngine, ListOptions, WhereCondition } from "../types/engine.js";
+import type {
+  IStorageEngine,
+  ListOptions,
+  WhereCondition,
+} from "../types/engine.js";
 
 /**
  * Redis implementation of the universal Storage Engine.
@@ -215,11 +219,21 @@ export class RedisStore implements IStorageEngine {
       const b = this.toEpochMs(cond.value) ?? cond.value;
 
       switch (cond.op) {
-        case "$lt":  if (!(a < (b as any))) return false; break;
-        case "$lte": if (!(a <= (b as any))) return false; break;
-        case "$gt":  if (!(a > (b as any))) return false; break;
-        case "$gte": if (!(a >= (b as any))) return false; break;
-        case "$ne":  if (!(a !== b)) return false; break;
+        case "$lt":
+          if (!(a < (b as any))) return false;
+          break;
+        case "$lte":
+          if (!(a <= (b as any))) return false;
+          break;
+        case "$gt":
+          if (!(a > (b as any))) return false;
+          break;
+        case "$gte":
+          if (!(a >= (b as any))) return false;
+          break;
+        case "$ne":
+          if (!(a !== b)) return false;
+          break;
       }
     }
     return true;

@@ -9,6 +9,9 @@ export function assertValidIdentifier(value: string, label: string): string {
   return value;
 }
 
-export function quoteIdentifier(value: string, label: string = "identifier"): string {
+export function quoteIdentifier(
+  value: string,
+  label: string = "identifier",
+): string {
   return `"${assertValidIdentifier(value, label)}"`;
 }

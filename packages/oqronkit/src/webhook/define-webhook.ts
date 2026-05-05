@@ -1,5 +1,9 @@
 import { randomUUID } from "node:crypto";
-import { OqronContainer, OqronEventBus, OqronRegistry } from "../engine/index.js";
+import {
+  OqronContainer,
+  OqronEventBus,
+  OqronRegistry,
+} from "../engine/index.js";
 import type {
   OqronJob,
   OqronJobOptions,
@@ -22,7 +26,9 @@ async function resolveEndpoints(
   return await input();
 }
 
-function endpointForStorage(endpoint: WebhookEndpoint): Omit<WebhookEndpoint, "security"> {
+function endpointForStorage(
+  endpoint: WebhookEndpoint,
+): Omit<WebhookEndpoint, "security"> {
   const persisted: Partial<WebhookEndpoint> = { ...endpoint };
   delete persisted.security;
   return persisted as Omit<WebhookEndpoint, "security">;
@@ -60,7 +66,11 @@ export function webhook<T = any>(
       url,
       method: endpoint.method || config.method || "POST",
       // B10: Default Content-Type — user headers override via spread order
-      headers: { "Content-Type": "application/json", ...headersBase, ...headersEp },
+      headers: {
+        "Content-Type": "application/json",
+        ...headersBase,
+        ...headersEp,
+      },
       body: data,
       transformedBody,
       idempotencyKey: `${config.name}:${endpoint.name}:${id}`,
@@ -366,7 +376,9 @@ export function webhook<T = any>(
 // ── Dynamic CRUD Functions (B14) ─────────────────────────────────────────────
 
 /** Create a new webhook dispatcher at runtime */
-export async function createWebhook<T = any>(config: WebhookConfig<T>): Promise<IWebhookDispatcher<T>> {
+export async function createWebhook<T = any>(
+  config: WebhookConfig<T>,
+): Promise<IWebhookDispatcher<T>> {
   const di = OqronContainer.get();
   await di.storage.save("webhook_instances", config.name, {
     version: config.version ?? 0,
@@ -378,7 +390,10 @@ export async function createWebhook<T = any>(config: WebhookConfig<T>): Promise<
 }
 
 /** Update an existing webhook dispatcher config */
-export async function updateWebhook(name: string, updates: Partial<WebhookConfig>): Promise<void> {
+export async function updateWebhook(
+  name: string,
+  updates: Partial<WebhookConfig>,
+): Promise<void> {
   const di = OqronContainer.get();
   const existing = await di.storage.get<any>("webhook_instances", name);
   if (!existing) throw new Error(`Webhook dispatcher "${name}" not found`);

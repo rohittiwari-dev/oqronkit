@@ -21,7 +21,10 @@ export interface RetryConfig {
 export interface CronHooks {
   beforeRun?: (ctx: ICronContext) => Promise<void> | void;
   afterRun?: (ctx: ICronContext, result: unknown) => Promise<void> | void;
-  onError?: (ctx: ICronContext, error: Error) => Promise<boolean | void> | boolean | void;
+  onError?: (
+    ctx: ICronContext,
+    error: Error,
+  ) => Promise<boolean | void> | boolean | void;
   onMissedFire?: (ctx: ICronContext, missedAt: Date) => Promise<void> | void;
 }
 

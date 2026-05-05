@@ -73,7 +73,7 @@ export class TokenBucketAlgorithm implements IRateLimitAlgorithm {
 
     // Consume tokens
     bucket.tokens -= cost;
-    
+
     // Reset time = time until fully replenished
     const deficit = max - bucket.tokens;
     const intervalsNeeded = Math.ceil(deficit / this.refillRate);

@@ -1,1 +1,5 @@
-export { SandboxedProcessor, type SandboxedProcessorConfig, type SandboxResult } from "./sandboxed-processor.js";
+export {
+  SandboxedProcessor,
+  type SandboxedProcessorConfig,
+  type SandboxResult,
+} from "./sandboxed-processor.js";

@@ -24,8 +24,14 @@ export class PostgresStore implements IStorageEngine {
 
   constructor(connectionString: string, tablePrefix = "oqron", poolSize = 10) {
     const safePrefix = assertValidIdentifier(tablePrefix, "tablePrefix");
-    this.tableName = quoteIdentifier(`${safePrefix}_store`, "storage table name");
-    this.dataIndexName = quoteIdentifier(`idx_${safePrefix}_store_data`, "storage index name");
+    this.tableName = quoteIdentifier(
+      `${safePrefix}_store`,
+      "storage table name",
+    );
+    this.dataIndexName = quoteIdentifier(
+      `idx_${safePrefix}_store_data`,
+      "storage index name",
+    );
     // Lazy import to keep `pg` as an optional peer dependency
     this._initPool(connectionString, poolSize);
   }
@@ -114,7 +120,9 @@ export class PostgresStore implements IStorageEngine {
     //  Append WHERE conditions for comparison operators
     if (opts?.where) {
       for (const cond of opts.where) {
-        const sqlOp = { $lt: '<', $lte: '<=', $gt: '>', $gte: '>=', $ne: '!=' }[cond.op];
+        const sqlOp = { $lt: "<", $lte: "<=", $gt: ">", $gte: ">=", $ne: "!=" }[
+          cond.op
+        ];
         const fieldIdx = params.length + 1;
         params.push(cond.field);
         const valueIdx = params.length + 1;
@@ -123,7 +131,10 @@ export class PostgresStore implements IStorageEngine {
           // Date values stored as { __type: "Date", __val: "ISO" } wrapper
           query += ` AND (data -> ($${fieldIdx})::text ->> '__val')::timestamptz ${sqlOp} $${valueIdx}::timestamptz`;
           params.push(cond.value.toISOString());
-        } else if (typeof cond.value === "number" && Number.isFinite(cond.value)) {
+        } else if (
+          typeof cond.value === "number" &&
+          Number.isFinite(cond.value)
+        ) {
           query += ` AND (data ->> ($${fieldIdx})::text)::numeric ${sqlOp} $${valueIdx}::numeric`;
           params.push(cond.value);
         } else {

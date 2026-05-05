@@ -18,7 +18,11 @@ export type OqronEventMap = {
   // ── Schedule instance lifecycle ───────────────────────────────────────────
   "schedule:paused": [scheduleName: string];
   "schedule:resumed": [scheduleName: string];
-  "schedule:version-upgraded": [scheduleName: string, fromVersion: number, toVersion: number];
+  "schedule:version-upgraded": [
+    scheduleName: string,
+    fromVersion: number,
+    toVersion: number,
+  ];
 
   // ── Schedule CRUD (G1) ─────────────────────────────────────────────────────
   "schedule:created": [scheduleName: string, type: "cron" | "schedule"];
@@ -26,8 +30,17 @@ export type OqronEventMap = {
   "schedule:deleted": [scheduleName: string, type: "cron" | "schedule"];
 
   // ── Schedule Fire Lifecycle (G6 — Metrics) ─────────────────────────────────
-  "schedule:fire:start": [scheduleName: string, runId: string, type: "cron" | "schedule"];
-  "schedule:fire:complete": [scheduleName: string, runId: string, status: "completed" | "failed", durationMs: number];
+  "schedule:fire:start": [
+    scheduleName: string,
+    runId: string,
+    type: "cron" | "schedule",
+  ];
+  "schedule:fire:complete": [
+    scheduleName: string,
+    runId: string,
+    status: "completed" | "failed",
+    durationMs: number,
+  ];
   "schedule:rate-limited": [scheduleName: string];
 
   // ── System ───────────────────────────────────────────────────────────────
@@ -35,20 +48,53 @@ export type OqronEventMap = {
   "system:stop": [];
 
   // ── Rate Limit — Core ────────────────────────────────────────────────────
-  "ratelimit:blocked": [limiterName: string, tier: string, key: string, result: any];
-  "ratelimit:warning": [limiterName: string, tier: string, key: string, percent: number];
-  "ratelimit:banned": [limiterName: string, tier: string, key: string, banDurationMs: number];
+  "ratelimit:blocked": [
+    limiterName: string,
+    tier: string,
+    key: string,
+    result: any,
+  ];
+  "ratelimit:warning": [
+    limiterName: string,
+    tier: string,
+    key: string,
+    percent: number,
+  ];
+  "ratelimit:banned": [
+    limiterName: string,
+    tier: string,
+    key: string,
+    banDurationMs: number,
+  ];
   "ratelimit:unbanned": [limiterName: string, tier: string, key: string];
-  "ratelimit:override": [limiterName: string, key: string, override: { max: number }];
+  "ratelimit:override": [
+    limiterName: string,
+    key: string,
+    override: { max: number },
+  ];
 
   // ── Rate Limit — Management ──────────────────────────────────────────────
   "ratelimit:instance:enabled": [limiterName: string];
   "ratelimit:instance:disabled": [limiterName: string];
-  "ratelimit:instance:created": [limiterName: string, algorithm: string, tiers: string[]];
+  "ratelimit:instance:created": [
+    limiterName: string,
+    algorithm: string,
+    tiers: string[],
+  ];
 
   // ── Rate Limit — Magic Features ──────────────────────────────────────────
-  "ratelimit:suggestion": [limiterName: string, tier: string, suggestedMax: number, currentP95: number];
-  "ratelimit:circuit-open": [limiterName: string, tier: string, key: string, burstMultiplier: number];
+  "ratelimit:suggestion": [
+    limiterName: string,
+    tier: string,
+    suggestedMax: number,
+    currentP95: number,
+  ];
+  "ratelimit:circuit-open": [
+    limiterName: string,
+    tier: string,
+    key: string,
+    burstMultiplier: number,
+  ];
   "ratelimit:circuit-closed": [limiterName: string, tier: string, key: string];
 
   // ── Queue Lifecycle (Phase 4 — Dynamic CRUD) ──────────────────────────────
@@ -58,14 +104,22 @@ export type OqronEventMap = {
   "queue:resumed": [queueName: string];
   "queue:drained": [queueName: string];
   "queue:obliterated": [queueName: string, jobsRemoved: number];
-  "queue:version-upgraded": [queueName: string, fromVersion: number, toVersion: number];
+  "queue:version-upgraded": [
+    queueName: string,
+    fromVersion: number,
+    toVersion: number,
+  ];
 
   // ── Worker Lifecycle (Phase 4 — Dynamic CRUD) ─────────────────────────────
   "worker:registered": [topic: string];
   "worker:deregistered": [topic: string];
   "worker:paused": [topic: string];
   "worker:resumed": [topic: string];
-  "worker:version-upgraded": [topic: string, fromVersion: number, toVersion: number];
+  "worker:version-upgraded": [
+    topic: string,
+    fromVersion: number,
+    toVersion: number,
+  ];
 
   // ── Queue/Worker Metrics Lifecycle (Phase 5 — G6 Parity) ──────────────────
   "queue:job:claimed": [queueName: string, jobId: string];
@@ -83,7 +137,11 @@ export type OqronEventMap = {
   "webhook:resumed": [dispatcherName: string];
   "webhook:registered": [dispatcherName: string];
   "webhook:deregistered": [dispatcherName: string];
-  "webhook:version-upgraded": [dispatcherName: string, fromVersion: number, toVersion: number];
+  "webhook:version-upgraded": [
+    dispatcherName: string,
+    fromVersion: number,
+    toVersion: number,
+  ];
 };
 
 class OqronEventBusClass extends EventEmitter<OqronEventMap> {
@@ -97,4 +155,3 @@ class OqronEventBusClass extends EventEmitter<OqronEventMap> {
 }
 
 export const OqronEventBus = OqronEventBusClass.getInstance();
-

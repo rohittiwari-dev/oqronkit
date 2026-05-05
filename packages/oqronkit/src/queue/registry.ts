@@ -11,7 +11,9 @@ import type { QueueConfig } from "./types.js";
  * regardless of how many copies of this file are evaluated at runtime.
  */
 const GLOBAL_KEY = Symbol.for("oqronkit:pending_queues");
-type GlobalRegistry = typeof globalThis & { [key: symbol]: QueueConfig[] | undefined };
+type GlobalRegistry = typeof globalThis & {
+  [key: symbol]: QueueConfig[] | undefined;
+};
 
 function _getPending(): QueueConfig[] {
   const g = globalThis as unknown as GlobalRegistry;

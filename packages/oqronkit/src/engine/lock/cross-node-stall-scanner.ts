@@ -47,9 +47,7 @@ export class CrossNodeStallScanner {
    * Start the periodic cross-node scan.
    * @param onStalled Called for each orphaned job found. Receives the full job record.
    */
-  start(
-    onStalled: (job: OqronJob) => Promise<void> | void,
-  ): void {
+  start(onStalled: (job: OqronJob) => Promise<void> | void): void {
     const intervalMs = this.config.intervalMs ?? 30_000;
     const prefix = this.config.lockPrefix ?? "queue";
 
@@ -94,19 +92,27 @@ export class CrossNodeStallScanner {
       activeJobs = [];
       for (const qn of queueNames) {
         for (const status of activeStatuses) {
-          const jobs = await this.storage.list<OqronJob>("jobs", {
-            status,
-            queueName: qn,
-          }, { limit: 1000 });
+          const jobs = await this.storage.list<OqronJob>(
+            "jobs",
+            {
+              status,
+              queueName: qn,
+            },
+            { limit: 1000 },
+          );
           activeJobs.push(...jobs);
         }
       }
     } else {
       activeJobs = [];
       for (const status of activeStatuses) {
-        const jobs = await this.storage.list<OqronJob>("jobs", { status }, {
-          limit: 10_000,
-        });
+        const jobs = await this.storage.list<OqronJob>(
+          "jobs",
+          { status },
+          {
+            limit: 10_000,
+          },
+        );
         activeJobs.push(...jobs);
       }
     }
@@ -166,7 +172,9 @@ export class CrossNodeStallScanner {
     }
 
     if (stalledCount > 0) {
-      this.logger.info(`CrossNodeStallScanner found ${stalledCount} stalled jobs`);
+      this.logger.info(
+        `CrossNodeStallScanner found ${stalledCount} stalled jobs`,
+      );
     }
 
     return stalledCount;

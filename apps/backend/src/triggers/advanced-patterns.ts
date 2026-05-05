@@ -4,10 +4,10 @@
  * Demonstrates Job Dependencies (DAG), Cron Clustering, and Sandboxed Workers.
  */
 import {
-    cronModule,
-    defineConfig,
-    scheduleModule,
-    queue as taskQueue,
+  cronModule,
+  defineConfig,
+  scheduleModule,
+  queue as taskQueue,
 } from "oqronkit";
 
 // ═══════════════════════════════════════════════════════════════════════════════

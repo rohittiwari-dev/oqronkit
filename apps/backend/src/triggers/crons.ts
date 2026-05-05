@@ -390,8 +390,8 @@ export const cacheWarmup = cron({
   every: { seconds: 30 },
 
   // ── NEW: Jitter + low priority ──
-  jitterMs: 5_000,  // Spread across 5s window
-  priority: 99,     // Runs last among concurrent due crons
+  jitterMs: 5_000, // Spread across 5s window
+  priority: 99, // Runs last among concurrent due crons
 
   missedFire: "skip",
   overlap: "run",

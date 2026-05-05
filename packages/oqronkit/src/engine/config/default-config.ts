@@ -1,6 +1,10 @@
 import { normalizeModules } from "../../modules.js";
 import type { OqronConfig } from "../types/config.types.js";
-import { applyModuleDefaults, OqronConfigSchema, type ValidatedConfig } from "./schema.js";
+import {
+  applyModuleDefaults,
+  OqronConfigSchema,
+  type ValidatedConfig,
+} from "./schema.js";
 
 export function reconfigureConfig(config: OqronConfig): ValidatedConfig {
   const parsed = OqronConfigSchema.safeParse(config);

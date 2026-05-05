@@ -171,7 +171,10 @@ export const schedule = <TPayload = unknown>(
    * Shared enqueue logic for both trigger() and schedule().
    * @param defaultImmediate If true and no timing opts are provided, defaults to runAt: new Date()
    */
-  const _enqueue = async (opts: EnqueueOptions<TPayload> | undefined, defaultImmediate: boolean) => {
+  const _enqueue = async (
+    opts: EnqueueOptions<TPayload> | undefined,
+    defaultImmediate: boolean,
+  ) => {
     if (!engineRef.current) {
       throw new Error(
         `[OqronKit] Cannot enqueue "${options.name}" — ScheduleEngine is not running.`,
@@ -211,7 +214,9 @@ export const schedule = <TPayload = unknown>(
     }
 
     // SAFETY: Always isolate dynamic triggers from the base singleton.
-    const suffix = opts?.nameSuffix ?? `dyn-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const suffix =
+      opts?.nameSuffix ??
+      `dyn-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     dynamicDef.name = `${def.name}:${suffix}`;
     dynamicDef.baseName = def.name;
 

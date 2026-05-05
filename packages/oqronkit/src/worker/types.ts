@@ -82,7 +82,9 @@ export interface WorkerConfig<T = any, R = any> {
    * If the condition returns false, the job is nacked with a delay (re-queued).
    * Runs after `beforeRun` hook. Useful for circuit-breaker patterns.
    */
-  condition?: (ctx: import("../queue/types.js").QueueJobContext) => Promise<boolean> | boolean;
+  condition?: (
+    ctx: import("../queue/types.js").QueueJobContext,
+  ) => Promise<boolean> | boolean;
 
   /**
    * Optional override for retry settings for this worker specifically.
@@ -166,7 +168,9 @@ export interface WorkerConfig<T = any, R = any> {
    *
    * Mutually exclusive with `handler`. If both are set, `processBatch` takes precedence.
    */
-  processBatch?: (jobs: QueueJobContext<T>[]) => Promise<Array<PromiseSettledResult<R>> | void>;
+  processBatch?: (
+    jobs: QueueJobContext<T>[],
+  ) => Promise<Array<PromiseSettledResult<R>> | void>;
 
   /**
    * Number of jobs to claim per poll tick when using `processBatch`.

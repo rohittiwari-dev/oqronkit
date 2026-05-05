@@ -144,10 +144,7 @@ export async function pruneAfterCompletion(opts: PruneOptions): Promise<void> {
       filter[opts.filterKey] = opts.filterValue;
     }
 
-    const allRecords = await Storage.list<any>(
-      opts.namespace,
-      filter,
-    );
+    const allRecords = await Storage.list<any>(opts.namespace, filter);
 
     const statusRecords = allRecords;
 

@@ -23,9 +23,7 @@ import type { IWorker, WorkerConfig } from "./types.js";
  * // Use a publisher queue on a different node to trigger it.
  * ```
  */
-export function worker<T = any, R = any>(
-  config: WorkerConfig<T, R>,
-): IWorker {
+export function worker<T = any, R = any>(config: WorkerConfig<T, R>): IWorker {
   registerWorker(config);
 
   return {

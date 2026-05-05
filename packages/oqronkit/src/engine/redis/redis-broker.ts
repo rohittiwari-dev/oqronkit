@@ -137,7 +137,11 @@ export class RedisBroker implements IBrokerEngine {
       const pkey = this.getPriorityKey(brokerName);
       for (let i = 0; i < dueIds.length; i++) {
         const priority = Number(priorityValues[i] ?? 0);
-        pipeline.zadd(pkey, Number.isFinite(priority) ? priority : 0, dueIds[i]);
+        pipeline.zadd(
+          pkey,
+          Number.isFinite(priority) ? priority : 0,
+          dueIds[i],
+        );
       }
     } else {
       const qkey = this.getQueueKey(brokerName);
@@ -252,7 +256,9 @@ export class RedisBroker implements IBrokerEngine {
         this.getLockIndexKey(id, consumerId),
       );
       if (brokerNames.length > 1) {
-        throw new Error(`Ambiguous lock for entity ${id}; broker name is required`);
+        throw new Error(
+          `Ambiguous lock for entity ${id}; broker name is required`,
+        );
       }
       brokerName = brokerNames[0];
     }
@@ -273,10 +279,7 @@ export class RedisBroker implements IBrokerEngine {
       throw new Error(`Lock lost or stolen for entity ${id}`);
     }
     if (brokerName) {
-      await this.redis.pexpire(
-        this.getLockIndexKey(id, consumerId),
-        lockTtlMs,
-      );
+      await this.redis.pexpire(this.getLockIndexKey(id, consumerId), lockTtlMs);
     }
   }
 
@@ -356,7 +359,13 @@ export class RedisBroker implements IBrokerEngine {
 
     // Priority: no blocking pop for sorted sets — use non-blocking fallback
     if (strategy === "priority") {
-      const claimed = await this.claim(brokerName, consumerId, 1, lockTtlMs, "priority");
+      const claimed = await this.claim(
+        brokerName,
+        consumerId,
+        1,
+        lockTtlMs,
+        "priority",
+      );
       if (claimed[0]) return claimed[0];
       const dueInMs = await this.nextDelayedDueInMs(brokerName);
       if (dueInMs === null || dueInMs > timeoutMs) return null;
@@ -379,9 +388,10 @@ export class RedisBroker implements IBrokerEngine {
       Math.ceil(Math.min(timeoutMs, dueInMs ?? timeoutMs) / 1000),
     );
 
-    const result = strategy === "lifo"
-      ? await this.redis.brpop(qkey, timeoutSec)
-      : await this.redis.blpop(qkey, timeoutSec);
+    const result =
+      strategy === "lifo"
+        ? await this.redis.brpop(qkey, timeoutSec)
+        : await this.redis.blpop(qkey, timeoutSec);
 
     if (!result) {
       await this.promoteDueDelayed(brokerName, strategy);
@@ -399,7 +409,13 @@ export class RedisBroker implements IBrokerEngine {
 
     // Atomically set the lock
     const lockKey = this.getLockKey(brokerName, id);
-    const locked = await this.redis.set(lockKey, consumerId, "PX", lockTtlMs, "NX");
+    const locked = await this.redis.set(
+      lockKey,
+      consumerId,
+      "PX",
+      lockTtlMs,
+      "NX",
+    );
     if (locked !== "OK") {
       if (strategy === "lifo") {
         await this.redis.rpush(qkey, id);

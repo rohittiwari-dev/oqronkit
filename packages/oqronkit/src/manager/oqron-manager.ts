@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { Broker, OqronEventBus, OqronRegistry, Storage } from "../engine/index.js";
+import {
+  Broker,
+  OqronEventBus,
+  OqronRegistry,
+  Storage,
+} from "../engine/index.js";
 import type { OqronConfig } from "../engine/types/config.types.js";
 import type {
   JobFilter,
@@ -161,10 +166,15 @@ export class OqronManager {
     }
     if (type === "cron" || type === "schedule") {
       const ns = type === "cron" ? "cron_schedules" : "schedule_schedules";
-      const def = await Storage.get<any>(ns, name)
-        ?? await Storage.get<any>(type === "cron" ? "schedule_schedules" : "cron_schedules", name);
+      const def =
+        (await Storage.get<any>(ns, name)) ??
+        (await Storage.get<any>(
+          type === "cron" ? "schedule_schedules" : "cron_schedules",
+          name,
+        ));
       if (def) {
-        const actualNs = def.type === "cron" ? "cron_schedules" : "schedule_schedules";
+        const actualNs =
+          def.type === "cron" ? "cron_schedules" : "schedule_schedules";
         def.paused = false;
         await Storage.save(actualNs, name, def);
 
@@ -207,10 +217,15 @@ export class OqronManager {
     }
     if (type === "cron" || type === "schedule") {
       const ns = type === "cron" ? "cron_schedules" : "schedule_schedules";
-      const def = await Storage.get<any>(ns, name)
-        ?? await Storage.get<any>(type === "cron" ? "schedule_schedules" : "cron_schedules", name);
+      const def =
+        (await Storage.get<any>(ns, name)) ??
+        (await Storage.get<any>(
+          type === "cron" ? "schedule_schedules" : "cron_schedules",
+          name,
+        ));
       if (def) {
-        const actualNs = def.type === "cron" ? "cron_schedules" : "schedule_schedules";
+        const actualNs =
+          def.type === "cron" ? "cron_schedules" : "schedule_schedules";
         def.paused = true;
         await Storage.save(actualNs, name, def);
         OqronEventBus.emit("schedule:paused", name);
@@ -243,8 +258,10 @@ export class OqronManager {
    * Checks both namespaces.
    */
   async getScheduleDetail(name: string): Promise<any | null> {
-    return (await Storage.get<any>("cron_schedules", name))
-      ?? (await Storage.get<any>("schedule_schedules", name));
+    return (
+      (await Storage.get<any>("cron_schedules", name)) ??
+      (await Storage.get<any>("schedule_schedules", name))
+    );
   }
 
   // ── Rate Limiter Management ─────────────────────────────────────────────
@@ -341,7 +358,9 @@ export class OqronManager {
   }
 
   async pauseQueue(name: string): Promise<void> {
-    const queueEngine = OqronRegistry.getInstance().getAll().find((m) => m.name === "queue") as any;
+    const queueEngine = OqronRegistry.getInstance()
+      .getAll()
+      .find((m) => m.name === "queue") as any;
     if (queueEngine && typeof queueEngine.pauseQueue === "function") {
       await queueEngine.pauseQueue(name);
     } else {
@@ -355,7 +374,9 @@ export class OqronManager {
   }
 
   async resumeQueue(name: string): Promise<void> {
-    const queueEngine = OqronRegistry.getInstance().getAll().find((m) => m.name === "queue") as any;
+    const queueEngine = OqronRegistry.getInstance()
+      .getAll()
+      .find((m) => m.name === "queue") as any;
     if (queueEngine && typeof queueEngine.resumeQueue === "function") {
       await queueEngine.resumeQueue(name);
     } else {
@@ -672,9 +693,7 @@ export class OqronManager {
   }
 
   /** Get detailed info for a single webhook dispatcher */
-  async getWebhookDispatcherDetail(
-    name: string,
-  ): Promise<{
+  async getWebhookDispatcherDetail(name: string): Promise<{
     name: string;
     enabled: boolean;
     version: number;

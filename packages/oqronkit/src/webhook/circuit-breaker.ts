@@ -38,14 +38,25 @@ export class MemoryCircuitBreaker implements ICircuitBreaker {
 
   constructor(private config: CircuitBreakerConfig = {}) {}
 
-  private get threshold() { return this.config.failureThreshold ?? 5; }
-  private get resetMs() { return this.config.resetTimeoutMs ?? 30000; }
-  private get halfOpenMax() { return this.config.halfOpenMaxAttempts ?? 1; }
+  private get threshold() {
+    return this.config.failureThreshold ?? 5;
+  }
+  private get resetMs() {
+    return this.config.resetTimeoutMs ?? 30000;
+  }
+  private get halfOpenMax() {
+    return this.config.halfOpenMaxAttempts ?? 1;
+  }
 
   private getEntry(key: string): CircuitEntry {
     let entry = this.circuits.get(key);
     if (!entry) {
-      entry = { state: "CLOSED", failures: 0, lastFailureAt: 0, halfOpenAttempts: 0 };
+      entry = {
+        state: "CLOSED",
+        failures: 0,
+        lastFailureAt: 0,
+        halfOpenAttempts: 0,
+      };
       this.circuits.set(key, entry);
     }
     return entry;
@@ -119,13 +130,26 @@ export class SharedCircuitBreaker implements ICircuitBreaker {
     private lock?: ILockAdapter,
   ) {}
 
-  private get threshold() { return this.config.failureThreshold ?? 5; }
-  private get resetMs() { return this.config.resetTimeoutMs ?? 30000; }
-  private get halfOpenMax() { return this.config.halfOpenMaxAttempts ?? 1; }
+  private get threshold() {
+    return this.config.failureThreshold ?? 5;
+  }
+  private get resetMs() {
+    return this.config.resetTimeoutMs ?? 30000;
+  }
+  private get halfOpenMax() {
+    return this.config.halfOpenMaxAttempts ?? 1;
+  }
 
   private async getEntry(key: string): Promise<CircuitEntry> {
     const raw = await this.storage.get<CircuitEntry>(this.NS, key);
-    return raw ?? { state: "CLOSED", failures: 0, lastFailureAt: 0, halfOpenAttempts: 0 };
+    return (
+      raw ?? {
+        state: "CLOSED",
+        failures: 0,
+        lastFailureAt: 0,
+        halfOpenAttempts: 0,
+      }
+    );
   }
 
   private async saveEntry(key: string, entry: CircuitEntry): Promise<void> {
@@ -140,7 +164,9 @@ export class SharedCircuitBreaker implements ICircuitBreaker {
     const deadline = Date.now() + ttlMs;
     while (!(await this.lock.acquire(lockKey, owner, ttlMs))) {
       if (Date.now() >= deadline) {
-        throw new Error(`[OqronKit] Timed out acquiring circuit lock for ${key}`);
+        throw new Error(
+          `[OqronKit] Timed out acquiring circuit lock for ${key}`,
+        );
       }
       await new Promise((resolve) => setTimeout(resolve, 5));
     }

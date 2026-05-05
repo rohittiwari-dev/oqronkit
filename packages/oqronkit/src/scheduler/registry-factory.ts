@@ -1,7 +1,7 @@
 import type {
   DisabledBehavior,
   IOqronModule,
-  Logger
+  Logger,
 } from "../engine/index.js";
 import { OqronContainer } from "../engine/index.js";
 import { CronEngine } from "./cron-engine.js";
@@ -65,7 +65,9 @@ export interface ScheduleModuleFactoryConfig extends SchedulerFactoryConfig {
  * OqronRegistry.getInstance().register(cron);
  * ```
  */
-export function createCronModule(config: CronModuleFactoryConfig): IOqronModule {
+export function createCronModule(
+  config: CronModuleFactoryConfig,
+): IOqronModule {
   const definitions = _drainPending();
   applyGlobalTags(definitions, config.globalTags);
 
@@ -82,7 +84,9 @@ export function createCronModule(config: CronModuleFactoryConfig): IOqronModule 
 /**
  * Factory for the ScheduleEngine — mirrors `createCronModule` for schedule definitions.
  */
-export function createScheduleModule(config: ScheduleModuleFactoryConfig): IOqronModule {
+export function createScheduleModule(
+  config: ScheduleModuleFactoryConfig,
+): IOqronModule {
   const definitions = _drainPendingSchedules();
   applyGlobalTags(definitions, config.globalTags);
 

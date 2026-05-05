@@ -257,7 +257,10 @@ export class WebhookEngine implements IOqronModule {
   }
 
   private getDispatcherForActiveJob(jobId: string): string | undefined {
-    for (const [dispatcherName, jobs] of this.activeJobsByDispatcher.entries()) {
+    for (const [
+      dispatcherName,
+      jobs,
+    ] of this.activeJobsByDispatcher.entries()) {
       if (jobs.has(jobId)) return dispatcherName;
     }
     return undefined;
@@ -392,9 +395,28 @@ export class WebhookEngine implements IOqronModule {
       // Bug #1: Also extend broker claim lock on each heartbeat tick
       async () => {
         try {
-          await this.di.broker.extendLock(jobId, this.workerIdStr, ttlMs, dispatcher.name);
+          await this.di.broker.extendLock(
+            jobId,
+            this.workerIdStr,
+            ttlMs,
+            dispatcher.name,
+          );
         } catch {
           // Broker extendLock failure is non-fatal
+        }
+      },
+      // Bug #24: Abort webhook handler when lock is lost
+      () => {
+        const ac = this.abortControllers.get(jobId);
+        if (ac && !ac.signal.aborted) {
+          this.logger.warn(
+            `Lock lost for webhook job ${jobId} — aborting handler`,
+            {
+              jobId,
+              lockKey,
+            },
+          );
+          ac.abort();
         }
       },
     );
@@ -491,10 +513,10 @@ export class WebhookEngine implements IOqronModule {
       }
       const retryConfig = this.resolveRetryConfig(dispatcher, endpoint);
 
-	      // Sign payload if security is configured
-	      const security = await this.resolveSecurity(
-	        endpoint.security ?? dispatcher.security,
-	      );
+      // Sign payload if security is configured
+      const security = await this.resolveSecurity(
+        endpoint.security ?? dispatcher.security,
+      );
       if (security) {
         const ts = payload.timestamp || startTs;
         const signature = await signWebhookPayload(
@@ -509,8 +531,7 @@ export class WebhookEngine implements IOqronModule {
         payload.headers[sigHeader] = signature;
 
         if (security.includeTimestamp !== false) {
-          const tsHeader =
-            security.timestampHeader ?? "X-Oqron-Timestamp";
+          const tsHeader = security.timestampHeader ?? "X-Oqron-Timestamp";
           payload.headers[tsHeader] = ts.toString();
         }
       }
@@ -887,7 +908,8 @@ export class WebhookEngine implements IOqronModule {
     ac.abort();
 
     const job = await this.di.storage.get<OqronJob>("jobs", jobId);
-    const dispatcherName = job?.queueName ?? this.getDispatcherForActiveJob(jobId);
+    const dispatcherName =
+      job?.queueName ?? this.getDispatcherForActiveJob(jobId);
     if (job) {
       job.status = "failed";
       job.error = "Cancelled by operator";
@@ -924,7 +946,10 @@ export class WebhookEngine implements IOqronModule {
     this.pausedDispatchers.add(name);
     // Bug #21: Merge with existing record to preserve metadata
     const existing = await this.di.storage.get<any>("webhook_instances", name);
-    await this.di.storage.save("webhook_instances", name, { ...(existing || {}), enabled: false });
+    await this.di.storage.save("webhook_instances", name, {
+      ...(existing || {}),
+      enabled: false,
+    });
     await this.di.broker.pause(name);
     OqronEventBus.emit("webhook:paused", name);
     this.logger.info(`Webhook dispatcher "${name}" paused`);
@@ -935,7 +960,10 @@ export class WebhookEngine implements IOqronModule {
     this.pausedDispatchers.delete(name);
     // Bug #21: Merge with existing record to preserve metadata
     const existing = await this.di.storage.get<any>("webhook_instances", name);
-    await this.di.storage.save("webhook_instances", name, { ...(existing || {}), enabled: true });
+    await this.di.storage.save("webhook_instances", name, {
+      ...(existing || {}),
+      enabled: true,
+    });
     await this.di.broker.resume(name);
     OqronEventBus.emit("webhook:resumed", name);
     this.logger.info(`Webhook dispatcher "${name}" resumed`);
@@ -1022,7 +1050,12 @@ export class WebhookEngine implements IOqronModule {
       ...original,
       retryReason: `Resent as ${newId}`,
     });
-    await this.di.broker.publish(original.queueName, newId, undefined, original.opts?.priority);
+    await this.di.broker.publish(
+      original.queueName,
+      newId,
+      undefined,
+      original.opts?.priority,
+    );
     OqronEventBus.emit("job:retried", jobId, newId);
     this.logger.info(`Webhook job ${jobId} resent as ${newId}`);
     return newId;
@@ -1060,7 +1093,10 @@ export class WebhookEngine implements IOqronModule {
   }
 
   private async resolveSecurity(
-    input?: WebhookConfig["security"] | WebhookEndpoint["security"] | WebhookSecurity,
+    input?:
+      | WebhookConfig["security"]
+      | WebhookEndpoint["security"]
+      | WebhookSecurity,
   ): Promise<WebhookSecurity | undefined> {
     if (!input) return undefined;
     if (typeof input === "function") return await input();
@@ -1080,11 +1116,13 @@ export class WebhookEngine implements IOqronModule {
     endpointName: string,
     endpointOverride: WebhookEndpoint | null,
   ): IRateLimiter | null {
-    const ep = endpointOverride ?? (
-      Array.isArray(dispatcher.endpoints)
-        ? dispatcher.endpoints.find((e: WebhookEndpoint) => e.name === endpointName)
-        : undefined
-    );
+    const ep =
+      endpointOverride ??
+      (Array.isArray(dispatcher.endpoints)
+        ? dispatcher.endpoints.find(
+            (e: WebhookEndpoint) => e.name === endpointName,
+          )
+        : undefined);
     if (!ep) return null;
 
     // Option B: User-provided limiter takes precedence

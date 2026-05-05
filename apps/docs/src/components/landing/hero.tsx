@@ -21,22 +21,103 @@ import { useEffect, useState } from "react";
 
 /* ─── Floating module nodes for the animated visual ────────────────────── */
 const NODES = [
-  { icon: Box, label: "Queue", color: "#e11d48", x: 60, y: 25, size: 52, delay: 0 },
-  { icon: Cpu, label: "Worker", color: "#f43f5e", x: 82, y: 48, size: 48, delay: 0.15 },
-  { icon: Clock, label: "Cron", color: "#f97316", x: 38, y: 55, size: 44, delay: 0.3 },
-  { icon: Shield, label: "Limiter", color: "#eab308", x: 72, y: 75, size: 46, delay: 0.45 },
-  { icon: Zap, label: "Webhook", color: "#ec4899", x: 50, y: 80, size: 42, delay: 0.6 },
-  { icon: Network, label: "DAG", color: "#fb923c", x: 25, y: 35, size: 40, delay: 0.75 },
-  { icon: Layers, label: "Pipeline", color: "#f59e0b", x: 88, y: 22, size: 38, delay: 0.9 },
-  { icon: Repeat, label: "Saga", color: "#db2777", x: 45, y: 10, size: 36, delay: 1.05 },
-  { icon: Radio, label: "PubSub", color: "#ea580c", x: 15, y: 65, size: 34, delay: 1.2 },
+  {
+    icon: Box,
+    label: "Queue",
+    color: "#e11d48",
+    x: 60,
+    y: 25,
+    size: 52,
+    delay: 0,
+  },
+  {
+    icon: Cpu,
+    label: "Worker",
+    color: "#f43f5e",
+    x: 82,
+    y: 48,
+    size: 48,
+    delay: 0.15,
+  },
+  {
+    icon: Clock,
+    label: "Cron",
+    color: "#f97316",
+    x: 38,
+    y: 55,
+    size: 44,
+    delay: 0.3,
+  },
+  {
+    icon: Shield,
+    label: "Limiter",
+    color: "#eab308",
+    x: 72,
+    y: 75,
+    size: 46,
+    delay: 0.45,
+  },
+  {
+    icon: Zap,
+    label: "Webhook",
+    color: "#ec4899",
+    x: 50,
+    y: 80,
+    size: 42,
+    delay: 0.6,
+  },
+  {
+    icon: Network,
+    label: "DAG",
+    color: "#fb923c",
+    x: 25,
+    y: 35,
+    size: 40,
+    delay: 0.75,
+  },
+  {
+    icon: Layers,
+    label: "Pipeline",
+    color: "#f59e0b",
+    x: 88,
+    y: 22,
+    size: 38,
+    delay: 0.9,
+  },
+  {
+    icon: Repeat,
+    label: "Saga",
+    color: "#db2777",
+    x: 45,
+    y: 10,
+    size: 36,
+    delay: 1.05,
+  },
+  {
+    icon: Radio,
+    label: "PubSub",
+    color: "#ea580c",
+    x: 15,
+    y: 65,
+    size: 34,
+    delay: 1.2,
+  },
 ] as const;
 
 /* ─── Connection lines between nodes ───────────────────────────────────── */
 const CONNECTIONS = [
-  [0, 1], [0, 2], [1, 3], [2, 4], [3, 4],
-  [5, 0], [5, 2], [6, 1], [7, 0], [7, 5],
-  [8, 2], [8, 4],
+  [0, 1],
+  [0, 2],
+  [1, 3],
+  [2, 4],
+  [3, 4],
+  [5, 0],
+  [5, 2],
+  [6, 1],
+  [7, 0],
+  [7, 5],
+  [8, 2],
+  [8, 4],
 ] as const;
 
 /* ─── Floating particles (deterministic to avoid SSR hydration mismatch) */
@@ -45,22 +126,142 @@ const PARTICLES = [
   { id: 1, x: 22, y: 72, size: 1.5, duration: 6, delay: 0.5, color: "#f97316" },
   { id: 2, x: 35, y: 30, size: 3, duration: 4, delay: 1, color: "#eab308" },
   { id: 3, x: 50, y: 85, size: 1.8, duration: 7, delay: 1.5, color: "#ec4899" },
-  { id: 4, x: 65, y: 10, size: 2.5, duration: 5.5, delay: 0.3, color: "#f43f5e" },
+  {
+    id: 4,
+    x: 65,
+    y: 10,
+    size: 2.5,
+    duration: 5.5,
+    delay: 0.3,
+    color: "#f43f5e",
+  },
   { id: 5, x: 78, y: 55, size: 1.2, duration: 6.5, delay: 2, color: "#e11d48" },
-  { id: 6, x: 90, y: 40, size: 2.8, duration: 4.5, delay: 0.8, color: "#f97316" },
-  { id: 7, x: 12, y: 90, size: 1.6, duration: 5.8, delay: 2.5, color: "#eab308" },
-  { id: 8, x: 42, y: 5, size: 2.2, duration: 3.5, delay: 1.2, color: "#ec4899" },
-  { id: 9, x: 55, y: 65, size: 3.5, duration: 6.2, delay: 0.6, color: "#f43f5e" },
-  { id: 10, x: 70, y: 22, size: 1.4, duration: 5.2, delay: 1.8, color: "#e11d48" },
-  { id: 11, x: 85, y: 78, size: 2.6, duration: 4.8, delay: 0.4, color: "#f97316" },
-  { id: 12, x: 5, y: 50, size: 1.9, duration: 6.8, delay: 2.8, color: "#eab308" },
-  { id: 13, x: 30, y: 95, size: 2.1, duration: 3.8, delay: 1.6, color: "#ec4899" },
-  { id: 14, x: 48, y: 38, size: 3.2, duration: 5.4, delay: 0.2, color: "#f43f5e" },
-  { id: 15, x: 62, y: 82, size: 1.3, duration: 7.2, delay: 2.2, color: "#e11d48" },
-  { id: 16, x: 75, y: 8, size: 2.4, duration: 4.2, delay: 1.4, color: "#f97316" },
-  { id: 17, x: 88, y: 60, size: 1.7, duration: 5.6, delay: 0.9, color: "#eab308" },
-  { id: 18, x: 18, y: 45, size: 2.9, duration: 6.4, delay: 2.6, color: "#ec4899" },
-  { id: 19, x: 95, y: 28, size: 1.1, duration: 3.2, delay: 1.1, color: "#f43f5e" },
+  {
+    id: 6,
+    x: 90,
+    y: 40,
+    size: 2.8,
+    duration: 4.5,
+    delay: 0.8,
+    color: "#f97316",
+  },
+  {
+    id: 7,
+    x: 12,
+    y: 90,
+    size: 1.6,
+    duration: 5.8,
+    delay: 2.5,
+    color: "#eab308",
+  },
+  {
+    id: 8,
+    x: 42,
+    y: 5,
+    size: 2.2,
+    duration: 3.5,
+    delay: 1.2,
+    color: "#ec4899",
+  },
+  {
+    id: 9,
+    x: 55,
+    y: 65,
+    size: 3.5,
+    duration: 6.2,
+    delay: 0.6,
+    color: "#f43f5e",
+  },
+  {
+    id: 10,
+    x: 70,
+    y: 22,
+    size: 1.4,
+    duration: 5.2,
+    delay: 1.8,
+    color: "#e11d48",
+  },
+  {
+    id: 11,
+    x: 85,
+    y: 78,
+    size: 2.6,
+    duration: 4.8,
+    delay: 0.4,
+    color: "#f97316",
+  },
+  {
+    id: 12,
+    x: 5,
+    y: 50,
+    size: 1.9,
+    duration: 6.8,
+    delay: 2.8,
+    color: "#eab308",
+  },
+  {
+    id: 13,
+    x: 30,
+    y: 95,
+    size: 2.1,
+    duration: 3.8,
+    delay: 1.6,
+    color: "#ec4899",
+  },
+  {
+    id: 14,
+    x: 48,
+    y: 38,
+    size: 3.2,
+    duration: 5.4,
+    delay: 0.2,
+    color: "#f43f5e",
+  },
+  {
+    id: 15,
+    x: 62,
+    y: 82,
+    size: 1.3,
+    duration: 7.2,
+    delay: 2.2,
+    color: "#e11d48",
+  },
+  {
+    id: 16,
+    x: 75,
+    y: 8,
+    size: 2.4,
+    duration: 4.2,
+    delay: 1.4,
+    color: "#f97316",
+  },
+  {
+    id: 17,
+    x: 88,
+    y: 60,
+    size: 1.7,
+    duration: 5.6,
+    delay: 0.9,
+    color: "#eab308",
+  },
+  {
+    id: 18,
+    x: 18,
+    y: 45,
+    size: 2.9,
+    duration: 6.4,
+    delay: 2.6,
+    color: "#ec4899",
+  },
+  {
+    id: 19,
+    x: 95,
+    y: 28,
+    size: 1.1,
+    duration: 3.2,
+    delay: 1.1,
+    color: "#f43f5e",
+  },
 ];
 
 /* ─── Live job ticker ─────────────────────────────────────────────────── */
@@ -86,10 +287,7 @@ function LiveTicker() {
   }, []);
 
   return (
-    <motion.div
-      className="overflow-hidden h-5"
-      initial={false}
-    >
+    <motion.div className="overflow-hidden h-5" initial={false}>
       <motion.span
         key={index}
         initial={{ y: 16, opacity: 0 }}
@@ -120,7 +318,12 @@ function FloatingNode({
       style={{ left: `${x}%`, top: `${y}%` }}
       initial={{ opacity: 0, scale: 0 }}
       animate={{ opacity: 1, scale: 1 }}
-      transition={{ delay: delay + 0.5, duration: 0.5, type: "spring", stiffness: 200 }}
+      transition={{
+        delay: delay + 0.5,
+        duration: 0.5,
+        type: "spring",
+        stiffness: 200,
+      }}
     >
       {/* Floating animation */}
       <motion.div
@@ -148,7 +351,11 @@ function FloatingNode({
           className="absolute -inset-1 rounded-xl"
           style={{ border: `1px solid ${color}30` }}
           animate={{ scale: [1, 1.15, 1], opacity: [0.3, 0, 0.3] }}
-          transition={{ duration: 3, repeat: Number.POSITIVE_INFINITY, delay: delay }}
+          transition={{
+            duration: 3,
+            repeat: Number.POSITIVE_INFINITY,
+            delay: delay,
+          }}
         />
 
         {/* Node body */}
@@ -187,7 +394,10 @@ function FloatingNode({
 /* ─── SVG connection lines ────────────────────────────────────────────── */
 function ConnectionLines() {
   return (
-    <svg className="absolute inset-0 w-full h-full pointer-events-none" aria-hidden>
+    <svg
+      className="absolute inset-0 w-full h-full pointer-events-none"
+      aria-hidden
+    >
       <defs>
         <linearGradient id="lineGrad" x1="0%" y1="0%" x2="100%" y2="100%">
           <stop offset="0%" stopColor="#e11d48" stopOpacity="0.15" />
@@ -248,7 +458,10 @@ export function Hero() {
       />
 
       {/* ── Floating micro-particles ───────────────────────────────────── */}
-      <div className="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden>
+      <div
+        className="pointer-events-none absolute inset-0 overflow-hidden"
+        aria-hidden
+      >
         {PARTICLES.map((p) => (
           <motion.div
             key={p.id}
@@ -333,8 +546,8 @@ export function Hero() {
             className="text-lg text-fd-muted-foreground mb-8 leading-relaxed"
           >
             12 enterprise modules. Crash-safe queues, distributed workers,
-            schedulers, rate limiters, webhooks, sagas — adapter-driven,
-            and built for massive horizontal scale.
+            schedulers, rate limiters, webhooks, sagas — adapter-driven, and
+            built for massive horizontal scale.
           </motion.p>
 
           {/* Install command */}
@@ -374,8 +587,7 @@ export function Hero() {
               href="/docs/quickstart"
               className="group relative inline-flex h-12 items-center justify-center gap-2 rounded-xl px-7 text-sm font-semibold text-white transition-all hover:scale-[1.02] active:scale-[0.98] overflow-hidden"
               style={{
-                background:
-                  "linear-gradient(135deg, #e11d48 0%, #f97316 100%)",
+                background: "linear-gradient(135deg, #e11d48 0%, #f97316 100%)",
                 boxShadow:
                   "0 4px 24px rgba(225,29,72,0.3), 0 1px 3px rgba(0,0,0,0.1)",
               }}
@@ -416,8 +628,7 @@ export function Hero() {
           <div
             className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 h-40 w-40 rounded-full opacity-20 blur-[60px]"
             style={{
-              background:
-                "radial-gradient(circle, #e11d48, #f97316)",
+              background: "radial-gradient(circle, #e11d48, #f97316)",
             }}
           />
 
@@ -432,14 +643,22 @@ export function Hero() {
           {/* Central "OqronKit" hub */}
           <motion.div
             className="absolute"
-            style={{ left: "55%", top: "48%", transform: "translate(-50%, -50%)" }}
+            style={{
+              left: "55%",
+              top: "48%",
+              transform: "translate(-50%, -50%)",
+            }}
             initial={{ opacity: 0, scale: 0 }}
             animate={{ opacity: 1, scale: 1 }}
             transition={{ delay: 0.4, duration: 0.6, type: "spring" }}
           >
             <motion.div
               animate={{ rotate: 360 }}
-              transition={{ duration: 40, repeat: Number.POSITIVE_INFINITY, ease: "linear" }}
+              transition={{
+                duration: 40,
+                repeat: Number.POSITIVE_INFINITY,
+                ease: "linear",
+              }}
               className="absolute -inset-6 rounded-full"
               style={{
                 border: "1px dashed",
@@ -448,7 +667,11 @@ export function Hero() {
             />
             <motion.div
               animate={{ rotate: -360 }}
-              transition={{ duration: 30, repeat: Number.POSITIVE_INFINITY, ease: "linear" }}
+              transition={{
+                duration: 30,
+                repeat: Number.POSITIVE_INFINITY,
+                ease: "linear",
+              }}
               className="absolute -inset-12 rounded-full"
               style={{
                 border: "1px dashed",

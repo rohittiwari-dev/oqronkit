@@ -136,7 +136,9 @@ export class RateLimitEngine<TContext = any> implements IRateLimiter<TContext> {
     this.algorithm = this.createAlgorithm(config);
   }
 
-  private createAlgorithm(config: RateLimitConfig<TContext>): IRateLimitAlgorithm {
+  private createAlgorithm(
+    config: RateLimitConfig<TContext>,
+  ): IRateLimitAlgorithm {
     const algo = config.algorithm ?? "sliding-window";
     switch (algo) {
       case "sliding-window":
@@ -156,7 +158,10 @@ export class RateLimitEngine<TContext = any> implements IRateLimiter<TContext> {
   }
 
   applyModuleDefaults(
-    defaults: Pick<RateLimitConfig<TContext>, "algorithm" | "failOpen" | "jitter" | "disabledBehavior">,
+    defaults: Pick<
+      RateLimitConfig<TContext>,
+      "algorithm" | "failOpen" | "jitter" | "disabledBehavior"
+    >,
   ): void {
     const previousAlgorithm = this.config.algorithm;
     this.config = {
@@ -164,7 +169,8 @@ export class RateLimitEngine<TContext = any> implements IRateLimiter<TContext> {
       algorithm: this.config.algorithm ?? defaults.algorithm,
       failOpen: this.config.failOpen ?? defaults.failOpen,
       jitter: this.config.jitter ?? defaults.jitter,
-      disabledBehavior: this.config.disabledBehavior ?? defaults.disabledBehavior,
+      disabledBehavior:
+        this.config.disabledBehavior ?? defaults.disabledBehavior,
     };
     this.validateConfig(this.config);
     this.jitterFraction = this.config.jitter ?? 0.1;
@@ -196,7 +202,9 @@ export class RateLimitEngine<TContext = any> implements IRateLimiter<TContext> {
     }
     if (
       config.jitter !== undefined &&
-      (!Number.isFinite(config.jitter) || config.jitter < 0 || config.jitter > 1)
+      (!Number.isFinite(config.jitter) ||
+        config.jitter < 0 ||
+        config.jitter > 1)
     ) {
       throw new Error(
         `[OqronKit:RateLimit] Invalid jitter "${config.jitter}". Jitter must be between 0 and 1.`,
@@ -207,11 +215,14 @@ export class RateLimitEngine<TContext = any> implements IRateLimiter<TContext> {
         config.refillRate !== undefined &&
         (!Number.isFinite(config.refillRate) || config.refillRate <= 0)
       ) {
-        throw new Error("[OqronKit:RateLimit] refillRate must be greater than zero.");
+        throw new Error(
+          "[OqronKit:RateLimit] refillRate must be greater than zero.",
+        );
       }
       if (
         config.refillIntervalMs !== undefined &&
-        (!Number.isFinite(config.refillIntervalMs) || config.refillIntervalMs <= 0)
+        (!Number.isFinite(config.refillIntervalMs) ||
+          config.refillIntervalMs <= 0)
       ) {
         throw new Error(
           "[OqronKit:RateLimit] refillIntervalMs must be greater than zero.",
@@ -222,7 +233,11 @@ export class RateLimitEngine<TContext = any> implements IRateLimiter<TContext> {
       if (!tier.name) {
         throw new Error(`[OqronKit:RateLimit] Tier name is required.`);
       }
-      if (!Number.isFinite(tier.max) || !Number.isInteger(tier.max) || tier.max <= 0) {
+      if (
+        !Number.isFinite(tier.max) ||
+        !Number.isInteger(tier.max) ||
+        tier.max <= 0
+      ) {
         throw new Error(
           `[OqronKit:RateLimit] Tier "${tier.name}" max must be a positive integer.`,
         );
@@ -764,8 +779,6 @@ export class RateLimitEngine<TContext = any> implements IRateLimiter<TContext> {
         );
       }
     }
-
-
 
     // Build the result from the most-consumed tier
     const activeTiers = tierEvals.filter((e) => !e.skipped && !e.banned);

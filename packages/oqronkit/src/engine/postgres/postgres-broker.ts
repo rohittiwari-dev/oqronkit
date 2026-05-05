@@ -24,8 +24,14 @@ export class PostgresBroker implements IBrokerEngine {
 
   constructor(connectionString: string, tablePrefix = "oqron", poolSize = 10) {
     const safePrefix = assertValidIdentifier(tablePrefix, "tablePrefix");
-    this.tableName = quoteIdentifier(`${safePrefix}_queue`, "broker table name");
-    this.claimIndexName = quoteIdentifier(`idx_${safePrefix}_queue_claim`, "broker index name");
+    this.tableName = quoteIdentifier(
+      `${safePrefix}_queue`,
+      "broker table name",
+    );
+    this.claimIndexName = quoteIdentifier(
+      `idx_${safePrefix}_queue_claim`,
+      "broker index name",
+    );
     this._initPool(connectionString, poolSize);
   }
 
@@ -248,7 +254,13 @@ export class PostgresBroker implements IBrokerEngine {
     const pollIntervalMs = 500; // 500ms sleep between checks
 
     while (Date.now() - start < timeoutMs) {
-      const claimed = await this.claim(brokerName, consumerId, 1, lockTtlMs, strategy);
+      const claimed = await this.claim(
+        brokerName,
+        consumerId,
+        1,
+        lockTtlMs,
+        strategy,
+      );
       if (claimed.length > 0) return claimed[0];
 
       // Sleep before next check
@@ -256,7 +268,13 @@ export class PostgresBroker implements IBrokerEngine {
     }
 
     // One final attempt before giving up
-    const finalClaim = await this.claim(brokerName, consumerId, 1, lockTtlMs, strategy);
+    const finalClaim = await this.claim(
+      brokerName,
+      consumerId,
+      1,
+      lockTtlMs,
+      strategy,
+    );
     return finalClaim.length > 0 ? finalClaim[0] : null;
   }
 

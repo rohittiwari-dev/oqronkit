@@ -234,7 +234,9 @@ export interface QueueConfig<T = any, R = any> {
    *
    * Mutually exclusive with `handler`. If both are set, `processBatch` takes precedence.
    */
-  processBatch?: (jobs: QueueJobContext<T>[]) => Promise<Array<PromiseSettledResult<R>> | void>;
+  processBatch?: (
+    jobs: QueueJobContext<T>[],
+  ) => Promise<Array<PromiseSettledResult<R>> | void>;
 
   /**
    * Number of jobs to claim per poll tick when using `processBatch`.
@@ -262,7 +264,9 @@ export interface IQueue<T = any, R = any> {
    * Push multiple payloads onto the queue sequentially.
    * This is a partial-success API: jobs added before a later failure remain queued.
    */
-  addBulk(items: Array<{ data: T; opts?: OqronJobOptions }>): Promise<OqronJob<T, R>[]>;
+  addBulk(
+    items: Array<{ data: T; opts?: OqronJobOptions }>,
+  ): Promise<OqronJob<T, R>[]>;
 
   /**
    * Retrieve a specific job by its ID.
@@ -272,7 +276,10 @@ export interface IQueue<T = any, R = any> {
   /**
    * List jobs for this queue, optionally filtering by status.
    */
-  getJobs(filter?: { status?: string; limit?: number }): Promise<OqronJob<T, R>[]>;
+  getJobs(filter?: {
+    status?: string;
+    limit?: number;
+  }): Promise<OqronJob<T, R>[]>;
 
   /**
    * Count jobs for this queue, optionally filtered by status.

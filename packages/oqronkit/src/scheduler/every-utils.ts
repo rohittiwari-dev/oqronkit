@@ -11,17 +11,23 @@ const EVERY_MULTIPLIERS: Record<keyof EveryConfig, number> = {
 export function everyToIntervalMs(every: EveryConfig): number {
   let ms = 0;
 
-  for (const field of Object.keys(EVERY_MULTIPLIERS) as Array<keyof EveryConfig>) {
+  for (const field of Object.keys(EVERY_MULTIPLIERS) as Array<
+    keyof EveryConfig
+  >) {
     const value = every[field];
     if (value === undefined) continue;
     if (!Number.isFinite(value) || value < 0) {
-      throw new Error("[OqronKit] `every` values must be finite non-negative numbers");
+      throw new Error(
+        "[OqronKit] `every` values must be finite non-negative numbers",
+      );
     }
     ms += value * EVERY_MULTIPLIERS[field];
   }
 
   if (ms <= 0) {
-    throw new Error("[OqronKit] `every` config must resolve to a positive interval");
+    throw new Error(
+      "[OqronKit] `every` config must resolve to a positive interval",
+    );
   }
 
   return ms;

@@ -1,13 +1,7 @@
 "use client";
 
 import { AnimatePresence, motion } from "framer-motion";
-import {
-  ArrowRight,
-  Check,
-  Copy, RefreshCw,
-  Shield,
-  Zap
-} from "lucide-react";
+import { ArrowRight, Check, Copy, RefreshCw, Shield, Zap } from "lucide-react";
 import Link from "next/link";
 import { useState } from "react";
 
@@ -18,18 +12,75 @@ const TABS = [
     label: "Queue",
     filename: "triggers/email.ts",
     lines: [
-      { tokens: [{ t: "import", c: "kw" }, { t: " { queue } ", c: "id" }, { t: "from", c: "kw" }, { t: " 'oqronkit'", c: "str" }] },
+      {
+        tokens: [
+          { t: "import", c: "kw" },
+          { t: " { queue } ", c: "id" },
+          { t: "from", c: "kw" },
+          { t: " 'oqronkit'", c: "str" },
+        ],
+      },
       { tokens: [] },
-      { tokens: [{ t: "export const", c: "kw" }, { t: " emailQ = ", c: "tx" }, { t: "queue", c: "fn" }, { t: "({", c: "tx" }] },
-      { tokens: [{ t: "  name: ", c: "tx" }, { t: "'send-email'", c: "str" }, { t: ",", c: "tx" }] },
-      { tokens: [{ t: "  guaranteedWorker: ", c: "tx" }, { t: "true", c: "bool" }, { t: ",", c: "tx" }] },
-      { tokens: [{ t: "  handler: ", c: "tx" }, { t: "async", c: "kw" }, { t: " (ctx) => {", c: "tx" }] },
-      { tokens: [{ t: "    ", c: "tx" }, { t: "await", c: "kw" }, { t: " sendEmail(ctx.", c: "tx" }, { t: "data", c: "id" }, { t: ")", c: "tx" }] },
-      { tokens: [{ t: "    ", c: "tx" }, { t: "return", c: "kw" }, { t: " { sent: ", c: "tx" }, { t: "true", c: "bool" }, { t: " }", c: "tx" }] },
+      {
+        tokens: [
+          { t: "export const", c: "kw" },
+          { t: " emailQ = ", c: "tx" },
+          { t: "queue", c: "fn" },
+          { t: "({", c: "tx" },
+        ],
+      },
+      {
+        tokens: [
+          { t: "  name: ", c: "tx" },
+          { t: "'send-email'", c: "str" },
+          { t: ",", c: "tx" },
+        ],
+      },
+      {
+        tokens: [
+          { t: "  guaranteedWorker: ", c: "tx" },
+          { t: "true", c: "bool" },
+          { t: ",", c: "tx" },
+        ],
+      },
+      {
+        tokens: [
+          { t: "  handler: ", c: "tx" },
+          { t: "async", c: "kw" },
+          { t: " (ctx) => {", c: "tx" },
+        ],
+      },
+      {
+        tokens: [
+          { t: "    ", c: "tx" },
+          { t: "await", c: "kw" },
+          { t: " sendEmail(ctx.", c: "tx" },
+          { t: "data", c: "id" },
+          { t: ")", c: "tx" },
+        ],
+      },
+      {
+        tokens: [
+          { t: "    ", c: "tx" },
+          { t: "return", c: "kw" },
+          { t: " { sent: ", c: "tx" },
+          { t: "true", c: "bool" },
+          { t: " }", c: "tx" },
+        ],
+      },
       { tokens: [{ t: "  },", c: "tx" }] },
       { tokens: [{ t: "})", c: "tx" }] },
       { tokens: [] },
-      { tokens: [{ t: "await", c: "kw" }, { t: " emailQ.", c: "tx" }, { t: "add", c: "fn" }, { t: "({ to: ", c: "tx" }, { t: "'user@ex.com'", c: "str" }, { t: " })", c: "tx" }] },
+      {
+        tokens: [
+          { t: "await", c: "kw" },
+          { t: " emailQ.", c: "tx" },
+          { t: "add", c: "fn" },
+          { t: "({ to: ", c: "tx" },
+          { t: "'user@ex.com'", c: "str" },
+          { t: " })", c: "tx" },
+        ],
+      },
     ],
   },
   {
@@ -37,19 +88,70 @@ const TABS = [
     label: "Worker",
     filename: "triggers/billing.ts",
     lines: [
-      { tokens: [{ t: "import", c: "kw" }, { t: " { queue, worker } ", c: "id" }, { t: "from", c: "kw" }, { t: " 'oqronkit'", c: "str" }] },
+      {
+        tokens: [
+          { t: "import", c: "kw" },
+          { t: " { queue, worker } ", c: "id" },
+          { t: "from", c: "kw" },
+          { t: " 'oqronkit'", c: "str" },
+        ],
+      },
       { tokens: [] },
       { tokens: [{ t: "// API node — publisher only", c: "cm" }] },
-      { tokens: [{ t: "export const", c: "kw" }, { t: " billingQ = ", c: "tx" }, { t: "queue", c: "fn" }, { t: "({", c: "tx" }] },
-      { tokens: [{ t: "  name: ", c: "tx" }, { t: "'billing'", c: "str" }, { t: ",", c: "tx" }] },
+      {
+        tokens: [
+          { t: "export const", c: "kw" },
+          { t: " billingQ = ", c: "tx" },
+          { t: "queue", c: "fn" },
+          { t: "({", c: "tx" },
+        ],
+      },
+      {
+        tokens: [
+          { t: "  name: ", c: "tx" },
+          { t: "'billing'", c: "str" },
+          { t: ",", c: "tx" },
+        ],
+      },
       { tokens: [{ t: "})", c: "tx" }] },
       { tokens: [] },
       { tokens: [{ t: "// Worker node — consumer only", c: "cm" }] },
-      { tokens: [{ t: "export const", c: "kw" }, { t: " billingW = ", c: "tx" }, { t: "worker", c: "fn" }, { t: "({", c: "tx" }] },
-      { tokens: [{ t: "  topic: ", c: "tx" }, { t: "'billing'", c: "str" }, { t: ",", c: "tx" }] },
-      { tokens: [{ t: "  concurrency: ", c: "tx" }, { t: "5", c: "bool" }, { t: ",", c: "tx" }] },
-      { tokens: [{ t: "  handler: ", c: "tx" }, { t: "async", c: "kw" }, { t: " (ctx) => {", c: "tx" }] },
-      { tokens: [{ t: "    ", c: "tx" }, { t: "return", c: "kw" }, { t: " chargeBilling(ctx.data)", c: "tx" }] },
+      {
+        tokens: [
+          { t: "export const", c: "kw" },
+          { t: " billingW = ", c: "tx" },
+          { t: "worker", c: "fn" },
+          { t: "({", c: "tx" },
+        ],
+      },
+      {
+        tokens: [
+          { t: "  topic: ", c: "tx" },
+          { t: "'billing'", c: "str" },
+          { t: ",", c: "tx" },
+        ],
+      },
+      {
+        tokens: [
+          { t: "  concurrency: ", c: "tx" },
+          { t: "5", c: "bool" },
+          { t: ",", c: "tx" },
+        ],
+      },
+      {
+        tokens: [
+          { t: "  handler: ", c: "tx" },
+          { t: "async", c: "kw" },
+          { t: " (ctx) => {", c: "tx" },
+        ],
+      },
+      {
+        tokens: [
+          { t: "    ", c: "tx" },
+          { t: "return", c: "kw" },
+          { t: " chargeBilling(ctx.data)", c: "tx" },
+        ],
+      },
       { tokens: [{ t: "  },", c: "tx" }] },
       { tokens: [{ t: "})", c: "tx" }] },
     ],
@@ -59,18 +161,75 @@ const TABS = [
     label: "Schedule",
     filename: "triggers/jobs.ts",
     lines: [
-      { tokens: [{ t: "import", c: "kw" }, { t: " { cron, schedule } ", c: "id" }, { t: "from", c: "kw" }, { t: " 'oqronkit'", c: "str" }] },
+      {
+        tokens: [
+          { t: "import", c: "kw" },
+          { t: " { cron, schedule } ", c: "id" },
+          { t: "from", c: "kw" },
+          { t: " 'oqronkit'", c: "str" },
+        ],
+      },
       { tokens: [] },
-      { tokens: [{ t: "export const", c: "kw" }, { t: " cleanup = ", c: "tx" }, { t: "cron", c: "fn" }, { t: "({", c: "tx" }] },
-      { tokens: [{ t: "  name: ", c: "tx" }, { t: "'daily-cleanup'", c: "str" }, { t: ",", c: "tx" }] },
-      { tokens: [{ t: "  expression: ", c: "tx" }, { t: "'0 0 * * *'", c: "str" }, { t: ",", c: "tx" }] },
-      { tokens: [{ t: "  handler: ", c: "tx" }, { t: "async", c: "kw" }, { t: " () => cleanupOldJobs(),", c: "tx" }] },
+      {
+        tokens: [
+          { t: "export const", c: "kw" },
+          { t: " cleanup = ", c: "tx" },
+          { t: "cron", c: "fn" },
+          { t: "({", c: "tx" },
+        ],
+      },
+      {
+        tokens: [
+          { t: "  name: ", c: "tx" },
+          { t: "'daily-cleanup'", c: "str" },
+          { t: ",", c: "tx" },
+        ],
+      },
+      {
+        tokens: [
+          { t: "  expression: ", c: "tx" },
+          { t: "'0 0 * * *'", c: "str" },
+          { t: ",", c: "tx" },
+        ],
+      },
+      {
+        tokens: [
+          { t: "  handler: ", c: "tx" },
+          { t: "async", c: "kw" },
+          { t: " () => cleanupOldJobs(),", c: "tx" },
+        ],
+      },
       { tokens: [{ t: "})", c: "tx" }] },
       { tokens: [] },
-      { tokens: [{ t: "export const", c: "kw" }, { t: " reminder = ", c: "tx" }, { t: "schedule", c: "fn" }, { t: "({", c: "tx" }] },
-      { tokens: [{ t: "  name: ", c: "tx" }, { t: "'send-reminder'", c: "str" }, { t: ",", c: "tx" }] },
-      { tokens: [{ t: "  runAfter: { minutes: ", c: "tx" }, { t: "5", c: "bool" }, { t: " },", c: "tx" }] },
-      { tokens: [{ t: "  handler: ", c: "tx" }, { t: "async", c: "kw" }, { t: " (ctx) => notify(ctx),", c: "tx" }] },
+      {
+        tokens: [
+          { t: "export const", c: "kw" },
+          { t: " reminder = ", c: "tx" },
+          { t: "schedule", c: "fn" },
+          { t: "({", c: "tx" },
+        ],
+      },
+      {
+        tokens: [
+          { t: "  name: ", c: "tx" },
+          { t: "'send-reminder'", c: "str" },
+          { t: ",", c: "tx" },
+        ],
+      },
+      {
+        tokens: [
+          { t: "  runAfter: { minutes: ", c: "tx" },
+          { t: "5", c: "bool" },
+          { t: " },", c: "tx" },
+        ],
+      },
+      {
+        tokens: [
+          { t: "  handler: ", c: "tx" },
+          { t: "async", c: "kw" },
+          { t: " (ctx) => notify(ctx),", c: "tx" },
+        ],
+      },
       { tokens: [{ t: "})", c: "tx" }] },
     ],
   },
@@ -91,19 +250,22 @@ const HIGHLIGHTS = [
   {
     icon: Shield,
     title: "Crash-safe",
-    description: "Heartbeat locks ensure no job is ever lost, even during a process crash.",
+    description:
+      "Heartbeat locks ensure no job is ever lost, even during a process crash.",
     color: "#e11d48",
   },
   {
     icon: RefreshCw,
     title: "Automatic retries",
-    description: "Configurable retry policies with exponential backoff and dead letter queues.",
+    description:
+      "Configurable retry policies with exponential backoff and dead letter queues.",
     color: "#f97316",
   },
   {
     icon: Zap,
     title: "Zero config scaling",
-    description: "Swap adapter from memory to Redis — instant distributed processing.",
+    description:
+      "Swap adapter from memory to Redis — instant distributed processing.",
     color: "#eab308",
   },
 ] as const;
@@ -127,7 +289,10 @@ export function QuickStart() {
     <section className="relative py-28 overflow-hidden border-t border-fd-border/30">
       {/* Ambient background */}
       <div className="pointer-events-none absolute inset-0" aria-hidden>
-        <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 h-[600px] w-[800px] rounded-full opacity-[0.04] blur-[120px]" style={{ background: "linear-gradient(135deg, #e11d48, #f97316)" }} />
+        <div
+          className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 h-[600px] w-[800px] rounded-full opacity-[0.04] blur-[120px]"
+          style={{ background: "linear-gradient(135deg, #e11d48, #f97316)" }}
+        />
       </div>
 
       <div className="container max-w-7xl mx-auto px-4 relative z-10">
@@ -157,8 +322,9 @@ export function QuickStart() {
             </h2>
 
             <p className="text-fd-muted-foreground text-base leading-relaxed mb-10 max-w-md">
-              Define queues, workers, and schedules with typed factory functions.
-              OqronKit discovers your triggers automatically and handles the rest.
+              Define queues, workers, and schedules with typed factory
+              functions. OqronKit discovers your triggers automatically and
+              handles the rest.
             </p>
 
             {/* Feature highlights */}
@@ -181,7 +347,10 @@ export function QuickStart() {
                         border: `1px solid ${h.color}20`,
                       }}
                     >
-                      <Icon className="h-3.5 w-3.5" style={{ color: h.color }} />
+                      <Icon
+                        className="h-3.5 w-3.5"
+                        style={{ color: h.color }}
+                      />
                     </div>
                     <div>
                       <h4 className="text-sm font-semibold text-fd-foreground mb-0.5">
@@ -217,7 +386,8 @@ export function QuickStart() {
             <div
               className="absolute -inset-[1px] rounded-2xl opacity-60 blur-sm"
               style={{
-                background: "linear-gradient(135deg, #e11d4830, #f9731625, #eab30820, #ec489918)",
+                background:
+                  "linear-gradient(135deg, #e11d4830, #f9731625, #eab30820, #ec489918)",
               }}
             />
 
@@ -227,7 +397,8 @@ export function QuickStart() {
               <div
                 className="absolute top-0 inset-x-0 h-px"
                 style={{
-                  background: "linear-gradient(90deg, transparent, #e11d4860, #f9731650, #eab30840, transparent)",
+                  background:
+                    "linear-gradient(90deg, transparent, #e11d4860, #f9731650, #eab30840, transparent)",
                 }}
               />
 
@@ -250,7 +421,8 @@ export function QuickStart() {
                         layoutId="qsActiveTab"
                         className="absolute bottom-0 left-0 right-0 h-[2px]"
                         style={{
-                          background: "linear-gradient(90deg, #e11d48, #f97316)",
+                          background:
+                            "linear-gradient(90deg, #e11d48, #f97316)",
                         }}
                         transition={{
                           type: "spring",
@@ -302,7 +474,10 @@ export function QuickStart() {
                     className="flex-1 overflow-x-auto py-5 px-5 font-mono text-[13px] leading-7"
                   >
                     {tab.lines.map((line, li) => (
-                      <div key={`line-${li?.toString()}`} className="whitespace-pre">
+                      <div
+                        key={`line-${li?.toString()}`}
+                        className="whitespace-pre"
+                      >
                         {line.tokens.length === 0
                           ? "\u00A0"
                           : line.tokens.map((tok, ti) => (

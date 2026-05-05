@@ -167,7 +167,9 @@ export class TelemetryManager {
     lines.push("# TYPE oqronkit_jobs_active gauge");
     for (const [schedule, count] of this.jobsActiveGauge) {
       if (count > 0) {
-        lines.push(`oqronkit_jobs_active{schedule="${this.escapeLabel(schedule)}"} ${count}`);
+        lines.push(
+          `oqronkit_jobs_active{schedule="${this.escapeLabel(schedule)}"} ${count}`,
+        );
       }
     }
 
@@ -205,7 +207,9 @@ export class TelemetryManager {
         lines.push(
           `oqronkit_job_duration_ms{schedule="${scheduleLabel}",quantile="0.99"} ${p99}`,
         );
-        lines.push(`oqronkit_job_duration_ms_sum{schedule="${scheduleLabel}"} ${sum}`);
+        lines.push(
+          `oqronkit_job_duration_ms_sum{schedule="${scheduleLabel}"} ${sum}`,
+        );
         lines.push(
           `oqronkit_job_duration_ms_count{schedule="${scheduleLabel}"} ${count}`,
         );
@@ -228,6 +232,9 @@ export class TelemetryManager {
   }
 
   private escapeLabel(value: string): string {
-    return value.replace(/\\/g, "\\\\").replace(/\n/g, "\\n").replace(/"/g, '\\"');
+    return value
+      .replace(/\\/g, "\\\\")
+      .replace(/\n/g, "\\n")
+      .replace(/"/g, '\\"');
   }
 }

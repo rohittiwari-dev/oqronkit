@@ -4,10 +4,7 @@ import type { IOqronModule } from "../engine/types/module.types.js";
 import type { Logger } from "../engine/index.js";
 import { OqronContainer } from "../engine/container.js";
 import { OqronEventBus } from "../engine/events/event-bus.js";
-import type {
-  RateLimitInstanceRecord,
-  RateLimitStats,
-} from "./types.js";
+import type { RateLimitInstanceRecord, RateLimitStats } from "./types.js";
 import { getRegisteredLimiters } from "./registry.js";
 
 /**
@@ -35,8 +32,7 @@ export class RateLimitModule implements IOqronModule {
     private readonly moduleConfig: RateLimitModuleDef,
   ) {
     this._tickMs = moduleConfig.gcIntervalMs ?? 300_000; // 5 min default
-    this._eventRetentionMs =
-      moduleConfig.eventRetentionMs ?? 86_400_000; // 24h
+    this._eventRetentionMs = moduleConfig.eventRetentionMs ?? 86_400_000; // 24h
   }
 
   async init(): Promise<void> {

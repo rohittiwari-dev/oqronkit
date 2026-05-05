@@ -67,7 +67,9 @@ export function calculateBackoff(
 ): number {
   if (!backoff) return 0;
   if (!Number.isFinite(backoff.delay) || backoff.delay <= 0) {
-    throw new Error("[OqronKit] Backoff delay must be a positive finite number.");
+    throw new Error(
+      "[OqronKit] Backoff delay must be a positive finite number.",
+    );
   }
   if (maxDelay !== undefined && (!Number.isFinite(maxDelay) || maxDelay <= 0)) {
     throw new Error("[OqronKit] maxDelay must be a positive finite number.");

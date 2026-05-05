@@ -1,4 +1,8 @@
-import type { IStorageEngine, ListOptions, WhereCondition } from "../types/engine.js";
+import type {
+  IStorageEngine,
+  ListOptions,
+  WhereCondition,
+} from "../types/engine.js";
 
 /**
  * Memory-based implementation of the Storage Engine.
@@ -144,11 +148,21 @@ export class MemoryStore implements IStorageEngine {
       const b = this.toEpochMs(cond.value) ?? cond.value;
 
       switch (cond.op) {
-        case "$lt":  if (!(a < (b as any))) return false; break;
-        case "$lte": if (!(a <= (b as any))) return false; break;
-        case "$gt":  if (!(a > (b as any))) return false; break;
-        case "$gte": if (!(a >= (b as any))) return false; break;
-        case "$ne":  if (!(a !== b)) return false; break;
+        case "$lt":
+          if (!(a < (b as any))) return false;
+          break;
+        case "$lte":
+          if (!(a <= (b as any))) return false;
+          break;
+        case "$gt":
+          if (!(a > (b as any))) return false;
+          break;
+        case "$gte":
+          if (!(a >= (b as any))) return false;
+          break;
+        case "$ne":
+          if (!(a !== b)) return false;
+          break;
       }
     }
     return true;
@@ -179,7 +193,9 @@ export class MemoryStore implements IStorageEngine {
 
     const out: Record<string, unknown> = {};
     seen.set(value as object, out);
-    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    for (const [key, item] of Object.entries(
+      value as Record<string, unknown>,
+    )) {
       out[key] = this.clone(item, seen);
     }
     return out as T;

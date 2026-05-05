@@ -15,7 +15,10 @@ export class MemoryBroker implements IBrokerEngine {
   private events = new EventEmitter();
   private waitLists = new Map<string, string[]>(); // FIFO/LIFO queue
   private priorityLists = new Map<string, PriorityEntry[]>(); // Priority queue
-  private delayed = new Map<string, { runAt: number; id: string; priority?: number }[]>();
+  private delayed = new Map<
+    string,
+    { runAt: number; id: string; priority?: number }[]
+  >();
   private activeLocks = new Map<string, LockEntry>(); // brokerName + id -> lock
   private paused = new Set<string>();
   private readonly lockSeparator = "\u0000";
@@ -58,9 +61,12 @@ export class MemoryBroker implements IBrokerEngine {
   }
 
   private scheduleDelayedWake(brokerName: string, delayMs: number): void {
-    const timer = setTimeout(() => {
-      this.events.emit(`broker:ready:${brokerName}`);
-    }, Math.max(0, delayMs));
+    const timer = setTimeout(
+      () => {
+        this.events.emit(`broker:ready:${brokerName}`);
+      },
+      Math.max(0, delayMs),
+    );
     timer.unref();
   }
 
@@ -116,7 +122,8 @@ export class MemoryBroker implements IBrokerEngine {
     if (due.length > 0) {
       if (strategy === "priority") {
         const pList = this.priorityLists.get(brokerName) || [];
-        for (const d of due) pList.push({ id: d.id, priority: d.priority ?? 0 });
+        for (const d of due)
+          pList.push({ id: d.id, priority: d.priority ?? 0 });
         pList.sort((a, b) => a.priority - b.priority);
         this.priorityLists.set(brokerName, pList);
       } else {
@@ -177,7 +184,9 @@ export class MemoryBroker implements IBrokerEngine {
       const candidateId = key.slice(key.indexOf(this.lockSeparator) + 1);
       if (candidateId !== id || candidate.consumerId !== consumerId) continue;
       if (matchingKey) {
-        throw new Error(`Ambiguous lock for entity ${id}; broker name is required`);
+        throw new Error(
+          `Ambiguous lock for entity ${id}; broker name is required`,
+        );
       }
       matchingKey = key;
       lock = candidate;
@@ -190,7 +199,9 @@ export class MemoryBroker implements IBrokerEngine {
       lock = undefined;
     }
 
-    const currentLock = matchingKey ? this.activeLocks.get(matchingKey) : undefined;
+    const currentLock = matchingKey
+      ? this.activeLocks.get(matchingKey)
+      : undefined;
     if (!currentLock || currentLock.consumerId !== consumerId) {
       throw new Error(`Lock lost or stolen for entity ${id}`);
     }
@@ -246,7 +257,13 @@ export class MemoryBroker implements IBrokerEngine {
     strategy: BrokerStrategy = "fifo",
   ): Promise<string | null> {
     // Try non-blocking first
-    const immediate = await this.claim(brokerName, consumerId, 1, lockTtlMs, strategy);
+    const immediate = await this.claim(
+      brokerName,
+      consumerId,
+      1,
+      lockTtlMs,
+      strategy,
+    );
     if (immediate.length > 0) return immediate[0];
 
     // Wait for a job to arrive or timeout
@@ -266,7 +283,13 @@ export class MemoryBroker implements IBrokerEngine {
 
       const onReady = async () => {
         if (settled) return;
-        const claimed = await this.claim(brokerName, consumerId, 1, lockTtlMs, strategy);
+        const claimed = await this.claim(
+          brokerName,
+          consumerId,
+          1,
+          lockTtlMs,
+          strategy,
+        );
         if (claimed.length > 0) {
           // Race guard: if timeout settled while we were awaiting claim(), return the job
           if (settled) {

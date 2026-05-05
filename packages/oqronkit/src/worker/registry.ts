@@ -11,7 +11,9 @@ import type { WorkerConfig } from "./types.js";
  * regardless of how many copies of this file are evaluated at runtime.
  */
 const GLOBAL_KEY = Symbol.for("oqronkit:pending_workers");
-type GlobalRegistry = typeof globalThis & { [key: symbol]: WorkerConfig[] | undefined };
+type GlobalRegistry = typeof globalThis & {
+  [key: symbol]: WorkerConfig[] | undefined;
+};
 
 function _getPending(): WorkerConfig[] {
   const g = globalThis as unknown as GlobalRegistry;

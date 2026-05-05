@@ -26,10 +26,10 @@ import { queue, worker } from "oqronkit";
 // ═══════════════════════════════════════════════════════════════════════════════
 
 type VideoMetadata = {
-	videoId: string;
-	s3ResourceUri: string;
-	codec: "h264" | "hevc" | "av1";
-	bitrate: number;
+  videoId: string;
+  s3ResourceUri: string;
+  codec: "h264" | "hevc" | "av1";
+  bitrate: number;
 };
 
 /**
@@ -38,8 +38,8 @@ type VideoMetadata = {
  * Guaranteed to never crash your API tier.
  */
 export const videoEncodeQueue = queue<VideoMetadata, string>({
-	name: "video-encode-topic",
-	// Notice: no "handler" defined!
+  name: "video-encode-topic",
+  // Notice: no "handler" defined!
 });
 
 /**
@@ -47,22 +47,22 @@ export const videoEncodeQueue = queue<VideoMetadata, string>({
  * API hit happens, we quickly buffer it into the backend.
  */
 export async function handleUserUpload(userId: string, tempFilePath: string) {
-	const dbId = `vid_` + Date.now().toString(36);
+  const dbId = `vid_` + Date.now().toString(36);
 
-	// Fast dispatch to Redis/DB broker. Instantly frees up the API request.
-	const job = await videoEncodeQueue.add(
-		{
-			videoId: dbId,
-			s3ResourceUri: tempFilePath,
-			codec: "hevc",
-			bitrate: 4500,
-		},
-		{
-			jobId: dbId, // Prevents the user from accidentally duplicating uploads
-		},
-	);
+  // Fast dispatch to Redis/DB broker. Instantly frees up the API request.
+  const job = await videoEncodeQueue.add(
+    {
+      videoId: dbId,
+      s3ResourceUri: tempFilePath,
+      codec: "hevc",
+      bitrate: 4500,
+    },
+    {
+      jobId: dbId, // Prevents the user from accidentally duplicating uploads
+    },
+  );
 
-	return { success: true, trackingId: job.id };
+  return { success: true, trackingId: job.id };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -76,63 +76,60 @@ export async function handleUserUpload(userId: string, tempFilePath: string) {
  * This worker pulls from "video-encode-topic" securely ensuring locks.
  */
 export const videoEncodeWorker = worker<VideoMetadata, string>({
-	topic: "video-encode-topic",
+  topic: "video-encode-topic",
 
-	// Only process 2 huge videos per server to avoid OOM
-	concurrency: 2,
+  // Only process 2 huge videos per server to avoid OOM
+  concurrency: 2,
 
-	// High availability heartbeat lock protection against Spot Instance termination
-	guaranteedWorker: true,
-	heartbeatMs: 5_000,
-	lockTtlMs: 30_000,
+  // High availability heartbeat lock protection against Spot Instance termination
+  guaranteedWorker: true,
+  heartbeatMs: 5_000,
+  lockTtlMs: 30_000,
 
-	// Handle 1 retry if transcoding crashes
-	retries: {
-		max: 1,
-		strategy: "fixed",
-		baseDelay: 10_000,
-	},
+  // Handle 1 retry if transcoding crashes
+  retries: {
+    max: 1,
+    strategy: "fixed",
+    baseDelay: 10_000,
+  },
 
-	// Centralized success/fail logging decoupled from publishers
-	hooks: {
-		onSuccess: (job, finalUrl) => {
-			console.log(
-				`[WORKER] Video ${job.data.videoId} completed! Uploaded to: ${finalUrl}`,
-			);
-		},
-		onFail: (job, err) => {
-			console.error(
-				`[WORKER] Video ${job.data.videoId} died permanently:`,
-				err,
-			);
-		},
-	},
+  // Centralized success/fail logging decoupled from publishers
+  hooks: {
+    onSuccess: (job, finalUrl) => {
+      console.log(
+        `[WORKER] Video ${job.data.videoId} completed! Uploaded to: ${finalUrl}`,
+      );
+    },
+    onFail: (job, err) => {
+      console.error(
+        `[WORKER] Video ${job.data.videoId} died permanently:`,
+        err,
+      );
+    },
+  },
 
-	// The mighty execution engine
-	handler: async (ctx) => {
-		const { videoId, codec, s3ResourceUri } = ctx.data;
+  // The mighty execution engine
+  handler: async (ctx) => {
+    const { videoId, codec, s3ResourceUri } = ctx.data;
 
-		ctx.log(
-			"info",
-			`[Transcoder] Fetching source from ${s3ResourceUri}...`,
-		);
-		ctx.progress(10, `Downloading source`);
-		await new Promise((r) => setTimeout(r, 2000));
+    ctx.log("info", `[Transcoder] Fetching source from ${s3ResourceUri}...`);
+    ctx.progress(10, `Downloading source`);
+    await new Promise((r) => setTimeout(r, 2000));
 
-		// Support Mid-execution cancellation explicitly
-		if (ctx.signal.aborted) {
-			throw new Error("Transcoding cancelled by User");
-		}
+    // Support Mid-execution cancellation explicitly
+    if (ctx.signal.aborted) {
+      throw new Error("Transcoding cancelled by User");
+    }
 
-		ctx.progress(40, `Transcoding to ${codec}...`);
-		await new Promise((r) => setTimeout(r, 10000)); // Heavy FFmpeg computation Simulation
+    ctx.progress(40, `Transcoding to ${codec}...`);
+    await new Promise((r) => setTimeout(r, 10000)); // Heavy FFmpeg computation Simulation
 
-		ctx.progress(90, `Uploading MP4 chunks...`);
-		await new Promise((r) => setTimeout(r, 1500));
+    ctx.progress(90, `Uploading MP4 chunks...`);
+    await new Promise((r) => setTimeout(r, 1500));
 
-		ctx.progress(100, `Done!`);
+    ctx.progress(100, `Done!`);
 
-		// This return value becomes the `job.result` fetched by API querying the tracker
-		return `https://cdn.example.com/videos/${videoId}.mp4`;
-	},
+    // This return value becomes the `job.result` fetched by API querying the tracker
+    return `https://cdn.example.com/videos/${videoId}.mp4`;
+  },
 });

@@ -2,7 +2,12 @@ import type { Logger } from "../logger/index.js";
 import type { IScheduleContext } from "../types/index.js";
 
 const VALID_LOG_LEVELS: ReadonlySet<string> = new Set([
-  "trace", "debug", "info", "warn", "error", "fatal",
+  "trace",
+  "debug",
+  "info",
+  "warn",
+  "error",
+  "fatal",
 ]);
 
 export interface ScheduleContextOptions<TPayload> {
@@ -84,7 +89,11 @@ export class ScheduleContext<TPayload = unknown>
     if (this._onProgress) {
       this._onProgress(this._progress, label);
     } else {
-      this.logger.debug("Progress updated", { percent: this._progress, label, runId: this.id });
+      this.logger.debug("Progress updated", {
+        percent: this._progress,
+        label,
+        runId: this.id,
+      });
     }
   }
 

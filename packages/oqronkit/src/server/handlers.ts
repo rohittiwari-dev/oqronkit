@@ -173,7 +173,10 @@ function isAuthorized(req: MonitorRequest): boolean {
   if (separator === -1) return false;
   const user = decoded.slice(0, separator);
   const pass = decoded.slice(separator + 1);
-  return constantTimeEqual(user, expectedUser) && constantTimeEqual(pass, expectedPass);
+  return (
+    constantTimeEqual(user, expectedUser) &&
+    constantTimeEqual(pass, expectedPass)
+  );
 }
 
 function unauthorized(): MonitorResponse {
@@ -361,7 +364,10 @@ export async function handleAdminSchedules(
 ): Promise<MonitorResponse> {
   const mgr = getManager();
   if (!mgr)
-    return { status: 503, body: { ok: false, error: "Manager not initialized" } };
+    return {
+      status: 503,
+      body: { ok: false, error: "Manager not initialized" },
+    };
 
   const { name } = req.params;
 
@@ -393,7 +399,10 @@ export async function handleAdminJobsQuery(
 ): Promise<MonitorResponse> {
   const mgr = getManager();
   if (!mgr)
-    return { status: 503, body: { ok: false, error: "Manager not initialized" } };
+    return {
+      status: 503,
+      body: { ok: false, error: "Manager not initialized" },
+    };
 
   const result = await mgr.queryJobs({
     type: req.query.type as any,
@@ -413,7 +422,10 @@ export async function handleAdminRateLimiters(
 ): Promise<MonitorResponse> {
   const mgr = getManager();
   if (!mgr)
-    return { status: 503, body: { ok: false, error: "Manager not initialized" } };
+    return {
+      status: 503,
+      body: { ok: false, error: "Manager not initialized" },
+    };
 
   // GET /admin/ratelimiters — list all
   if (!req.params.name) {
@@ -523,7 +535,10 @@ export async function handleAdminWebhooks(
 ): Promise<MonitorResponse> {
   const mgr = getManager();
   if (!mgr)
-    return { status: 503, body: { ok: false, error: "Manager not initialized" } };
+    return {
+      status: 503,
+      body: { ok: false, error: "Manager not initialized" },
+    };
 
   const { name } = req.params;
 
@@ -545,7 +560,13 @@ export async function handleAdminWebhooks(
     if (jobId) {
       const newId = await mgr.resendWebhookJob(jobId);
       if (!newId)
-        return { status: 404, body: { ok: false, error: "Job not found or not in failed/dead-letter state" } };
+        return {
+          status: 404,
+          body: {
+            ok: false,
+            error: "Job not found or not in failed/dead-letter state",
+          },
+        };
       return { status: 200, body: { ok: true, newJobId: newId } };
     }
 
@@ -559,7 +580,11 @@ export async function handleAdminWebhooks(
     const limit = queryInt(req.query, "limit", 50, { min: 1, max: 200 });
     const offset = queryInt(req.query, "offset", 0, { min: 0, max: 100_000 });
     const status = req.query.status;
-    const result = await mgr.getWebhookDeliveries(name, { status, limit, offset });
+    const result = await mgr.getWebhookDeliveries(name, {
+      status,
+      limit,
+      offset,
+    });
     return { status: 200, body: { ok: true, ...result } };
   }
 
@@ -567,7 +592,10 @@ export async function handleAdminWebhooks(
   if (name) {
     const detail = await mgr.getWebhookDispatcherDetail(name);
     if (!detail)
-      return { status: 404, body: { ok: false, error: "Dispatcher not found" } };
+      return {
+        status: 404,
+        body: { ok: false, error: "Dispatcher not found" },
+      };
     return { status: 200, body: { ok: true, dispatcher: detail } };
   }
 
@@ -664,16 +692,24 @@ export async function dispatch(req: MonitorRequest): Promise<MonitorResponse> {
   }
 
   // GET  /admin/schedules/:name/history
-  const schedHistoryMatch = path.match(/^\/admin\/schedules\/([^/]+)\/history$/);
+  const schedHistoryMatch = path.match(
+    /^\/admin\/schedules\/([^/]+)\/history$/,
+  );
   if (schedHistoryMatch && method === "GET") {
-    req.params = { ...req.params, name: schedHistoryMatch[1], subResource: "history" };
+    req.params = {
+      ...req.params,
+      name: schedHistoryMatch[1],
+      subResource: "history",
+    };
     return handleAdminSchedules(req);
   }
 
   // GET  /admin/jobs/:id
   // POST /admin/jobs/:id/(retry|rerun|chain)
   // DELETE /admin/jobs/:id
-  const jobMatch = path.match(/^\/admin\/jobs\/([^/]+)(?:\/(retry|rerun|chain))?$/);
+  const jobMatch = path.match(
+    /^\/admin\/jobs\/([^/]+)(?:\/(retry|rerun|chain))?$/,
+  );
   if (jobMatch) {
     req.params = { ...req.params, id: jobMatch[1], action: jobMatch[2] ?? "" };
     return handleAdminJob(req);
@@ -700,7 +736,11 @@ export async function dispatch(req: MonitorRequest): Promise<MonitorResponse> {
     /^\/admin\/ratelimiters\/([^/]+)\/(events|snapshot)$/,
   );
   if (rlSubMatch && method === "GET") {
-    req.params = { ...req.params, name: rlSubMatch[1], subResource: rlSubMatch[2] };
+    req.params = {
+      ...req.params,
+      name: rlSubMatch[1],
+      subResource: rlSubMatch[2],
+    };
     return handleAdminRateLimiters(req);
   }
 
@@ -709,7 +749,12 @@ export async function dispatch(req: MonitorRequest): Promise<MonitorResponse> {
     /^\/admin\/ratelimiters\/([^/]+)\/keys\/([^/]+)$/,
   );
   if (rlKeyMatch && method === "GET") {
-    req.params = { ...req.params, name: rlKeyMatch[1], subResource: "keys", key: rlKeyMatch[2] };
+    req.params = {
+      ...req.params,
+      name: rlKeyMatch[1],
+      subResource: "keys",
+      key: rlKeyMatch[2],
+    };
     return handleAdminRateLimiters(req);
   }
 
@@ -718,7 +763,11 @@ export async function dispatch(req: MonitorRequest): Promise<MonitorResponse> {
     /^\/admin\/ratelimiters\/([^/]+)\/(enable|disable)$/,
   );
   if (rlActionMatch && method === "POST") {
-    req.params = { ...req.params, name: rlActionMatch[1], action: rlActionMatch[2] };
+    req.params = {
+      ...req.params,
+      name: rlActionMatch[1],
+      action: rlActionMatch[2],
+    };
     return handleAdminRateLimiters(req);
   }
 
@@ -741,7 +790,11 @@ export async function dispatch(req: MonitorRequest): Promise<MonitorResponse> {
     /^\/admin\/ratelimiters\/([^/]+)\/keys\/([^/]+)\/override$/,
   );
   if (rlKeyDeleteMatch && method === "DELETE") {
-    req.params = { ...req.params, name: rlKeyDeleteMatch[1], key: rlKeyDeleteMatch[2] };
+    req.params = {
+      ...req.params,
+      name: rlKeyDeleteMatch[1],
+      key: rlKeyDeleteMatch[2],
+    };
     return handleAdminRateLimiters(req);
   }
 
@@ -761,21 +814,35 @@ export async function dispatch(req: MonitorRequest): Promise<MonitorResponse> {
   }
 
   // GET  /admin/webhooks/:name/deliveries — delivery history
-  const whDeliveriesMatch = path.match(/^\/admin\/webhooks\/([^/]+)\/deliveries$/);
+  const whDeliveriesMatch = path.match(
+    /^\/admin\/webhooks\/([^/]+)\/deliveries$/,
+  );
   if (whDeliveriesMatch && method === "GET") {
-    req.params = { ...req.params, name: whDeliveriesMatch[1], subResource: "deliveries" };
+    req.params = {
+      ...req.params,
+      name: whDeliveriesMatch[1],
+      subResource: "deliveries",
+    };
     return handleAdminWebhooks(req);
   }
 
   // POST /admin/webhooks/:name/(pause|resume) — dispatcher control
-  const whActionMatch = path.match(/^\/admin\/webhooks\/([^/]+)\/(pause|resume)$/);
+  const whActionMatch = path.match(
+    /^\/admin\/webhooks\/([^/]+)\/(pause|resume)$/,
+  );
   if (whActionMatch && method === "POST") {
-    req.params = { ...req.params, name: whActionMatch[1], action: whActionMatch[2] };
+    req.params = {
+      ...req.params,
+      name: whActionMatch[1],
+      action: whActionMatch[2],
+    };
     return handleAdminWebhooks(req);
   }
 
   // POST /admin/webhooks/jobs/:id/resend — resend a failed job
-  const whResendMatch = path.match(/^\/admin\/webhooks\/jobs\/([^/]+)\/resend$/);
+  const whResendMatch = path.match(
+    /^\/admin\/webhooks\/jobs\/([^/]+)\/resend$/,
+  );
   if (whResendMatch && method === "POST") {
     req.params = { ...req.params, jobId: whResendMatch[1] };
     return handleAdminWebhooks(req);

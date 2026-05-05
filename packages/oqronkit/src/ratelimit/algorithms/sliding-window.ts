@@ -14,90 +14,84 @@ import type { AlgorithmResult, IRateLimitAlgorithm } from "../types.js";
  */
 
 interface WindowEntry {
-	ts: number;
+  ts: number;
 }
 
 interface SlidingWindowState {
-	entries: WindowEntry[];
+  entries: WindowEntry[];
 }
 
 const NAMESPACE = "ratelimit:sliding";
 
 export class SlidingWindowAlgorithm implements IRateLimitAlgorithm {
-	async consume(
-		storage: IStorageEngine,
-		storageKey: string,
-		max: number,
-		windowMs: number,
-		cost: number,
-	): Promise<AlgorithmResult> {
-		const now = Date.now();
-		const cutoff = now - windowMs;
+  async consume(
+    storage: IStorageEngine,
+    storageKey: string,
+    max: number,
+    windowMs: number,
+    cost: number,
+  ): Promise<AlgorithmResult> {
+    const now = Date.now();
+    const cutoff = now - windowMs;
 
-		// Load existing state
-		const state = await storage.get<SlidingWindowState>(
-			NAMESPACE,
-			storageKey,
-		);
-		let entries = state?.entries ?? [];
+    // Load existing state
+    const state = await storage.get<SlidingWindowState>(NAMESPACE, storageKey);
+    let entries = state?.entries ?? [];
 
-		// Prune expired entries
-		entries = entries.filter((e) => e.ts > cutoff);
+    // Prune expired entries
+    entries = entries.filter((e) => e.ts > cutoff);
 
-		// Check capacity
-		if (entries.length + cost > max) {
-			// Find the oldest entry to calculate reset time
-			const oldestTs = entries.length > 0 ? entries[0].ts : now;
-			const resetMs = Math.max(0, oldestTs + windowMs - now);
+    // Check capacity
+    if (entries.length + cost > max) {
+      // Find the oldest entry to calculate reset time
+      const oldestTs = entries.length > 0 ? entries[0].ts : now;
+      const resetMs = Math.max(0, oldestTs + windowMs - now);
 
-			return {
-				allowed: false,
-				current: entries.length,
-				resetMs,
-			};
-		}
+      return {
+        allowed: false,
+        current: entries.length,
+        resetMs,
+      };
+    }
 
-		// Consume: add `cost` new entries
-		for (let i = 0; i < cost; i++) {
-			entries.push({ ts: now });
-		}
+    // Consume: add `cost` new entries
+    for (let i = 0; i < cost; i++) {
+      entries.push({ ts: now });
+    }
 
-		// Persist
-		await storage.save(NAMESPACE, storageKey, {
-			entries,
-			createdAt: now + windowMs, // acts as expiresAt for GC
-		});
+    // Persist
+    await storage.save(NAMESPACE, storageKey, {
+      entries,
+      createdAt: now + windowMs, // acts as expiresAt for GC
+    });
 
-		// Reset time = oldest entry expiry
-		const oldestTs = entries.length > 0 ? entries[0].ts : now;
-		const resetMs = Math.max(0, oldestTs + windowMs - now);
+    // Reset time = oldest entry expiry
+    const oldestTs = entries.length > 0 ? entries[0].ts : now;
+    const resetMs = Math.max(0, oldestTs + windowMs - now);
 
-		return {
-			allowed: true,
-			current: entries.length,
-			resetMs,
-		};
-	}
+    return {
+      allowed: true,
+      current: entries.length,
+      resetMs,
+    };
+  }
 
-	async peek(
-		storage: IStorageEngine,
-		storageKey: string,
-		_max: number,
-		windowMs: number,
-	): Promise<{ current: number; resetMs: number }> {
-		const now = Date.now();
-		const cutoff = now - windowMs;
+  async peek(
+    storage: IStorageEngine,
+    storageKey: string,
+    _max: number,
+    windowMs: number,
+  ): Promise<{ current: number; resetMs: number }> {
+    const now = Date.now();
+    const cutoff = now - windowMs;
 
-		const state = await storage.get<SlidingWindowState>(
-			NAMESPACE,
-			storageKey,
-		);
-		let entries = state?.entries ?? [];
-		entries = entries.filter((e) => e.ts > cutoff);
+    const state = await storage.get<SlidingWindowState>(NAMESPACE, storageKey);
+    let entries = state?.entries ?? [];
+    entries = entries.filter((e) => e.ts > cutoff);
 
-		const oldestTs = entries.length > 0 ? entries[0].ts : now;
-		const resetMs = Math.max(0, oldestTs + windowMs - now);
+    const oldestTs = entries.length > 0 ? entries[0].ts : now;
+    const resetMs = Math.max(0, oldestTs + windowMs - now);
 
-		return { current: entries.length, resetMs };
-	}
+    return { current: entries.length, resetMs };
+  }
 }

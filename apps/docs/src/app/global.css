@@ -59,9 +59,7 @@ h6 {
 }
 
 .dark {
-  --color-fd-background: hsl(
-    20 6% 10%
-  );
+  --color-fd-background: hsl(20 6% 10%);
   --color-fd-foreground: hsl(0 0% 98%);
 
   /* Glassmorphic Card Backgrounds (Semi-transparent) */
@@ -102,11 +100,7 @@ body {
       hsla(347, 50%, 18%, 0.4),
       transparent 25%
     ),
-    radial-gradient(
-      circle at 85% 30%,
-      hsla(25, 50%, 18%, 0.3),
-      transparent 25%
-    );
+    radial-gradient(circle at 85% 30%, hsla(25, 50%, 18%, 0.3), transparent 25%);
 }
 
 /* Glassmorphism Utilities */
@@ -251,9 +245,15 @@ header {
 
 /* Animated gradient text */
 @keyframes gradient-x {
-  0% { background-position: 0% 50%; }
-  50% { background-position: 100% 50%; }
-  100% { background-position: 0% 50%; }
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
 }
 
 .animate-gradient-x {
@@ -262,7 +262,9 @@ header {
 
 /* Shimmer sweep on buttons */
 @keyframes shimmer {
-  100% { transform: translateX(200%); }
+  100% {
+    transform: translateX(200%);
+  }
 }
 
 .group:hover .group-hover\:animate-shimmer {

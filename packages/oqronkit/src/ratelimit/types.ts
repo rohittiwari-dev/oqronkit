@@ -416,12 +416,7 @@ export interface RateLimitEvent {
   limiterName: string;
   tier: string;
   key: string;
-  type:
-    | "blocked"
-    | "banned"
-    | "unbanned"
-    | "override-set"
-    | "override-cleared";
+  type: "blocked" | "banned" | "unbanned" | "override-set" | "override-cleared";
   current: number;
   max: number;
   cost: number;

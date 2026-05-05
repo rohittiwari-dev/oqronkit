@@ -26,13 +26,21 @@ function createMissedFireContext(
     scheduleName: defName,
     log: childLogger,
     signal,
-    get aborted() { return signal.aborted; },
+    get aborted() {
+      return signal.aborted;
+    },
     firedAt: now,
-    get duration() { return Date.now() - startedAt; },
+    get duration() {
+      return Date.now() - startedAt;
+    },
     environment: undefined,
     project: undefined,
-    progress(value: number, _label?: string) { _progress = Math.max(0, Math.min(100, value)); },
-    getProgress() { return _progress; },
+    progress(value: number, _label?: string) {
+      _progress = Math.max(0, Math.min(100, value));
+    },
+    getProgress() {
+      return _progress;
+    },
   };
 }
 
@@ -121,7 +129,11 @@ export class MissedFireHandler {
         if (def.hooks?.onMissedFire) {
           try {
             for (const missedAt of missedDates) {
-              const ctx = createMissedFireContext(def.name, this.logger, missedAt);
+              const ctx = createMissedFireContext(
+                def.name,
+                this.logger,
+                missedAt,
+              );
               await def.hooks.onMissedFire(ctx, missedAt);
             }
           } catch (err) {
