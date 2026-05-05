@@ -213,7 +213,16 @@ export async function executeJob(
       workerId,
       lockTtlMs,
       heartbeatMs,
+      // Bug #1: Also extend broker claim lock on each heartbeat tick
+      async () => {
+        try {
+          await di.broker.extendLock(job.id, workerId, lockTtlMs, hc.name);
+        } catch {
+          // Broker extendLock failure is non-fatal — ILockAdapter is authoritative
+        }
+      },
     );
+
     const acquired = await heartbeat.start();
     if (!acquired) {
       logger.warn(`Failed to acquire heartbeat lock for job ${job.id}`);
@@ -742,6 +751,16 @@ export async function executeBatch(
       workerId,
       lockTtlMs,
       heartbeatMs,
+      // Bug #1: Also extend broker claim locks for all jobs in batch
+      async () => {
+        for (const job of jobs) {
+          try {
+            await di.broker.extendLock(job.id, workerId, lockTtlMs, hc.name);
+          } catch {
+            // Non-fatal — ILockAdapter is authoritative
+          }
+        }
+      },
     );
     const acquired = await heartbeat.start();
     if (!acquired) {

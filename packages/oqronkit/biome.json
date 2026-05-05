@@ -21,7 +21,9 @@
     "rules": {
       "recommended": true,
       "suspicious": {
-        "noExplicitAny": "off"
+        "noExplicitAny": "off",
+        "useIterableCallbackReturn": "off",
+        "noConfusingVoidType":"off"
       },
       "style": {
         "noNonNullAssertion": "off"

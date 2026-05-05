@@ -12,6 +12,8 @@ export class HeartbeatWorker {
     private readonly ownerId: string,
     private readonly ttlMs: number = 30_000,
     private readonly heartbeatMs?: number,
+    /** Optional callback invoked on each heartbeat tick — used to also extend broker claim locks */
+    private readonly onHeartbeat?: () => Promise<void>,
   ) {}
 
   async start(): Promise<boolean> {
@@ -40,6 +42,11 @@ export class HeartbeatWorker {
           });
           this._active = false;
           clearInterval(this.heartbeatTimer);
+          return;
+        }
+        // Also extend broker claim lock if callback provided
+        if (this.onHeartbeat) {
+          await this.onHeartbeat();
         }
       } catch (err) {
         this.logger.error("Heartbeat renewal threw", {

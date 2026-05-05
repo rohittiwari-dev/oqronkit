@@ -268,6 +268,11 @@ export class MemoryBroker implements IBrokerEngine {
         if (settled) return;
         const claimed = await this.claim(brokerName, consumerId, 1, lockTtlMs, strategy);
         if (claimed.length > 0) {
+          // Race guard: if timeout settled while we were awaiting claim(), return the job
+          if (settled) {
+            void this.nack(brokerName, claimed[0]);
+            return;
+          }
           settled = true;
           clearTimeout(timeoutTimer);
           if (dueTimer) clearTimeout(dueTimer);
@@ -284,5 +289,15 @@ export class MemoryBroker implements IBrokerEngine {
 
       this.events.on(eventName, onReady);
     });
+  }
+
+  /** Clean up internal event emitters and maps — prevents listener leaks in tests */
+  close(): void {
+    this.events.removeAllListeners();
+    this.waitLists.clear();
+    this.priorityLists.clear();
+    this.delayed.clear();
+    this.activeLocks.clear();
+    this.paused.clear();
   }
 }
