@@ -845,11 +845,7 @@ export class WebhookEngine implements IOqronModule {
     }
     this.abortControllers.clear();
 
-    for (const hb of this.heartbeats.values()) {
-      await hb.stop();
-    }
-    this.heartbeats.clear();
-
+    // Bug #14: Drain FIRST — heartbeats must stay alive to prevent re-claims during drain
     const allActive = Array.from(this.activeJobs.values());
     if (allActive.length > 0) {
       const timeout = this.webhookConfig?.shutdownTimeout ?? 25000;
@@ -861,6 +857,12 @@ export class WebhookEngine implements IOqronModule {
         }),
       ]);
     }
+
+    // THEN stop heartbeats and release locks
+    for (const hb of this.heartbeats.values()) {
+      await hb.stop();
+    }
+    this.heartbeats.clear();
 
     this.isPolling.clear();
     this.pausedDispatchers.clear();

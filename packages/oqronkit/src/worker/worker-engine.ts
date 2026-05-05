@@ -325,13 +325,7 @@ export class WorkerEngine implements IOqronModule {
     }
     this.abortControllers.clear();
 
-    // Ensure all heartbeats stop regardless of drain success
-    for (const hb of this.heartbeats.values()) {
-      await hb.stop().catch(() => {});
-    }
-    this.heartbeats.clear();
-
-    // B3: Graceful drain — wait for active jobs to settle before returning
+    // Bug #3: Drain FIRST — heartbeats must stay alive to prevent re-claims during drain
     const allActive = Array.from(this.activeJobs.values());
     if (allActive.length > 0) {
       const timeout = this.workerModuleConfig.shutdownTimeout ?? 25_000;
@@ -343,6 +337,12 @@ export class WorkerEngine implements IOqronModule {
         }),
       ]);
     }
+
+    // THEN stop heartbeats and release locks
+    for (const hb of this.heartbeats.values()) {
+      await hb.stop().catch(() => {});
+    }
+    this.heartbeats.clear();
   }
 
   // ── Phase 4: Dynamic CRUD Management Methods ────────────────────────────

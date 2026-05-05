@@ -348,12 +348,7 @@ export class QueueEngine implements IOqronModule {
     }
     this.abortControllers.clear();
 
-    // Stop all active heartbeats
-    for (const hb of this.heartbeats.values()) {
-      await hb.stop();
-    }
-    this.heartbeats.clear();
-
+    // Bug #3: Drain FIRST — heartbeats must stay alive to prevent re-claims during drain
     const allActive = Array.from(this.activeJobs.values());
     if (allActive.length > 0) {
       this.logger.info(
@@ -368,6 +363,12 @@ export class QueueEngine implements IOqronModule {
         }),
       ]);
     }
+
+    // THEN stop heartbeats and release locks
+    for (const hb of this.heartbeats.values()) {
+      await hb.stop();
+    }
+    this.heartbeats.clear();
   }
 
   // ── Phase 4: Dynamic CRUD Management Methods ────────────────────────────
