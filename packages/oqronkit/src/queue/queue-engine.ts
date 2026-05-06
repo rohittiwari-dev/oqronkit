@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { ThrottleGate } from "../engine/utils/throttle-gate.js";
 import type { IOqronModule, Logger } from "../engine/index.js";
 import { OqronContainer, OqronEventBus } from "../engine/index.js";
 import { LagMonitor } from "../engine/lag-monitor.js";
@@ -18,6 +17,7 @@ import {
 } from "../engine/utils/job-executor.js";
 import { keepHistoryToRemoveConfig } from "../engine/utils/job-retention.js";
 import { ReconciliationEngine } from "../engine/utils/reconciliation-engine.js";
+import { ThrottleGate } from "../engine/utils/throttle-gate.js";
 import type { QueueModuleDef } from "../modules.js";
 import {
   deregisterQueue,

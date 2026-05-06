@@ -241,10 +241,17 @@ export async function createBrokerAdapter(
  * ```
  */
 export function createStorage(impl: IStorageEngine): IStorageEngine {
-  if (!impl.save || !impl.get || !impl.list || !impl.delete || !impl.prune || !impl.count) {
+  if (
+    !impl.save ||
+    !impl.get ||
+    !impl.list ||
+    !impl.delete ||
+    !impl.prune ||
+    !impl.count
+  ) {
     throw new Error(
       "[OqronKit] createStorage: all IStorageEngine methods are required " +
-      "(save, get, list, delete, prune, count)",
+        "(save, get, list, delete, prune, count)",
     );
   }
   return impl;
@@ -285,12 +292,17 @@ export function createStorage(impl: IStorageEngine): IStorageEngine {
  */
 export function createBroker(impl: IBrokerEngine): IBrokerEngine {
   if (
-    !impl.publish || !impl.claim || !impl.extendLock ||
-    !impl.ack || !impl.nack || !impl.pause || !impl.resume
+    !impl.publish ||
+    !impl.claim ||
+    !impl.extendLock ||
+    !impl.ack ||
+    !impl.nack ||
+    !impl.pause ||
+    !impl.resume
   ) {
     throw new Error(
       "[OqronKit] createBroker: all required IBrokerEngine methods are needed " +
-      "(publish, claim, extendLock, ack, nack, pause, resume)",
+        "(publish, claim, extendLock, ack, nack, pause, resume)",
     );
   }
   return impl;
@@ -329,7 +341,7 @@ export function createLock(impl: ILockAdapter): ILockAdapter {
   if (!impl.acquire || !impl.renew || !impl.release || !impl.isOwner) {
     throw new Error(
       "[OqronKit] createLock: all ILockAdapter methods are required " +
-      "(acquire, renew, release, isOwner)",
+        "(acquire, renew, release, isOwner)",
     );
   }
   return impl;

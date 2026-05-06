@@ -60,9 +60,7 @@ export function batch<T = any, R = any>(
     );
   }
   if (typeof config.handler !== "function") {
-    throw new Error(
-      `[OqronKit/Batch] "${config.name}": handler is required.`,
-    );
+    throw new Error(`[OqronKit/Batch] "${config.name}": handler is required.`);
   }
 
   // Register in global registry (engine picks up during init)
@@ -276,16 +274,15 @@ export function batch<T = any, R = any>(
       return getBufferSizeImpl(groupKey);
     },
 
-    async getJob(
-      id: string,
-    ): Promise<OqronJob<BatchPayload<T>, R> | null> {
+    async getJob(id: string): Promise<OqronJob<BatchPayload<T>, R> | null> {
       const di = getDI();
       return di.storage.get<OqronJob<BatchPayload<T>, R>>("jobs", id);
     },
 
-    async getJobs(
-      filter?: { status?: string; limit?: number },
-    ): Promise<OqronJob<BatchPayload<T>, R>[]> {
+    async getJobs(filter?: {
+      status?: string;
+      limit?: number;
+    }): Promise<OqronJob<BatchPayload<T>, R>[]> {
       const di = getDI();
       const f: Record<string, any> = {
         queueName: `batch:${batchName}`,

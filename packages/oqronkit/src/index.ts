@@ -36,6 +36,15 @@ function removeSignalHandlers(): void {
   _signalHandlers = [];
 }
 
+// ── Batch Module ────────────────────────────────────────────────────────────
+export { batch } from "./batch/define-batch.js";
+export { applyGlobalTags as applyGlobalBatchTags } from "./batch/registry.js";
+export type {
+  BatchConfig,
+  BatchJobContext,
+  BatchPayload,
+  IBatch,
+} from "./batch/types.js";
 export type {
   BrokerAdapterOptions,
   CreateAdaptersOptions,
@@ -77,7 +86,6 @@ export type {
   ScheduleHooks,
   ScheduleRecurring,
 } from "./engine/index.js";
-
 // ── Re-exports: single source of truth for ALL user-facing APIs ─────────────
 export {
   createLogger,
@@ -132,15 +140,6 @@ export {
   webhookModule,
   workerModule,
 } from "./modules.js";
-// ── Batch Module ────────────────────────────────────────────────────────────
-export { batch } from "./batch/define-batch.js";
-export { applyGlobalTags as applyGlobalBatchTags } from "./batch/registry.js";
-export type {
-  BatchConfig,
-  BatchJobContext,
-  BatchPayload,
-  IBatch,
-} from "./batch/types.js";
 export { queue } from "./queue/define-queue.js";
 export {
   type QueueMetricEntry,

@@ -1,4 +1,4 @@
-bun run  check
+bun run check
 bun run format
 git add .
-bun run test
+cd packages/oqronkit && bun vitest run

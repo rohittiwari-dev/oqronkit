@@ -16,21 +16,21 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { ThrottleGate } from "../engine/utils/throttle-gate.js";
-import type { IOqronModule } from "../engine/types/module.types.js";
 import { OqronContainer } from "../engine/container.js";
+import type { Logger } from "../engine/logger/index.js";
 import type { OqronConfig } from "../engine/types/config.types.js";
 import type { OqronJob } from "../engine/types/job.types.js";
+import type { IOqronModule } from "../engine/types/module.types.js";
 import {
-  pruneAfterCompletion,
   keepHistoryToRemoveConfig,
+  pruneAfterCompletion,
 } from "../engine/utils/job-retention.js";
-import type { Logger } from "../engine/logger/index.js";
+import { ThrottleGate } from "../engine/utils/throttle-gate.js";
 import type { BatchModuleDef } from "../modules.js";
-import { getRegisteredBatches, applyGlobalTags } from "./registry.js";
+import { applyGlobalTags, getRegisteredBatches } from "./registry.js";
 import type {
-  BatchConfig,
   BatchBufferRecord,
+  BatchConfig,
   BatchJobContext,
   BatchPayload,
 } from "./types.js";
@@ -104,15 +104,14 @@ export class BatchEngine implements IOqronModule {
     applyGlobalTags(this.config.tags);
 
     const defs = getRegisteredBatches();
-    this.logger.info(`Batch engine initialized with ${defs.length} definition(s)`);
+    this.logger.info(
+      `Batch engine initialized with ${defs.length} definition(s)`,
+    );
 
     // Set up throttle gates for definitions that have throttle config
     for (const def of defs) {
       if (def.throttle) {
-        this.throttleGates.set(
-          def.name,
-          new ThrottleGate(def.throttle),
-        );
+        this.throttleGates.set(def.name, new ThrottleGate(def.throttle));
       }
       // Apply initial paused state
       if (def.status === "paused") {
@@ -283,10 +282,7 @@ export class BatchEngine implements IOqronModule {
 
     if (persist) {
       // Read all buffers for this definition from storage
-      const allBuffers = await this.di.storage.list<any>(
-        "batch_buffers",
-        {},
-      );
+      const allBuffers = await this.di.storage.list<any>("batch_buffers", {});
 
       // Filter to buffers belonging to this definition
       const myBuffers = allBuffers.filter((b: any) => {
@@ -435,10 +431,7 @@ export class BatchEngine implements IOqronModule {
     const persist = def.persist !== false;
 
     if (persist) {
-      const allBuffers = await this.di.storage.list<any>(
-        "batch_buffers",
-        {},
-      );
+      const allBuffers = await this.di.storage.list<any>("batch_buffers", {});
       const myBuffers = allBuffers.filter((b: any) => {
         const id = b.id ?? b._id ?? "";
         return typeof id === "string" && id.startsWith(`${def.name}:`);
@@ -522,10 +515,7 @@ export class BatchEngine implements IOqronModule {
    * as QueueEngine: load job → verify environment → execute handler →
    * ack/nack → retention.
    */
-  private async executeJob(
-    def: BatchConfig,
-    jobId: string,
-  ): Promise<void> {
+  private async executeJob(def: BatchConfig, jobId: string): Promise<void> {
     const job = await this.di.storage.get<OqronJob<BatchPayload>>(
       "jobs",
       jobId,
@@ -583,9 +573,7 @@ export class BatchEngine implements IOqronModule {
       },
     );
 
-    const maxAttempts = def.retries?.max
-      ? def.retries.max + 1
-      : 1;
+    const maxAttempts = def.retries?.max ? def.retries.max + 1 : 1;
 
     const ctx: BatchJobContext = {
       id: jobId,
@@ -641,8 +629,7 @@ export class BatchEngine implements IOqronModule {
         jobId,
         status: "completed",
         moduleRemoveConfig:
-          def.removeOnComplete ??
-          keepHistoryToRemoveConfig(def.keepHistory),
+          def.removeOnComplete ?? keepHistoryToRemoveConfig(def.keepHistory),
         globalRemoveConfig: this.batchConfig?.removeOnComplete,
         filterKey: "queueName",
         filterValue: `batch:${def.name}`,
@@ -668,9 +655,7 @@ export class BatchEngine implements IOqronModule {
 
       // Should retry?
       const shouldRetry =
-        !discarded &&
-        def.retries?.max &&
-        job.attemptMade < def.retries.max + 1;
+        !discarded && def.retries?.max && job.attemptMade < def.retries.max + 1;
 
       if (shouldRetry) {
         // Calculate backoff delay
@@ -679,7 +664,7 @@ export class BatchEngine implements IOqronModule {
 
         let delay = baseDelay;
         if (strategy === "exponential") {
-          delay = baseDelay * Math.pow(2, job.attemptMade - 1);
+          delay = baseDelay * 2 ** (job.attemptMade - 1);
         }
 
         job.status = "waiting";
@@ -687,10 +672,10 @@ export class BatchEngine implements IOqronModule {
         await this.di.storage.save("jobs", jobId, job);
         await this.di.broker.nack(`batch:${def.name}`, jobId, delay);
 
-        this.logger.warn(
-          `Batch job failed, retrying in ${delay}ms: ${jobId}`,
-          { attempt: job.attemptMade, error: error.message },
-        );
+        this.logger.warn(`Batch job failed, retrying in ${delay}ms: ${jobId}`, {
+          attempt: job.attemptMade,
+          error: error.message,
+        });
       } else {
         // Permanent failure
         job.status = "failed";

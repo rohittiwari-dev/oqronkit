@@ -265,7 +265,17 @@ function applyRateLimitDefaults(def: RateLimitModuleDef): RateLimitModuleDef {
 
 // ── Batch Defaults ──────────────────────────────────────────────────────────
 
-const DEFAULT_BATCH: Required<Omit<BatchModuleDef, "module" | "lagMonitor" | "disabledBehavior" | "maxHeldJobs" | "removeOnComplete" | "removeOnFail">> & {
+const DEFAULT_BATCH: Required<
+  Omit<
+    BatchModuleDef,
+    | "module"
+    | "lagMonitor"
+    | "disabledBehavior"
+    | "maxHeldJobs"
+    | "removeOnComplete"
+    | "removeOnFail"
+  >
+> & {
   module: "batch";
 } = {
   module: "batch",

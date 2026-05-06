@@ -9,10 +9,7 @@
 
 import type { DisabledBehavior } from "../engine/types/config.types.js";
 import type { RetryConfig } from "../engine/types/cron.types.js";
-import type {
-  OqronJob,
-  RemoveOnConfig,
-} from "../engine/types/job.types.js";
+import type { OqronJob, RemoveOnConfig } from "../engine/types/job.types.js";
 
 // ── Batch Configuration ─────────────────────────────────────────────────────
 
@@ -106,10 +103,7 @@ export interface BatchConfig<T = any, R = any> {
      * Called before items are flushed. Can filter or transform items.
      * Return the modified array — items removed here are discarded.
      */
-    beforeFlush?: (
-      items: T[],
-      groupKey?: string,
-    ) => Promise<T[]> | T[];
+    beforeFlush?: (items: T[], groupKey?: string) => Promise<T[]> | T[];
 
     /** Called after the batch handler completes successfully */
     onSuccess?: (
