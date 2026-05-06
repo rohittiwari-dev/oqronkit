@@ -48,8 +48,11 @@ export type {
 // ── Adapter Factories ───────────────────────────────────────────────────────
 export {
   createAdapters,
+  createBroker,
   createBrokerAdapter,
+  createLock,
   createLockAdapter,
+  createStorage,
   createStorageAdapter,
 } from "./engine/adapter-factory.js";
 export type {

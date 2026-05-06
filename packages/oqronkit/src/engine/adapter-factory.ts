@@ -193,6 +193,148 @@ export async function createBrokerAdapter(
   );
 }
 
+// ── Custom Adapter Factories ────────────────────────────────────────────────
+//
+// Let users build their own adapters by providing method implementations.
+// No class boilerplate needed — just implement the methods you need.
+//
+//   const storage = createStorage({ save: ..., get: ..., list: ..., ... })
+//   const broker  = createBroker({ publish: ..., claim: ..., ack: ..., ... })
+//   const lock    = createLock({ acquire: ..., renew: ..., release: ..., ... })
+//
+
+/**
+ * Create a custom storage adapter that implements `IStorageEngine`.
+ *
+ * Provide your own implementations for each storage method. This is useful
+ * when integrating OqronKit with databases not natively supported (e.g.
+ * DynamoDB, MongoDB, SQLite, Turso, etc.).
+ *
+ * @example
+ * ```ts
+ * import { createStorage } from 'oqronkit'
+ *
+ * const dynamoStorage = createStorage({
+ *   async save(namespace, id, data) {
+ *     await dynamo.putItem({ TableName: namespace, Item: { id, ...data } })
+ *   },
+ *   async get(namespace, id) {
+ *     const result = await dynamo.getItem({ TableName: namespace, Key: { id } })
+ *     return result.Item ?? null
+ *   },
+ *   async list(namespace, filter, opts) {
+ *     // your scan/query logic
+ *     return []
+ *   },
+ *   async delete(namespace, id) {
+ *     await dynamo.deleteItem({ TableName: namespace, Key: { id } })
+ *   },
+ *   async prune(namespace, beforeMs) {
+ *     // your cleanup logic
+ *     return 0
+ *   },
+ *   async count(namespace, filter) {
+ *     // your count logic
+ *     return 0
+ *   },
+ * })
+ * ```
+ */
+export function createStorage(impl: IStorageEngine): IStorageEngine {
+  if (!impl.save || !impl.get || !impl.list || !impl.delete || !impl.prune || !impl.count) {
+    throw new Error(
+      "[OqronKit] createStorage: all IStorageEngine methods are required " +
+      "(save, get, list, delete, prune, count)",
+    );
+  }
+  return impl;
+}
+
+/**
+ * Create a custom broker adapter that implements `IBrokerEngine`.
+ *
+ * Provide your own implementations for each broker method. This is useful
+ * when integrating OqronKit with message brokers not natively supported
+ * (e.g. RabbitMQ, Kafka, AWS SQS, Google Cloud Pub/Sub, NATS, etc.).
+ *
+ * `claimBlocking` is optional — if omitted, engines fall back to polling `claim()`.
+ *
+ * @example
+ * ```ts
+ * import { createBroker } from 'oqronkit'
+ *
+ * const rabbitBroker = createBroker({
+ *   async publish(brokerName, id, delayMs, priority) {
+ *     await rabbit.sendToQueue(brokerName, Buffer.from(id), { priority })
+ *   },
+ *   async claim(brokerName, consumerId, limit, lockTtlMs, strategy) {
+ *     const msg = await rabbit.get(brokerName)
+ *     return msg ? [msg.content.toString()] : []
+ *   },
+ *   async extendLock(id, consumerId, lockTtlMs) { },
+ *   async ack(brokerName, id) {
+ *     // acknowledge message
+ *   },
+ *   async nack(brokerName, id, delayMs) {
+ *     // re-queue with optional delay
+ *   },
+ *   async pause(brokerName) { },
+ *   async resume(brokerName) { },
+ * })
+ * ```
+ */
+export function createBroker(impl: IBrokerEngine): IBrokerEngine {
+  if (
+    !impl.publish || !impl.claim || !impl.extendLock ||
+    !impl.ack || !impl.nack || !impl.pause || !impl.resume
+  ) {
+    throw new Error(
+      "[OqronKit] createBroker: all required IBrokerEngine methods are needed " +
+      "(publish, claim, extendLock, ack, nack, pause, resume)",
+    );
+  }
+  return impl;
+}
+
+/**
+ * Create a custom lock adapter that implements `ILockAdapter`.
+ *
+ * Provide your own implementations for each lock method. This is useful
+ * when integrating OqronKit with distributed lock backends not natively
+ * supported (e.g. etcd, Consul, ZooKeeper, DynamoDB conditional writes).
+ *
+ * @example
+ * ```ts
+ * import { createLock } from 'oqronkit'
+ *
+ * const consulLock = createLock({
+ *   async acquire(key, ownerId, ttlMs) {
+ *     const session = await consul.session.create({ ttl: `${ttlMs}ms` })
+ *     return consul.kv.acquire({ key, session, value: ownerId })
+ *   },
+ *   async renew(key, ownerId, ttlMs) {
+ *     return consul.session.renew(ownerId)
+ *   },
+ *   async release(key, ownerId) {
+ *     await consul.kv.release({ key, session: ownerId })
+ *   },
+ *   async isOwner(key, ownerId) {
+ *     const result = await consul.kv.get(key)
+ *     return result?.Value === ownerId
+ *   },
+ * })
+ * ```
+ */
+export function createLock(impl: ILockAdapter): ILockAdapter {
+  if (!impl.acquire || !impl.renew || !impl.release || !impl.isOwner) {
+    throw new Error(
+      "[OqronKit] createLock: all ILockAdapter methods are required " +
+      "(acquire, renew, release, isOwner)",
+    );
+  }
+  return impl;
+}
+
 // ── Lock Adapter Factory ────────────────────────────────────────────────────
 
 /** Options for `createLockAdapter()` */

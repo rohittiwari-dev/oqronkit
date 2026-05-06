@@ -154,16 +154,15 @@ await OqronKit.init({
 await adapters.close()
 ```
 
-### Implementing a Custom Adapter
+### Implementing a Custom Adapter (Class-Based)
 
-Implement the interface and pass it directly:
+Implement the interface directly as a class:
 
 ```ts
 import type { IBrokerEngine, BrokerStrategy } from 'oqronkit'
 
 class RabbitMQBroker implements IBrokerEngine {
   async publish(queue: string, jobId: string, delay?: number): Promise<void> {
-    // Publish to RabbitMQ exchange
     await this.channel.sendToQueue(queue, Buffer.from(jobId), {
       headers: delay ? { 'x-delay': delay } : undefined,
     })
@@ -176,19 +175,12 @@ class RabbitMQBroker implements IBrokerEngine {
     lockTtlMs: number,
     strategy?: BrokerStrategy,
   ): Promise<string[]> {
-    // Consume from RabbitMQ queue
     const messages = await this.channel.get(queue, { noAck: false })
     // ... return job IDs
   }
 
-  async ack(queue: string, jobId: string): Promise<void> {
-    // Acknowledge message
-  }
-
-  async nack(queue: string, jobId: string, delay?: number): Promise<void> {
-    // Reject + requeue with delay
-  }
-
+  async ack(queue: string, jobId: string): Promise<void> { /* ... */ }
+  async nack(queue: string, jobId: string, delay?: number): Promise<void> { /* ... */ }
   async pause(queue: string): Promise<void> { /* ... */ }
   async resume(queue: string): Promise<void> { /* ... */ }
   async extendLock(
@@ -196,13 +188,137 @@ class RabbitMQBroker implements IBrokerEngine {
     consumerId: string,
     ttlMs: number,
     queue?: string,
-  ): Promise<boolean> { /* ... */ }
+  ): Promise<void> { /* ... */ }
 }
 ```
 
+### Implementing a Custom Adapter (Factory Functions)
+
+Use `createStorage`, `createBroker`, and `createLock` to build adapters from plain objects — no class boilerplate needed:
+
+```ts
+import { createStorage, createBroker, createLock } from 'oqronkit'
+```
+
+#### `createStorage(impl)`
+
+Build a custom `IStorageEngine`:
+
+```ts
+const dynamoStorage = createStorage({
+  async save(namespace, id, data) {
+    await dynamo.putItem({
+      TableName: namespace,
+      Item: { id, data: JSON.stringify(data) },
+    })
+  },
+  async get(namespace, id) {
+    const result = await dynamo.getItem({ TableName: namespace, Key: { id } })
+    return result.Item ? JSON.parse(result.Item.data) : null
+  },
+  async list(namespace, filter, opts) {
+    const result = await dynamo.scan({ TableName: namespace })
+    return result.Items?.map(i => JSON.parse(i.data)) ?? []
+  },
+  async delete(namespace, id) {
+    await dynamo.deleteItem({ TableName: namespace, Key: { id } })
+  },
+  async prune(namespace, beforeMs) {
+    // Delete records older than beforeMs
+    return 0
+  },
+  async count(namespace, filter) {
+    const result = await dynamo.scan({ TableName: namespace, Select: 'COUNT' })
+    return result.Count ?? 0
+  },
+})
+```
+
+#### `createBroker(impl)`
+
+Build a custom `IBrokerEngine`. `claimBlocking` is optional.
+
+```ts
+const sqsBroker = createBroker({
+  async publish(brokerName, id, delayMs, priority) {
+    await sqs.sendMessage({
+      QueueUrl: queues[brokerName],
+      MessageBody: id,
+      DelaySeconds: delayMs ? Math.ceil(delayMs / 1000) : undefined,
+    })
+  },
+  async claim(brokerName, consumerId, limit, lockTtlMs, strategy) {
+    const result = await sqs.receiveMessage({
+      QueueUrl: queues[brokerName],
+      MaxNumberOfMessages: limit,
+      VisibilityTimeout: Math.ceil(lockTtlMs / 1000),
+    })
+    return result.Messages?.map(m => m.Body!) ?? []
+  },
+  async extendLock(id, consumerId, lockTtlMs, brokerName) {
+    // Extend SQS visibility timeout
+  },
+  async ack(brokerName, id) {
+    // Delete message from SQS
+  },
+  async nack(brokerName, id, delayMs) {
+    // Change visibility timeout for retry delay
+  },
+  async pause(brokerName) { /* disable polling */ },
+  async resume(brokerName) { /* re-enable polling */ },
+})
+```
+
+#### `createLock(impl)`
+
+Build a custom `ILockAdapter`:
+
+```ts
+const consulLock = createLock({
+  async acquire(key, ownerId, ttlMs) {
+    const session = await consul.session.create({ ttl: `${ttlMs}ms` })
+    return consul.kv.acquire({ key, session, value: ownerId })
+  },
+  async renew(key, ownerId, ttlMs) {
+    return consul.session.renew(ownerId)
+  },
+  async release(key, ownerId) {
+    await consul.kv.release({ key, session: ownerId })
+  },
+  async isOwner(key, ownerId) {
+    const result = await consul.kv.get(key)
+    return result?.Value === ownerId
+  },
+})
+```
+
+#### Putting It All Together
+
+```ts
+import { OqronKit, createStorage, createBroker, createLock } from 'oqronkit'
+
+const storage = createStorage({ /* ... */ })
+const broker = createBroker({ /* ... */ })
+const lock = createLock({ /* ... */ })
+
+await OqronKit.init({
+  config: {
+    mode: 'custom',
+    adapters: { storage, broker, lock },
+    modules: [queueModule(), cronModule()],
+  },
+})
+```
+
+> All three factory functions validate at creation time that every required method is present. Missing a method throws immediately — no runtime surprises.
+
 ## Adapter Factory Reference
 
-### `createStorageAdapter(options)`
+### Built-in Adapter Factories
+
+These create adapters backed by OqronKit's built-in implementations (Memory, Redis, PostgreSQL):
+
+#### `createStorageAdapter(options)`
 
 | Option | Type | Values |
 |--------|------|--------|
@@ -210,7 +326,7 @@ class RabbitMQBroker implements IBrokerEngine {
 | `postgres` | `PostgresAdapterConfig` | Required when `type: "postgres"` |
 | `redis` | `RedisLike` | Required when `type: "redis"` |
 
-### `createBrokerAdapter(options)`
+#### `createBrokerAdapter(options)`
 
 | Option | Type | Values |
 |--------|------|--------|
@@ -218,7 +334,7 @@ class RabbitMQBroker implements IBrokerEngine {
 | `postgres` | `PostgresAdapterConfig` | Required when `type: "postgres"` |
 | `redis` | `RedisLike` | Required when `type: "redis"` |
 
-### `createLockAdapter(options)`
+#### `createLockAdapter(options)`
 
 | Option | Type | Values |
 |--------|------|--------|
@@ -226,12 +342,24 @@ class RabbitMQBroker implements IBrokerEngine {
 | `postgres` | `PostgresAdapterConfig` | Required when `type: "postgres"` |
 | `redis` | `RedisLike` | Required when `type: "redis"` |
 
-### `createAdapters(options)`
+#### `createAdapters(options)`
 
 | Option | Type | Description |
 |--------|------|-------------|
 | `mode` | `string` | `"default"`, `"redis"`, `"db"`, `"hybrid-db"`, `"custom"` |
 | Returns | `OqronAdapters` | `{ storage, broker, lock, close() }` |
+
+### Custom Adapter Factories
+
+These accept your own method implementations — no class needed:
+
+| Function | Interface | Required Methods |
+|----------|-----------|-----------------|
+| `createStorage(impl)` | `IStorageEngine` | `save`, `get`, `list`, `delete`, `prune`, `count` |
+| `createBroker(impl)` | `IBrokerEngine` | `publish`, `claim`, `extendLock`, `ack`, `nack`, `pause`, `resume` |
+| `createLock(impl)` | `ILockAdapter` | `acquire`, `renew`, `release`, `isOwner` |
+
+> `createBroker` also accepts an optional `claimBlocking` method for blocking-wait semantics.
 
 ## Environment Isolation
 

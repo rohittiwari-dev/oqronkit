@@ -1,37 +1,316 @@
 ---
 title: Batch
-description: Accumulate and process jobs in configurable batch windows
+description: Accumulate items and flush as grouped payloads — by size or time window
 icon: Layers
 ---
 
 # Batch
 
-The Batch module accumulates incoming items and flushes them as a single batch when either a count threshold (`maxSize`) or a time window (`maxWaitMs`) is reached.
+The Batch module accumulates incoming items and flushes them as a single batch when either a **count threshold** (`maxSize`) or a **time window** (`maxWaitMs`) is reached — whichever comes first.
 
-> **Roadmap Module** — Batch is part of the v1 Enterprise release roadmap. This page documents the planned API. Implementation is in progress.
+Use it for analytics ingestion, bulk database writes, log aggregation, webhook fan-out, or any workload where processing items one-by-one is wasteful.
 
-## Planned API
+## Basic Usage
 
-```ts
+```ts title="triggers/analytics.ts"
 import { batch } from 'oqronkit'
 
-const analyticsFlush = batch<AnalyticsEvent>({
+const analytics = batch<AnalyticsEvent>({
   name: 'analytics-flush',
-  maxSize: 500,        // Flush when 500 events accumulate
-  maxWaitMs: 10_000,   // Or every 10 seconds, whichever comes first
+  maxSize: 500,       // Flush when 500 events accumulate
+  maxWaitMs: 10_000,  // Or every 10 seconds, whichever comes first
 
   handler: async (ctx) => {
-    const events = ctx.batch // Array of accumulated items
-    await insertBulk(events)
-    return { flushed: events.length }
+    await db.analyticsEvents.insertMany(ctx.batch)
+    return { flushed: ctx.batchSize }
   },
 })
 
-// Push individual items — they're buffered until flush conditions are met
-await analyticsFlush.add({ event: 'page.view', userId: 'u_123' })
+// In your API routes — items are buffered, not processed immediately
+await analytics.add({ event: 'page.view', userId: 'u_123', path: '/home' })
+await analytics.add({ event: 'button.click', userId: 'u_456', path: '/pricing' })
+```
+
+## Adding Items
+
+```ts
+// Single item
+await analytics.add({ event: 'page.view', userId: 'u_123' })
+
+// Bulk add — each item is individually buffered and deduped
+await analytics.addBulk([
+  { event: 'page.view', userId: 'u_1' },
+  { event: 'page.view', userId: 'u_2' },
+  { event: 'page.view', userId: 'u_3' },
+])
+
+// Force-flush immediately (bypasses maxSize/maxWaitMs)
+await analytics.flush()
+
+// Flush a specific group
+await analytics.flush('tenant-acme')
+
+// Check buffer state
+const pending = await analytics.getBufferSize()
+const groupPending = await analytics.getBufferSize('tenant-acme')
+```
+
+## Flush Triggers
+
+Buffers are flushed when **either** condition is met:
+
+| Trigger | Condition | Use Case |
+|---------|-----------|----------|
+| **Size** | `buffer.length >= maxSize` | High-volume ingestion — flush when full |
+| **Time** | `now - firstItemAt >= maxWaitMs` | Low-volume — don't wait forever for a full batch |
+| **Manual** | `.flush()` called | Admin actions, graceful shutdown |
+
+> **OR logic (not AND):** A buffer with 1 item will still flush after `maxWaitMs` elapses, even if it never reaches `maxSize`.
+
+## Group By
+
+Route items into separate buffers by key. Each group flushes independently.
+
+```ts
+const tenantFlush = batch<{ tenantId: string; data: any }>({
+  name: 'tenant-sync',
+  maxSize: 100,
+  maxWaitMs: 5_000,
+  groupBy: (item) => item.tenantId,
+
+  handler: async (ctx) => {
+    // ctx.groupKey is the resolved group key ('acme', 'globex', etc.)
+    await db.sync(ctx.groupKey!, ctx.batch)
+    return { synced: ctx.batchSize }
+  },
+})
+
+// These go into separate buffers
+await tenantFlush.add({ tenantId: 'acme', data: { /* ... */ } })
+await tenantFlush.add({ tenantId: 'globex', data: { /* ... */ } })
+await tenantFlush.add({ tenantId: 'acme', data: { /* ... */ } }) // Same group as first
+```
+
+## Deduplication
+
+Skip duplicate items within the same buffer window.
+
+```ts
+const events = batch<{ eventId: string; payload: any }>({
+  name: 'dedup-events',
+  maxSize: 200,
+  maxWaitMs: 5_000,
+  deduplicateBy: (item) => item.eventId, // Skip if same eventId already buffered
+
+  handler: async (ctx) => {
+    await processUnique(ctx.batch)
+  },
+})
+
+await events.add({ eventId: 'evt_1', payload: { /* ... */ } })
+await events.add({ eventId: 'evt_1', payload: { /* ... */ } }) // Silently skipped
+await events.add({ eventId: 'evt_2', payload: { /* ... */ } }) // Added
+```
+
+> Dedup keys are tracked per-buffer-window. Once a buffer flushes, the dedup set resets.
+
+## Retry & Dead Letter Queue
+
+```ts
+const bulkWriter = batch<DbRow>({
+  name: 'bulk-write',
+  maxSize: 1000,
+  maxWaitMs: 15_000,
+
+  retries: {
+    max: 3,
+    strategy: 'exponential', // 'exponential' | 'fixed'
+    baseDelay: 2_000,        // 2s → 4s → 8s
+  },
+
+  deadLetter: {
+    enabled: true,
+    onDead: async (job, error) => {
+      await alertSlack(`Bulk write permanently failed: ${error.message}`)
+    },
+  },
+
+  handler: async (ctx) => {
+    if (ctx.attempt > 1) {
+      ctx.log('warn', `Retry attempt ${ctx.attempt}/${ctx.maxAttempts}`)
+    }
+    await db.bulkInsert(ctx.batch)
+  },
+})
+```
+
+## Hooks
+
+Intercept flush and execution lifecycle events.
+
+```ts
+const monitored = batch<LogEntry>({
+  name: 'log-flush',
+  maxSize: 500,
+  maxWaitMs: 5_000,
+
+  hooks: {
+    // Filter or transform items before they become a batch job
+    beforeFlush: (items, groupKey) => {
+      return items.filter(item => item.level !== 'debug')
+    },
+
+    // Called after handler succeeds
+    onSuccess: async (job, result) => {
+      metrics.increment('batch.success', { name: 'log-flush' })
+    },
+
+    // Called after handler fails (before retry decision)
+    onFail: async (job, error) => {
+      metrics.increment('batch.error', { name: 'log-flush' })
+    },
+  },
+
+  handler: async (ctx) => {
+    await logStore.bulkWrite(ctx.batch)
+  },
+})
+```
+
+| Hook | Signature | When |
+|------|-----------|------|
+| `beforeFlush` | `(items: T[], groupKey?: string) => T[]` | Before buffer becomes a job — filter/transform |
+| `onSuccess` | `(job, result) => void` | After handler completes successfully |
+| `onFail` | `(job, error) => void` | After handler throws (before retry) |
+
+## Handler Context (`ctx`)
+
+The handler receives a `BatchJobContext` with everything needed:
+
+| Property | Type | Description |
+|---|---|---|
+| `ctx.id` | `string` | Batch job UUID |
+| `ctx.name` | `string` | Batch definition name |
+| `ctx.batch` | `T[]` | Array of accumulated items |
+| `ctx.batchSize` | `number` | `ctx.batch.length` |
+| `ctx.groupKey` | `string \| undefined` | Group key (from `groupBy`) |
+| `ctx.attempt` | `number` | Current attempt (1-based) |
+| `ctx.maxAttempts` | `number` | Total attempts allowed |
+| `ctx.environment` | `string` | Environment stamp |
+| `ctx.project` | `string` | Project stamp |
+| `ctx.signal` | `AbortSignal` | Fires on timeout |
+| `ctx.aborted` | `boolean` | Whether signal was aborted |
+| `ctx.duration` | `number` | Elapsed ms since handler started |
+| `ctx.createdAt` | `Date` | When the batch job was created |
+| `ctx.log(level, msg, meta?)` | `Function` | Structured logging |
+| `ctx.progress(pct, label?)` | `Function` | Update progress (0–100) |
+| `ctx.getProgress()` | `Function` | Read current progress |
+| `ctx.discard()` | `Function` | Permanently fail — skip all retries |
+
+## In-Memory Mode
+
+Set `persist: false` for ultra-fast ephemeral buffering. Items are held in process memory instead of the storage adapter. Ideal for fire-and-forget analytics where you can tolerate data loss on crash.
+
+```ts
+const fastBuffer = batch<MetricPoint>({
+  name: 'metrics-buffer',
+  maxSize: 1000,
+  maxWaitMs: 2_000,
+  persist: false, // No storage writes for buffering
+
+  handler: async (ctx) => {
+    await metricsBackend.submitBatch(ctx.batch)
+  },
+})
+```
+
+> **Warning:** `persist: false` buffers are lost on process crash. Use the default (`persist: true`) for durability.
+
+## Configuration Reference
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `name` | `string` | **required** | Unique batch identifier |
+| `maxSize` | `number` | **required** | Flush when this many items accumulate |
+| `maxWaitMs` | `number` | **required** | Flush after this many ms since first item |
+| `handler` | `(ctx) => Promise<R>` | **required** | Batch processing function |
+| `groupBy` | `(item: T) => string` | `undefined` | Route items to named groups |
+| `deduplicateBy` | `(item: T) => string` | `undefined` | Skip items with duplicate keys |
+| `persist` | `boolean` | `true` | Buffer in storage adapter (`true`) or memory (`false`) |
+| `retries.max` | `number` | `0` | Max retry attempts |
+| `retries.strategy` | `'exponential' \| 'fixed'` | `'exponential'` | Backoff strategy |
+| `retries.baseDelay` | `number` | `1000` | Base delay in ms |
+| `deadLetter.enabled` | `boolean` | `false` | Enable dead letter queue |
+| `deadLetter.onDead` | `(job, error) => void` | `undefined` | Called when all retries exhausted |
+| `throttle.max` | `number` | `undefined` | Max flushes per window |
+| `throttle.duration` | `number` | `undefined` | Throttle window in ms |
+| `timeout` | `number` | `undefined` | Handler timeout in ms |
+| `tags` | `string[]` | `[]` | Tags for filtering |
+| `hooks` | `BatchHooks` | `{}` | Lifecycle hooks |
+
+## Module Configuration
+
+When initializing OqronKit, configure the batch module engine:
+
+```ts
+import { OqronKit, batchModule } from 'oqronkit'
+
+await OqronKit.init({
+  config: {
+    modules: [
+      batchModule({
+        tickIntervalMs: 1_000,     // How often to check buffers (default: 1000)
+        heartbeatMs: 5_000,        // How often to poll for batch jobs (default: 5000)
+        concurrency: 5,            // Max parallel batch handlers (default: 5)
+        leaderElection: true,      // Only leader scans buffers (default: true)
+      }),
+    ],
+  },
+})
+```
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `tickIntervalMs` | `number` | `1000` | Buffer evaluation interval |
+| `heartbeatMs` | `number` | `5000` | Job poll interval |
+| `concurrency` | `number` | `5` | Parallel batch job execution limit |
+| `leaderElection` | `boolean` | `true` | Only leader node evaluates buffers |
+
+## Queue Management
+
+```ts
+// Pause/resume processing
+await analytics.pause()
+await analytics.resume()
+await analytics.drain()  // Wait for active jobs, then pause
+
+// Inspect batch jobs
+const jobs = await analytics.getJobs({ status: 'completed', limit: 10 })
+const job = await analytics.getJob('batch:analytics-flush:default:1717171717')
+```
+
+## Architecture
+
+The Batch module uses a **dual-loop architecture**:
+
+1. **Tick Loop** (leader only): Scans all registered buffers every `tickIntervalMs`. If a buffer meets its flush condition, it creates a batch job and publishes it to the broker.
+
+2. **Poll Loop** (all nodes): Claims batch jobs from the broker and executes handlers. This distributes processing across all worker nodes.
+
+```
+┌─────────────┐     ┌──────────────┐     ┌──────────────┐
+│  .add(item)  │────▶│   Buffer     │────▶│  Batch Job   │
+│  .addBulk()  │     │  (Storage)   │     │  (Broker)    │
+└─────────────┘     └──────────────┘     └──────────────┘
+                      │ Tick Loop         │ Poll Loop
+                      │ (Leader)          │ (All Nodes)
+                      ▼                   ▼
+                    maxSize OR          handler(ctx)
+                    maxWaitMs           ──▶ success/retry
 ```
 
 ## Next Steps
 
 - [Task Queue](/docs/task-queue) — For immediate, per-job processing
-- [Workflow](/docs/workflow) — For complex job dependency graphs
+- [Distributed Worker](/docs/distributed-worker) — Decouple publishers from processors
+- [Crash Safety](/docs/crash-safety) — How heartbeat locks protect your jobs
