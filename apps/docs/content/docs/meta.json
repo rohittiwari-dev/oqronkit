@@ -5,6 +5,7 @@
     "index",
     "installation",
     "quickstart",
+    "examples",
     "architecture",
     "---Modules---",
     "task-queue",
