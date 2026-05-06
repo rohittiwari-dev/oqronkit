@@ -1,0 +1,110 @@
+---
+title: Architecture
+description: Adapter-driven design, crash safety, and horizontal scaling
+icon: Layers
+---
+
+# Architecture
+
+OqronKit is built on three core principles: **adapter-driven architecture**, **crash safety**, and **native horizontal scaling**.
+
+## Adapter-Driven Design
+
+All persistence flows through three adapter interfaces — never direct database calls:
+
+| Adapter | Purpose | In-Memory (dev) | Production |
+|---------|---------|-----------------|------------|
+| `IStorageEngine` | Job records, history, schedules | `Map<string, any>` | PostgreSQL (JSONB+GIN) |
+| `IBrokerEngine` | Job signaling, claim/ack/nack | In-process queue | Redis Sorted Sets |
+| `ILockAdapter` | Distributed locking | Simple mutex | Redis Redlock / PG Advisory |
+
+Switching from in-memory to Redis/Postgres requires **zero code changes** in your job definitions.
+
+## DI Container
+
+Adapters are held in the `OqronContainer`:
+
+```ts
+import { OqronContainer } from 'oqronkit'
+
+// After OqronKit.init():
+const di = OqronContainer.get()
+di.storage  // IStorageEngine
+di.broker   // IBrokerEngine
+di.lock     // ILockAdapter
+```
+
+## Leader Election
+
+In multi-node deployments, OqronKit uses heartbeat-based leader election:
+
+1. All nodes compete for `oqron:scheduler:leader` key
+2. Winner becomes the **Master Poller** — only it checks for due jobs
+3. Due tasks are dispatched via atomic locks to available workers
+4. If the leader crashes, the key expires within ~3 seconds
+
+### Sharded Leader Election (Multi-Region)
+
+```ts
+import { defineConfig } from 'oqronkit'
+
+export default defineConfig({
+  scheduler: {
+    clustering: {
+      totalShards: 8,
+      ownedShards: [0, 1, 2, 3],
+      region: 'us-east',
+    },
+  },
+})
+```
+
+## Environment Isolation
+
+A `production` worker physically cannot claim `development` jobs. All keys are prefixed:
+
+```
+${project}:${environment}:${job_name}
+```
+
+## Job Dependencies (DAG)
+
+Jobs can declare parent dependencies:
+
+```ts
+const extract1 = await extractQueue.add({ source: 'users.csv' })
+const extract2 = await extractQueue.add({ source: 'orders.csv' })
+
+// Child waits for both parents
+const transform = await transformQueue.add(
+  { mergeFrom: ['users', 'orders'] },
+  { dependsOn: [extract1.id, extract2.id] }
+)
+```
+
+## Job Ordering Strategies
+
+| Strategy | Behavior |
+|----------|----------|
+| `'fifo'` | First-In, First-Out (default) |
+| `'lifo'` | Last-In, First-Out |
+| `'priority'` | Lower `priority` number = processed first |
+
+## Module System
+
+```ts
+import { OqronKit, cronModule, scheduleModule, queueModule, workerModule, webhookModule, rateLimitModule } from 'oqronkit'
+
+await OqronKit.init({
+  config: {
+    modules: [cronModule, scheduleModule, queueModule, workerModule],
+  },
+})
+```
+
+Each module is independently toggle-able. API servers can load only `queueModule` (push-only), worker servers only `workerModule` (process-only).
+
+## Next Steps
+
+- [Crash Safety](/docs/crash-safety) — Heartbeat locks and stall detection
+- [Adapters](/docs/adapters) — Storage, Broker, and Lock adapter configuration

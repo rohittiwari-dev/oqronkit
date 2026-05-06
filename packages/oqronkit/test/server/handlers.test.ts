@@ -90,6 +90,8 @@ describe("Server Handlers", () => {
         init: async () => {},
         start: async () => {},
         stop: async () => {},
+        enable: async () => {},
+        disable: async () => {},
         triggerManual: async (id: string) => id === "my-schedule",
       });
 
@@ -108,6 +110,24 @@ describe("Server Handlers", () => {
       const body = res.body as any;
       expect(body.ok).toBe(true);
       expect(body.stats.project).toBe("test");
+    });
+
+    it("requires basic auth when ui.auth is configured", async () => {
+      configureHandlers(OqronRegistry.getInstance(), {
+        ...config,
+        ui: { auth: { username: "admin", password: "secret" } },
+      });
+
+      const unauthenticated = await dispatch(req("GET", "/admin/system"));
+      expect(unauthenticated.status).toBe(401);
+
+      const token = Buffer.from("admin:secret").toString("base64");
+      const authenticated = await dispatch(
+        req("GET", "/admin/system", {
+          headers: { authorization: `Basic ${token}` },
+        }),
+      );
+      expect(authenticated.status).toBe(200);
     });
   });
 
@@ -214,8 +234,9 @@ describe("Server Handlers", () => {
       const res = await dispatch(req("DELETE", "/admin/jobs/lookup-1"));
       expect(res.status).toBe(200);
 
-      const job = await Storage.get("jobs", "lookup-1");
-      expect(job).toBeNull();
+      const job = await Storage.get<any>("jobs", "lookup-1");
+      expect(job).toBeDefined();
+      expect(job.status).toBe("cancelled");
     });
   });
 

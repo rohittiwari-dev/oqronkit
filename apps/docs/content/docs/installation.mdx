@@ -1,0 +1,127 @@
+---
+title: Installation
+description: Install OqronKit and configure your project
+---
+
+# Installation
+
+Install OqronKit with your preferred package manager:
+
+```package-install
+oqronkit
+```
+
+## Project Configuration
+
+Create `oqron.config.ts` at the root of your project using `defineConfig`:
+
+```ts title="oqron.config.ts"
+import { defineConfig } from 'oqronkit'
+
+export default defineConfig({
+  project: 'my-app',
+  environment: process.env.NODE_ENV, // 'development' | 'staging' | 'production'
+})
+```
+
+Or pass the config inline when initializing:
+
+```ts title="index.ts"
+import {
+  OqronKit,
+  cronModule,
+  scheduleModule,
+  queueModule,
+  workerModule,
+} from 'oqronkit'
+
+await OqronKit.init({
+  config: {
+    modules: [cronModule, scheduleModule, queueModule, workerModule],
+    logger: { prettify: true },
+  },
+})
+```
+
+### Logger Configuration
+
+```ts
+// Pretty logging for development
+logger: { prettify: true }
+
+// Disable logging entirely
+logger: false
+
+// Custom log level
+logger: { level: 'warn' }
+```
+
+### Admin UI Authentication
+
+If you enable the built-in dashboard, configure auth with **both** username and password:
+
+```ts
+ui: {
+  auth: {
+    username: process.env.ADMIN_USER,
+    password: process.env.ADMIN_PASS,
+  }
+}
+```
+
+> Partial auth (only username or only password) is rejected at startup via Zod validation.
+
+## Module Selection
+
+Only register the modules your application needs:
+
+```ts
+// API server — only pushes jobs, no processing
+await OqronKit.init({
+  config: { modules: [queueModule] },
+})
+
+// Worker server — only processes jobs
+await OqronKit.init({
+  config: { modules: [workerModule] },
+})
+
+// Full monolith — everything
+await OqronKit.init({
+  config: { modules: [cronModule, scheduleModule, queueModule, workerModule] },
+})
+```
+
+## Trigger Auto-Discovery
+
+OqronKit auto-discovers job definitions from well-known directories. Place your `cron()`, `schedule()`, `queue()`, and `worker()` definitions in any of:
+
+- `src/triggers/`
+- `src/jobs/`
+- `triggers/`
+- `jobs/`
+
+Or specify a custom path:
+
+```ts
+await OqronKit.init({
+  config: {
+    triggers: 'src/my-triggers', // Custom trigger directory
+    modules: [cronModule, queueModule],
+  },
+})
+```
+
+## Environment Isolation
+
+OqronKit enforces strict environment isolation. A `production` worker will never accidentally claim `development` tasks. All keys are prefixed:
+
+```
+${project}:${environment}:${job_name}
+```
+
+## Next Steps
+
+- [Quick Start](/docs/quickstart) — Build your first queue in 2 minutes
+- [Architecture](/docs/architecture) — Understand the core design principles
+- [Adapters](/docs/adapters) — Deep-dive into adapter configuration

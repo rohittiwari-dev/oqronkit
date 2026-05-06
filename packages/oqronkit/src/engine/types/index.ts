@@ -22,5 +22,4 @@ export type {
   ScheduleDefinition,
   ScheduleHooks,
   ScheduleRecurring,
-  ScheduleRunAfter,
 } from "./scheduler.types.js";

@@ -24,6 +24,7 @@ export type JobTriggerSource =
   | "api"
   | "manual"
   | "retry"
+  | "rerun"
   | "flow";
 
 export type JobStatus =
@@ -33,6 +34,7 @@ export type JobStatus =
   | "running" // Handler actively executing (used by schedule engine)
   | "completed" // Finished successfully
   | "failed" // Finished with error (retries exhausted)
+  | "cancelled" // Explicitly cancelled by user or manager
   | "delayed" // Waiting for a specific timestamp or retry delay
   | "paused" // Manually stopped or held by disabled behavior
   | "stalled"; // Worker lost heartbeat — will be reclaimed

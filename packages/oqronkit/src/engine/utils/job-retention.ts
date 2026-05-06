@@ -82,6 +82,34 @@ function normalizeKeepJobs(
   return config; // Already a KeepJobs object
 }
 
+function toEpochMs(value: unknown): number {
+  if (value instanceof Date) return value.getTime();
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string") {
+    const parsed = new Date(value).getTime();
+    return Number.isNaN(parsed) ? 0 : parsed;
+  }
+  if (
+    value &&
+    typeof value === "object" &&
+    (value as any).__type === "Date" &&
+    typeof (value as any).__val === "string"
+  ) {
+    const parsed = new Date((value as any).__val).getTime();
+    return Number.isNaN(parsed) ? 0 : parsed;
+  }
+  return 0;
+}
+
+function getFinishedTime(record: any): number {
+  return (
+    toEpochMs(record.finishedOn) ||
+    toEpochMs(record.finishedAt) ||
+    toEpochMs(record.timestamp) ||
+    toEpochMs(record.createdAt)
+  );
+}
+
 /**
  * Universal lazy-pruning utility.
  * Called after every job finalization across ALL engines.
@@ -111,28 +139,18 @@ export async function pruneAfterCompletion(opts: PruneOptions): Promise<void> {
 
   try {
     // Fetch all records in this scope
-    const filter: Record<string, string> = {};
+    const filter: Record<string, string> = { status: opts.status };
     if (opts.filterKey && opts.filterValue) {
       filter[opts.filterKey] = opts.filterValue;
     }
 
-    const allRecords = await Storage.list<any>(
-      opts.namespace,
-      Object.keys(filter).length > 0 ? filter : undefined,
-    );
+    const allRecords = await Storage.list<any>(opts.namespace, filter);
 
-    // Filter by status (only prune completed OR failed, not mixed)
-    const statusRecords = allRecords.filter(
-      (r: any) => r.status === opts.status,
-    );
+    const statusRecords = allRecords;
 
     // Sort by finishedOn/finishedAt descending (newest first)
     statusRecords.sort((a: any, b: any) => {
-      const aTime =
-        a.finishedOn ?? a.finishedAt?.getTime?.() ?? a.timestamp ?? 0;
-      const bTime =
-        b.finishedOn ?? b.finishedAt?.getTime?.() ?? b.timestamp ?? 0;
-      return bTime - aTime;
+      return getFinishedTime(b) - getFinishedTime(a);
     });
 
     const toDelete: string[] = [];
@@ -149,11 +167,7 @@ export async function pruneAfterCompletion(opts: PruneOptions): Promise<void> {
 
       // Age-based: remove older than `age` seconds
       if (age !== undefined) {
-        const recordTime =
-          record.finishedOn ??
-          record.finishedAt?.getTime?.() ??
-          record.timestamp ??
-          0;
+        const recordTime = getFinishedTime(record);
         if (now - recordTime > age * 1000) {
           shouldDelete = true;
         }

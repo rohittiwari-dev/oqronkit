@@ -11,10 +11,9 @@ export type OqronModuleName =
   | "cron"
   | "scheduler"
   | "queue"
-  | "workflow"
-  | "batch"
+  | "worker"
   | "webhook"
-  | "pipeline";
+  | "ratelimit";
 
 // ── Per-Module Config Interfaces (user-facing, all optional) ────────────────
 
@@ -124,6 +123,32 @@ export interface QueueModuleConfig {
    * @default 100
    */
   maxHeldJobs?: number;
+  /**
+   * Enable cross-node stall scanning to recover orphaned jobs from crashed nodes.
+   * When enabled, this node periodically scans ALL active jobs in storage and
+   * reclaims any whose heartbeat lock has expired.
+   * Set to `true` for defaults, or pass `{ intervalMs }` to customize.
+   * @default false
+   */
+  crossNodeStallScanner?:
+    | boolean
+    | { intervalMs?: number; maxStalledCount?: number };
+  /** Event-loop lag monitor thresholds. Pauses job claiming when CPU is stalled. */
+  lagMonitor?: { maxLagMs?: number; sampleIntervalMs?: number };
+  /**
+   * Enable storage-broker reconciliation to recover orphaned jobs from
+   * split-brain crashes (DB save succeeded but broker nack failed).
+   * Set to `true` for defaults, or pass config to customize thresholds.
+   * @default false
+   */
+  reconciliation?:
+    | boolean
+    | {
+        intervalMs?: number;
+        waitingThresholdMs?: number;
+        delayedGraceMs?: number;
+        batchSize?: number;
+      };
 }
 
 export interface WebhookModuleConfig {
@@ -164,6 +189,39 @@ export interface WebhookModuleConfig {
   removeOnComplete?: RemoveOnConfig;
   /** Global default: auto-remove failed webhook deliveries. @default false */
   removeOnFail?: RemoveOnConfig;
+  /** Job ordering strategy. @default "fifo" */
+  strategy?: BrokerStrategy;
+  /** Dead letter queue configuration */
+  deadLetter?: { enabled?: boolean };
+  /**
+   * Enable cross-node stall scanning to recover orphaned jobs from crashed nodes.
+   * Set to `true` for defaults, or pass `{ intervalMs }` to customize.
+   * @default false
+   */
+  crossNodeStallScanner?:
+    | boolean
+    | { intervalMs?: number; maxStalledCount?: number };
+  /** Event-loop lag monitor thresholds. Pauses job claiming when CPU is stalled. */
+  lagMonitor?: { maxLagMs?: number; sampleIntervalMs?: number };
+  /**
+   * Enable storage-broker reconciliation to recover orphaned jobs from
+   * split-brain crashes (DB save succeeded but broker nack failed).
+   * @default false
+   */
+  reconciliation?:
+    | boolean
+    | {
+        intervalMs?: number;
+        waitingThresholdMs?: number;
+        delayedGraceMs?: number;
+        batchSize?: number;
+      };
+  /**
+   * Enable progress tracking during webhook delivery lifecycle.
+   * Adds ~5 extra storage writes per delivery to track intermediate stages.
+   * @default true
+   */
+  trackProgress?: boolean;
 }
 
 // ── Discriminated Union (resolved module definitions) ───────────────────────
@@ -173,13 +231,81 @@ export type SchedulerModuleDef = {
   module: "scheduler";
 } & SchedulerModuleConfig;
 export type QueueModuleDef = { module: "queue" } & QueueModuleConfig;
-export type WebhookModuleDef = { module: "webhook" } & WebhookModuleConfig;
+export type WebhookModuleDef = {
+  module: "webhook";
+} & WebhookModuleConfig;
+
+/**
+ * Worker-level configuration. Inherited by individual `worker()` instances.
+ */
+export interface WorkerModuleConfig {
+  /** Parallel execution limit. @default 5 */
+  concurrency?: number;
+  /** Polling heartbeat interval in ms. @default 5000 */
+  heartbeatMs?: number;
+  /** Lock TTL in ms. @default 30000 */
+  lockTtlMs?: number;
+  /** Job ordering strategy. @default "fifo" */
+  strategy?: import("./engine/types/engine.js").BrokerStrategy;
+  /** Default retry configuration */
+  retries?: {
+    max?: number;
+    strategy?: "fixed" | "exponential";
+    baseDelay?: number;
+    maxDelay?: number;
+  };
+  /** Dead letter queue configuration */
+  deadLetter?: { enabled?: boolean };
+  /** Graceful shutdown drain timeout in ms. @default 25000 */
+  shutdownTimeout?: number;
+  /** Max stalled job retries. @default 1 */
+  maxStalledCount?: number;
+  /** Stalled check interval in ms. @default 30000 */
+  stalledInterval?: number;
+
+  /** Behavior if the module is disabled */
+  disabledBehavior?: import("./engine/types/config.types.js").DisabledBehavior;
+
+  /** Max jobs claimed proactively */
+  maxHeldJobs?: number;
+
+  /** Default auto-remove configuration */
+  removeOnComplete?: import("./engine/types/job.types.js").RemoveOnConfig;
+  removeOnFail?: import("./engine/types/job.types.js").RemoveOnConfig;
+  /**
+   * Enable cross-node stall scanning to recover orphaned jobs from crashed nodes.
+   * @default false
+   */
+  crossNodeStallScanner?:
+    | boolean
+    | { intervalMs?: number; maxStalledCount?: number };
+  /** Event-loop lag monitor thresholds. Pauses job claiming when CPU is stalled. */
+  lagMonitor?: { maxLagMs?: number; sampleIntervalMs?: number };
+  /**
+   * Enable storage-broker reconciliation to recover orphaned jobs.
+   * @default false
+   */
+  reconciliation?:
+    | boolean
+    | {
+        intervalMs?: number;
+        waitingThresholdMs?: number;
+        delayedGraceMs?: number;
+        batchSize?: number;
+      };
+}
+
+export type WorkerModuleDef = {
+  module: "worker";
+} & WorkerModuleConfig;
 
 export type OqronModuleDef =
   | CronModuleDef
   | SchedulerModuleDef
   | QueueModuleDef
-  | WebhookModuleDef;
+  | WorkerModuleDef
+  | WebhookModuleDef
+  | RateLimitModuleDef;
 
 // ── Flexible Input Type ─────────────────────────────────────────────────────
 // Users can pass any of these forms inside the `modules` array:
@@ -250,11 +376,43 @@ const STRING_TO_DEF: Record<OqronModuleName, () => OqronModuleDef> = {
   cron: () => ({ module: "cron" }),
   scheduler: () => ({ module: "scheduler" }),
   queue: () => ({ module: "queue" }),
+  worker: () => ({ module: "worker" }),
   webhook: () => ({ module: "webhook" }),
-  workflow: () => ({ module: "queue" }), // placeholder until workflow module exists
-  batch: () => ({ module: "queue" }), // placeholder
-  pipeline: () => ({ module: "queue" }), // placeholder
+  ratelimit: () => ({ module: "ratelimit" }),
 };
+
+export interface RateLimitModuleConfig {
+  /** Default algorithm for instances that don't specify. @default "sliding-window" */
+  algorithm?: "sliding-window" | "token-bucket" | "fixed-window";
+  /** Default fail-open behavior. @default false */
+  failOpen?: boolean;
+  /** Default jitter fraction. @default 0.1 */
+  jitter?: number;
+  /** GC sweep interval in ms. @default 300_000 (5 min) */
+  gcIntervalMs?: number;
+  /** Block event retention in ms. @default 86_400_000 (24h) */
+  eventRetentionMs?: number;
+  /** Stats flush interval. 0 = immediate (per-check). @default 0 */
+  statsFlushIntervalMs?: number;
+  /** Default behavior when an instance is disabled. @default "skip" */
+  disabledBehavior?: "skip" | "block" | "passthrough";
+  /** Max idle time for algorithm state before GC deletes it. @default 3_600_000 (1h) */
+  maxIdleMs?: number;
+}
+
+export type RateLimitModuleDef = {
+  module: "ratelimit";
+} & RateLimitModuleConfig;
+
+export function rateLimitModule(
+  config?: RateLimitModuleConfig,
+): RateLimitModuleDef {
+  return { module: "ratelimit", ...config };
+}
+
+export function workerModule(config?: WorkerModuleConfig): WorkerModuleDef {
+  return { module: "worker", ...config };
+}
 
 /**
  * Normalize a mixed `modules` array into a clean `OqronModuleDef[]`.

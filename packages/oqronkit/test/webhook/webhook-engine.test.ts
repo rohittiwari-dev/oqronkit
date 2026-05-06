@@ -4,7 +4,6 @@ import type { OqronJob } from "../../src/engine/types/job.types.js";
 import type { WebhookDeliveryPayload } from "../../src/webhook/types.js";
 import * as delivery from "../../src/webhook/delivery.js";
 import * as hmac from "../../src/webhook/hmac.js";
-import { OqronContainer } from "../../src/engine/index.js";
 
 // ── Canonical OqronJob mock factory ─────────────────────────────────────────
 
@@ -25,7 +24,7 @@ function createMockJob(
       method: "POST",
       headers: { "content-type": "application/json" },
       body: { hello: "world" },
-      idempotencyKey: "test-dispatcher:ep1:job-1",
+      idempotencyKey: "test-dispatcher:ejob-1",
       timestamp: Date.now(),
     },
     opts: {},
@@ -138,6 +137,8 @@ describe("WebhookEngine", () => {
       expect.objectContaining({ "content-type": "application/json" }),
       expect.any(String),
       30000,
+      undefined,
+      expect.any(AbortSignal),
     );
 
     // Job marked completed in storage
@@ -165,7 +166,7 @@ describe("WebhookEngine", () => {
 
     const config = {
       name: "test-dispatcher",
-      endpoints: [],
+      endpoints: [{ name: "ep1", url: "http://example.com/webhook", events: ["*"] }],
       hooks: { onSuccess: onSuccessHook },
     };
 
@@ -198,7 +199,7 @@ describe("WebhookEngine", () => {
 
     const config = {
       name: "test-dispatcher",
-      endpoints: [],
+      endpoints: [{ name: "ep1", url: "http://example.com/webhook", events: ["*"] }],
       retries: { max: 3 },
       hooks: { onFail: onFailHook },
     };
@@ -236,7 +237,7 @@ describe("WebhookEngine", () => {
 
     const config = {
       name: "test-dispatcher",
-      endpoints: [],
+      endpoints: [{ name: "ep1", url: "http://example.com/webhook", events: ["*"] }],
       retries: { max: 3, strategy: "fixed", baseDelay: 5000 },
     };
 
@@ -273,7 +274,7 @@ describe("WebhookEngine", () => {
 
     const config = {
       name: "test-dispatcher",
-      endpoints: [],
+      endpoints: [{ name: "ep1", url: "http://example.com/webhook", events: ["*"] }],
       retries: { max: 3 },
     };
 
@@ -357,21 +358,26 @@ describe("WebhookEngine", () => {
       .spyOn(hmac, "signWebhookPayload")
       .mockResolvedValue("t=123,v1=abc123");
 
-    const job = createMockJob({
-      data: {
-        ...createMockJob().data,
-        security: {
-          signingSecret: "my-secret",
-          signingAlgorithm: "sha256",
-          signingHeader: "X-Sig",
-          timestampHeader: "X-TS",
-          includeTimestamp: true,
-        },
-      },
-    });
+    const job = createMockJob();
     mockDi.storage.get.mockResolvedValueOnce(job);
 
-    const config = { name: "test-dispatcher", endpoints: [] };
+    const config = {
+      name: "test-dispatcher",
+      endpoints: [
+        {
+          name: "ep1",
+          url: "http://example.com/webhook",
+          events: ["*"],
+          security: {
+            signingSecret: "my-secret",
+            signingAlgorithm: "sha256",
+            signingHeader: "X-Sig",
+            timestampHeader: "X-TS",
+            includeTimestamp: true,
+          },
+        },
+      ],
+    };
     const engine = createEngine();
     await engine["processJob"](config as any, "job-1");
 
@@ -390,10 +396,40 @@ describe("WebhookEngine", () => {
       expect.objectContaining({ "X-Sig": "t=123,v1=abc123" }),
       expect.any(String),
       expect.any(Number),
+      undefined,
+      expect.any(AbortSignal),
     );
   });
 
   // ── processJob: DLQ ──────────────────────────────────────────────────
+
+  it("does not use legacy payload.security as a signing fallback", async () => {
+    const signSpy = vi
+      .spyOn(hmac, "signWebhookPayload")
+      .mockResolvedValue("t=123,v1=legacy");
+
+    const baseJob = createMockJob();
+    const job = createMockJob({
+      data: {
+        ...baseJob.data,
+        security: { signingSecret: "legacy-secret" },
+      } as any,
+    });
+    mockDi.storage.get.mockResolvedValueOnce(job);
+
+    const config = {
+      name: "test-dispatcher",
+      endpoints: [
+        { name: "ep1", url: "http://example.com/webhook", events: ["*"] },
+      ],
+    };
+
+    const engine = createEngine();
+    await engine["processJob"](config as any, "job-1");
+
+    expect(signSpy).not.toHaveBeenCalled();
+    expect(JSON.stringify(delivery.deliverWebhook.mock.calls[0][2])).not.toContain("legacy");
+  });
 
   it("should invoke deadLetter.onDead when all retries exhausted", async () => {
     const onDead = vi.fn();
@@ -406,7 +442,7 @@ describe("WebhookEngine", () => {
 
     const config = {
       name: "test-dispatcher",
-      endpoints: [],
+      endpoints: [{ name: "ep1", url: "http://example.com/webhook", events: ["*"] }],
       retries: { max: 3 },
       deadLetter: { enabled: true, onDead },
     };

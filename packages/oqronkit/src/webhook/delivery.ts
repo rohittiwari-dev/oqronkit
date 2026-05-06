@@ -11,18 +11,36 @@ export async function deliverWebhook(
   bodyStr: string,
   timeoutMs: number = 30000,
   maxBodyBytes: number = 65536, // 64KB max response body capture
+  externalSignal?: AbortSignal,
 ): Promise<WebhookDeliveryResult> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
+  // Link external cancellation signal (e.g. from job abort)
+  if (externalSignal) {
+    if (externalSignal.aborted) {
+      controller.abort();
+    } else {
+      externalSignal.addEventListener("abort", () => controller.abort(), {
+        once: true,
+      });
+    }
+  }
+
   const start = performance.now();
 
   try {
-    const response = await fetch(url, {
+    const requestInit: RequestInit = {
       method,
       headers,
-      body: bodyStr,
       signal: controller.signal,
+    };
+    if (method.toUpperCase() !== "GET" && method.toUpperCase() !== "HEAD") {
+      requestInit.body = bodyStr;
+    }
+
+    const response = await fetch(url, {
+      ...requestInit,
     });
 
     const durationMs = Math.round(performance.now() - start);
@@ -51,11 +69,28 @@ export async function deliverWebhook(
       }
     }
 
+    // Parse Retry-After header (429/503) — supports seconds and HTTP-date
+    let retryAfterMs: number | undefined;
+    const retryAfterRaw = response.headers.get("retry-after");
+    if (retryAfterRaw && (response.status === 429 || response.status === 503)) {
+      const seconds = Number(retryAfterRaw);
+      if (!Number.isNaN(seconds)) {
+        retryAfterMs = Math.round(seconds * 1000);
+      } else {
+        // Try HTTP-date format: "Wed, 01 May 2026 12:00:00 GMT"
+        const date = new Date(retryAfterRaw);
+        if (!Number.isNaN(date.getTime())) {
+          retryAfterMs = Math.max(0, date.getTime() - Date.now());
+        }
+      }
+    }
+
     return {
       status: response.status,
       headers: responseHeaders,
       body: bodyText || null,
       durationMs,
+      retryAfterMs,
     };
   } catch (error: any) {
     const durationMs = Math.round(performance.now() - start);

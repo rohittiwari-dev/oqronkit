@@ -5,8 +5,12 @@ export interface ICronContext {
   readonly id: string;
   readonly log: Logger;
   readonly signal: AbortSignal;
+  readonly aborted: boolean;
   readonly firedAt: Date;
+  /** @alias name — backward compat */
   readonly scheduleName: string;
+  /** Unified name field (same as scheduleName, for parity with IScheduleContext) */
+  readonly name: string;
   readonly duration: number;
   readonly environment?: string;
   readonly project?: string;

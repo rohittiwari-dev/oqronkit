@@ -1,8 +1,25 @@
+/** Comparison operators for filtered queries */
+export type WhereOp = "$lt" | "$lte" | "$gt" | "$gte" | "$ne";
+
+export interface WhereCondition {
+  /** The field name to compare (top-level key in the record) */
+  field: string;
+  /** Comparison operator */
+  op: WhereOp;
+  /** The value to compare against */
+  value: unknown;
+}
+
 export interface ListOptions {
   /** Maximum number of records to return. Defaults to all. */
   limit?: number;
   /** Number of records to skip (for pagination). Defaults to 0. */
   offset?: number;
+  /**
+   * Comparison conditions applied AFTER exact-match filter.
+   * Fields with null/undefined values are excluded from comparison matches.
+   */
+  where?: WhereCondition[];
 }
 
 /** Job ordering strategy for broker queues */
@@ -53,8 +70,13 @@ export interface IBrokerEngine {
     strategy?: BrokerStrategy,
   ): Promise<string[]>;
 
-  /** Renews the lock heartbeat */
-  extendLock(id: string, consumerId: string, lockTtlMs: number): Promise<void>;
+  /** Renews the lock heartbeat. brokerName is optional for backward compatibility. */
+  extendLock(
+    id: string,
+    consumerId: string,
+    lockTtlMs: number,
+    brokerName?: string,
+  ): Promise<void>;
 
   /** Pops the entity out of the active broker locking list permanently */
   ack(brokerName: string, id: string): Promise<void>;
@@ -64,11 +86,31 @@ export interface IBrokerEngine {
    * Used for crash-safe retries: the job goes back to the waiting list with an
    * optional delay, so even if the process dies, the job is NOT lost.
    */
-  nack(brokerName: string, id: string, delayMs?: number): Promise<void>;
+  nack(
+    brokerName: string,
+    id: string,
+    delayMs?: number,
+    priority?: number,
+  ): Promise<void>;
 
   /** Pauses/Resumes all emissions from a specific broker namespace */
   pause(brokerName: string): Promise<void>;
   resume(brokerName: string): Promise<void>;
+
+  /**
+   * Blocking claim — waits up to `timeoutMs` for a job to become available.
+   * Uses BLPOP (Redis) or promise-based wait (Memory) to eliminate active polling.
+   * Returns null if no job appears within the timeout.
+   *
+   * Optional — engines fall back to `claim()` if not implemented.
+   */
+  claimBlocking?(
+    brokerName: string,
+    consumerId: string,
+    lockTtlMs: number,
+    timeoutMs: number,
+    strategy?: BrokerStrategy,
+  ): Promise<string | null>;
 }
 
 /**

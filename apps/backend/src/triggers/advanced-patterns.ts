@@ -102,7 +102,7 @@ export const loadQueue = taskQueue<
  * @example
  * ```typescript
  * const pipeline = await runETLPipeline({
- *   source: "s3://bucket/users.csv",
+ *   source: "//bucket/users.csv",
  *   format: "csv",
  *   transforms: ["normalize-emails", "deduplicate"],
  *   targetTable: "analytics.users",

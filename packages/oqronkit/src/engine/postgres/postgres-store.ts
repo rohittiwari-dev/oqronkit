@@ -1,4 +1,5 @@
 import type { IStorageEngine, ListOptions } from "../types/engine.js";
+import { assertValidIdentifier, quoteIdentifier } from "./identifiers.js";
 
 /**
  * PostgreSQL implementation of the universal Storage Engine.
@@ -18,10 +19,19 @@ import type { IStorageEngine, ListOptions } from "../types/engine.js";
 export class PostgresStore implements IStorageEngine {
   private pool: any; // pg.Pool
   private tableName: string;
+  private dataIndexName: string;
   private initialized = false;
 
   constructor(connectionString: string, tablePrefix = "oqron", poolSize = 10) {
-    this.tableName = `${tablePrefix}_store`;
+    const safePrefix = assertValidIdentifier(tablePrefix, "tablePrefix");
+    this.tableName = quoteIdentifier(
+      `${safePrefix}_store`,
+      "storage table name",
+    );
+    this.dataIndexName = quoteIdentifier(
+      `idx_${safePrefix}_store_data`,
+      "storage index name",
+    );
     // Lazy import to keep `pg` as an optional peer dependency
     this._initPool(connectionString, poolSize);
   }
@@ -55,7 +65,7 @@ export class PostgresStore implements IStorageEngine {
 
     // GIN index for JSONB filter queries
     await this.pool.query(`
-      CREATE INDEX IF NOT EXISTS idx_${this.tableName}_data
+      CREATE INDEX IF NOT EXISTS ${this.dataIndexName}
       ON ${this.tableName} USING GIN (data)
     `);
 
@@ -64,10 +74,7 @@ export class PostgresStore implements IStorageEngine {
 
   async save<T>(namespace: string, id: string, data: T): Promise<void> {
     await this.ensureTable();
-    const json = JSON.stringify(data, (_k, v) => {
-      if (v instanceof Date) return { __type: "Date", __val: v.toISOString() };
-      return v;
-    });
+    const json = JSON.stringify(this.encodeDates(data));
     await this.pool.query(
       `INSERT INTO ${this.tableName} (namespace, id, data, created_at)
        VALUES ($1, $2, $3::jsonb, NOW())
@@ -93,7 +100,7 @@ export class PostgresStore implements IStorageEngine {
     opts?: ListOptions,
   ): Promise<T[]> {
     await this.ensureTable();
-    const limit = opts?.limit ?? 500;
+    const limit = opts?.limit;
     const offset = opts?.offset ?? 0;
 
     let query: string;
@@ -101,18 +108,52 @@ export class PostgresStore implements IStorageEngine {
 
     if (filter && Object.keys(filter).length > 0) {
       // Build JSONB @> containment query for exact match filtering
-      const filterJson = JSON.stringify(filter);
+      const filterJson = JSON.stringify(this.encodeDates(filter));
       query = `SELECT data FROM ${this.tableName}
-               WHERE namespace = $1 AND data @> $2::jsonb
-               ORDER BY created_at DESC
-               LIMIT $3 OFFSET $4`;
-      params.push(filterJson, limit, offset);
+               WHERE namespace = $1 AND data @> $2::jsonb`;
+      params.push(filterJson);
     } else {
       query = `SELECT data FROM ${this.tableName}
-               WHERE namespace = $1
-               ORDER BY created_at DESC
-               LIMIT $2 OFFSET $3`;
-      params.push(limit, offset);
+               WHERE namespace = $1`;
+    }
+
+    //  Append WHERE conditions for comparison operators
+    if (opts?.where) {
+      for (const cond of opts.where) {
+        const sqlOp = { $lt: "<", $lte: "<=", $gt: ">", $gte: ">=", $ne: "!=" }[
+          cond.op
+        ];
+        const fieldIdx = params.length + 1;
+        params.push(cond.field);
+        const valueIdx = params.length + 1;
+
+        if (cond.value instanceof Date) {
+          // Date values stored as { __type: "Date", __val: "ISO" } wrapper
+          query += ` AND (data -> ($${fieldIdx})::text ->> '__val')::timestamptz ${sqlOp} $${valueIdx}::timestamptz`;
+          params.push(cond.value.toISOString());
+        } else if (
+          typeof cond.value === "number" &&
+          Number.isFinite(cond.value)
+        ) {
+          query += ` AND (data ->> ($${fieldIdx})::text)::numeric ${sqlOp} $${valueIdx}::numeric`;
+          params.push(cond.value);
+        } else {
+          query += ` AND (data ->> ($${fieldIdx})::text)::text ${sqlOp} $${valueIdx}::text`;
+          params.push(String(cond.value));
+        }
+      }
+    }
+
+    query += ` ORDER BY created_at DESC`;
+    if (limit !== undefined) {
+      const limitIdx = params.length + 1;
+      query += ` LIMIT $${limitIdx}`;
+      params.push(limit);
+    }
+    if (offset > 0) {
+      const offsetIdx = params.length + 1;
+      query += ` OFFSET $${offsetIdx}`;
+      params.push(offset);
     }
 
     const result = await this.pool.query(query, params);
@@ -126,7 +167,7 @@ export class PostgresStore implements IStorageEngine {
     await this.ensureTable();
 
     if (filter && Object.keys(filter).length > 0) {
-      const filterJson = JSON.stringify(filter);
+      const filterJson = JSON.stringify(this.encodeDates(filter));
       const result = await this.pool.query(
         `SELECT COUNT(*) AS cnt FROM ${this.tableName}
          WHERE namespace = $1 AND data @> $2::jsonb`,
@@ -152,13 +193,26 @@ export class PostgresStore implements IStorageEngine {
 
   async prune(namespace: string, beforeMs: number): Promise<number> {
     await this.ensureTable();
-    const cutoff = new Date(beforeMs).toISOString();
     const result = await this.pool.query(
-      `DELETE FROM ${this.tableName}
-       WHERE namespace = $1 AND created_at < $2::timestamptz`,
-      [namespace, cutoff],
+      `SELECT id, data, created_at FROM ${this.tableName}
+       WHERE namespace = $1`,
+      [namespace],
     );
-    return result.rowCount ?? 0;
+
+    let pruned = 0;
+    for (const row of result.rows) {
+      const record = this.deserialize(row.data);
+      const recordTime =
+        this.toEpochMs(record?.createdAt) ??
+        this.toEpochMs(record?.expiresAt) ??
+        this.toEpochMs(row.created_at);
+      if (recordTime !== undefined && recordTime < beforeMs) {
+        await this.delete(namespace, row.id);
+        pruned++;
+      }
+    }
+
+    return pruned;
   }
 
   /** Gracefully close the connection pool */
@@ -193,5 +247,39 @@ export class PostgresStore implements IStorageEngine {
       }
     }
     return obj;
+  }
+
+  private encodeDates(value: any): any {
+    if (value instanceof Date) {
+      return { __type: "Date", __val: value.toISOString() };
+    }
+    if (Array.isArray(value)) return value.map((v) => this.encodeDates(v));
+    if (value && typeof value === "object") {
+      const out: Record<string, unknown> = {};
+      for (const [key, val] of Object.entries(value)) {
+        out[key] = this.encodeDates(val);
+      }
+      return out;
+    }
+    return value;
+  }
+
+  private toEpochMs(value: unknown): number | undefined {
+    if (value instanceof Date) return value.getTime();
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "string") {
+      const parsed = new Date(value).getTime();
+      return Number.isNaN(parsed) ? undefined : parsed;
+    }
+    if (
+      value &&
+      typeof value === "object" &&
+      (value as any).__type === "Date" &&
+      typeof (value as any).__val === "string"
+    ) {
+      const parsed = new Date((value as any).__val).getTime();
+      return Number.isNaN(parsed) ? undefined : parsed;
+    }
+    return undefined;
   }
 }

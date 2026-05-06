@@ -25,8 +25,15 @@ export function fastifyPlugin(
       path,
       query: req.query,
       params: req.params,
+      headers: req.headers || {},
+      body: req.body,
     });
 
+    if (result.headers) {
+      for (const [key, value] of Object.entries(result.headers)) {
+        reply.header(key, value);
+      }
+    }
     return reply.status(result.status).send(result.body);
   });
   done();

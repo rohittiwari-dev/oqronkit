@@ -3,9 +3,17 @@ import type {
   CronModuleDef,
   OqronModuleDef,
   QueueModuleDef,
+  RateLimitModuleDef,
   SchedulerModuleDef,
   WebhookModuleDef,
+  WorkerModuleDef,
 } from "../../modules.js";
+
+const positiveInt = z.number().int().positive();
+const nonNegativeInt = z.number().int().nonnegative();
+const postgresIdentifier = z
+  .string()
+  .regex(/^[A-Za-z_][A-Za-z0-9_]*$/, "Must be a safe PostgreSQL identifier");
 
 // ── Resolved Module Config Defaults ─────────────────────────────────────────
 
@@ -49,10 +57,17 @@ const DEFAULT_SCHEDULER: Omit<
 
 const DEFAULT_QUEUE: Omit<
   Required<QueueModuleDef>,
-  "disabledBehavior" | "maxHeldJobs"
+  | "disabledBehavior"
+  | "maxHeldJobs"
+  | "lagMonitor"
+  | "crossNodeStallScanner"
+  | "reconciliation"
 > & {
   disabledBehavior?: QueueModuleDef["disabledBehavior"];
   maxHeldJobs?: QueueModuleDef["maxHeldJobs"];
+  lagMonitor?: QueueModuleDef["lagMonitor"];
+  crossNodeStallScanner?: QueueModuleDef["crossNodeStallScanner"];
+  reconciliation?: QueueModuleDef["reconciliation"];
 } = {
   module: "queue",
   concurrency: 5,
@@ -73,14 +88,58 @@ const DEFAULT_QUEUE: Omit<
   stalledInterval: 30000,
 };
 
+const DEFAULT_WORKER: Omit<
+  Required<WorkerModuleDef>,
+  | "disabledBehavior"
+  | "maxHeldJobs"
+  | "lagMonitor"
+  | "crossNodeStallScanner"
+  | "reconciliation"
+> & {
+  disabledBehavior?: WorkerModuleDef["disabledBehavior"];
+  maxHeldJobs?: WorkerModuleDef["maxHeldJobs"];
+  lagMonitor?: WorkerModuleDef["lagMonitor"];
+  crossNodeStallScanner?: WorkerModuleDef["crossNodeStallScanner"];
+  reconciliation?: WorkerModuleDef["reconciliation"];
+} = {
+  module: "worker",
+  concurrency: 5,
+  heartbeatMs: 5000,
+  lockTtlMs: 30000,
+  strategy: "fifo",
+  retries: {
+    max: 3,
+    strategy: "exponential",
+    baseDelay: 2000,
+    maxDelay: 60000,
+  },
+  deadLetter: { enabled: true },
+  removeOnComplete: false,
+  removeOnFail: false,
+  shutdownTimeout: 25000,
+  maxStalledCount: 1,
+  stalledInterval: 30000,
+};
+
 const DEFAULT_WEBHOOK: Omit<
   Required<WebhookModuleDef>,
-  "disabledBehavior" | "maxHeldJobs" | "removeOnComplete" | "removeOnFail"
+  | "disabledBehavior"
+  | "maxHeldJobs"
+  | "removeOnComplete"
+  | "removeOnFail"
+  | "lagMonitor"
+  | "crossNodeStallScanner"
+  | "reconciliation"
+  | "trackProgress"
 > & {
   disabledBehavior?: WebhookModuleDef["disabledBehavior"];
   maxHeldJobs?: WebhookModuleDef["maxHeldJobs"];
   removeOnComplete?: WebhookModuleDef["removeOnComplete"];
   removeOnFail?: WebhookModuleDef["removeOnFail"];
+  lagMonitor?: WebhookModuleDef["lagMonitor"];
+  crossNodeStallScanner?: WebhookModuleDef["crossNodeStallScanner"];
+  reconciliation?: WebhookModuleDef["reconciliation"];
+  trackProgress?: WebhookModuleDef["trackProgress"];
 } = {
   module: "webhook",
   concurrency: 5,
@@ -96,6 +155,8 @@ const DEFAULT_WEBHOOK: Omit<
   shutdownTimeout: 25000,
   stalledInterval: 30000,
   timeout: 30000,
+  strategy: "fifo",
+  deadLetter: { enabled: true },
   removeOnComplete: false,
   removeOnFail: false,
 };
@@ -112,8 +173,12 @@ export function applyModuleDefaults(def: OqronModuleDef): OqronModuleDef {
       return applySchedulerDefaults(def);
     case "queue":
       return applyQueueDefaults(def);
+    case "worker":
+      return applyWorkerDefaults(def as WorkerModuleDef);
     case "webhook":
       return applyWebhookDefaults(def as WebhookModuleDef);
+    case "ratelimit":
+      return applyRateLimitDefaults(def as RateLimitModuleDef);
     default:
       return def;
   }
@@ -134,7 +199,10 @@ function applySchedulerDefaults(def: SchedulerModuleDef): SchedulerModuleDef {
     ...DEFAULT_SCHEDULER,
     ...def,
     module: "scheduler",
-    lagMonitor: { ...DEFAULT_SCHEDULER.lagMonitor, ...(def.lagMonitor ?? {}) },
+    lagMonitor: {
+      ...DEFAULT_SCHEDULER.lagMonitor,
+      ...(def.lagMonitor ?? {}),
+    },
     clustering: def.clustering,
   };
 }
@@ -149,12 +217,46 @@ function applyQueueDefaults(def: QueueModuleDef): QueueModuleDef {
   };
 }
 
+function applyWorkerDefaults(def: WorkerModuleDef): WorkerModuleDef {
+  return {
+    ...DEFAULT_WORKER,
+    ...def,
+    module: "worker",
+    retries: { ...DEFAULT_WORKER.retries, ...(def.retries ?? {}) },
+    deadLetter: { ...DEFAULT_WORKER.deadLetter, ...(def.deadLetter ?? {}) },
+  };
+}
+
 function applyWebhookDefaults(def: WebhookModuleDef): WebhookModuleDef {
   return {
     ...DEFAULT_WEBHOOK,
     ...def,
     module: "webhook",
     retries: { ...DEFAULT_WEBHOOK.retries, ...(def.retries ?? {}) },
+  };
+}
+
+// ── Rate Limit Defaults ─────────────────────────────────────────────────────
+
+const DEFAULT_RATELIMIT: Required<Omit<RateLimitModuleDef, "module">> & {
+  module: "ratelimit";
+} = {
+  module: "ratelimit",
+  algorithm: "sliding-window",
+  failOpen: false,
+  jitter: 0.1,
+  gcIntervalMs: 300_000,
+  eventRetentionMs: 86_400_000,
+  statsFlushIntervalMs: 0,
+  disabledBehavior: "skip",
+  maxIdleMs: 3_600_000,
+};
+
+function applyRateLimitDefaults(def: RateLimitModuleDef): RateLimitModuleDef {
+  return {
+    ...DEFAULT_RATELIMIT,
+    ...def,
+    module: "ratelimit",
   };
 }
 
@@ -174,8 +276,8 @@ export const OqronConfigSchema = z.object({
   postgres: z
     .object({
       connectionString: z.string(),
-      tablePrefix: z.string().default("oqron"),
-      poolSize: z.number().default(10),
+      tablePrefix: postgresIdentifier.default("oqron"),
+      poolSize: positiveInt.default(10),
     })
     .optional(),
 
@@ -227,12 +329,12 @@ export const OqronConfigSchema = z.object({
 
   observability: z
     .object({
-      maxJobLogs: z.number().default(200),
-      maxTimelineEntries: z.number().default(20),
+      maxJobLogs: nonNegativeInt.default(200),
+      maxTimelineEntries: nonNegativeInt.default(20),
       trackMemory: z.boolean().default(true),
       logCollector: z.boolean().default(true),
-      logCollectorMaxGlobal: z.number().default(500),
-      logCollectorMaxPerCategory: z.number().default(200),
+      logCollectorMaxGlobal: nonNegativeInt.default(500),
+      logCollectorMaxPerCategory: nonNegativeInt.default(200),
     })
     .default({}),
 
@@ -245,7 +347,16 @@ export const OqronConfigSchema = z.object({
           username: z.string().optional(),
           password: z.string().optional(),
         })
-        .optional(),
+        .optional()
+        .refine(
+          (auth) =>
+            !auth ||
+            (!auth.username && !auth.password) ||
+            (!!auth.username && !!auth.password),
+          {
+            message: "ui.auth requires both username and password, or neither",
+          },
+        ),
       retention: z
         .object({
           runs: z.string().default("30d"),
@@ -260,8 +371,8 @@ export const OqronConfigSchema = z.object({
   shutdown: z
     .object({
       enabled: z.boolean().default(true),
-      timeout: z.number().default(30000),
-      signals: z.array(z.string()).default(["SIGINT", "SIGTERM"]),
+      timeout: positiveInt.default(30000),
+      signals: z.array(z.string().min(1)).default(["SIGINT", "SIGTERM"]),
     })
     .default({}),
 });

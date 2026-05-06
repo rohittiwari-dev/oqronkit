@@ -1,61 +1,53 @@
-import { randomUUID } from "node:crypto";
 import { RRule, rrulestr } from "rrule";
 import {
-  createLogger,
   type DisabledBehavior,
-  type IOqronModule,
-  LagMonitor,
   type Logger,
-  OqronContainer,
+  type OqronContainer,
   OqronEventBus,
   ScheduleContext,
   type ScheduleDefinition,
 } from "../engine/index.js";
+import { ShardedLeaderElection, StallDetector } from "../engine/lock/index.js";
+import { BaseSchedulerEngine } from "./base-scheduler-engine.js";
 import {
-  HeartbeatWorker,
-  LeaderElection,
-  ShardedLeaderElection,
-  StallDetector,
-} from "../engine/lock/index.js";
-import {
-  keepHistoryToRemoveConfig,
-  pruneAfterCompletion,
-} from "../engine/utils/job-retention.js";
+  DEFAULT_INTERVAL_JITTER_FACTOR,
+  DEFAULT_LEADER_TTL_MS,
+  DEFAULT_MISFIRE_THRESHOLD_MS,
+  DEFAULT_STALL_DETECTOR_INTERVAL_MS,
+  DEFAULT_TICK_INTERVAL_MS,
+} from "./constants.js";
 import { _attachScheduleEngine } from "./define-schedule.js";
+import { everyToIntervalMs as everyConfigToIntervalMs } from "./every-utils.js";
 
-type ActiveJobEntry = {
-  runId: string;
-  lockKey: string;
-  worker?: HeartbeatWorker;
-  abort?: AbortController;
-  promise?: Promise<void>;
-};
-
-export class ScheduleEngine implements IOqronModule {
+/**
+ * ScheduleEngine — schedules jobs via RRule, every, runAt, recurring.
+ *
+ * Extends BaseSchedulerEngine with schedule-specific logic:
+ * - `computeNextRun` uses RRule/every/runAt/recurring + jitter
+ * - `handleLeaderInit` has misfire threshold + onMissedFire hooks
+ * - Supports dynamic registration via `registerDynamic()`
+ * - Supports sharded leader election for multi-region
+ * - Context is ScheduleContext
+ */
+export class ScheduleEngine extends BaseSchedulerEngine<ScheduleDefinition> {
   public readonly name = "scheduler";
-  public enabled = true;
+  protected readonly moduleType = "schedule";
+  protected readonly queueName = "system_schedule";
+  protected readonly lockInfix = ":schedule:run:";
+  protected readonly storageNamespace = "schedule_schedules";
 
-  private readonly nodeId: string;
-  private readonly logger: Logger;
-  private leader?: LeaderElection;
   private shardedLeader?: ShardedLeaderElection;
-  private stallDetector: StallDetector;
-  private lagMonitor: LagMonitor;
-  private tickTimer?: ReturnType<typeof setInterval>;
-
-  private readonly activeJobs = new Map<string, ActiveJobEntry>();
-  // Includes static instances and dynamically triggered instances
   private readonly schedules = new Map<string, ScheduleDefinition>();
-  private _hasRunLeaderInit = false;
 
   constructor(
     staticSchedules: ScheduleDefinition[],
     logger?: Logger,
-    private readonly environment?: string,
-    private readonly project?: string,
+    environment?: string,
+    project?: string,
     private readonly config?: {
       enable?: boolean;
       tickInterval?: number;
+      leaderElection?: boolean;
       keepJobHistory?: boolean | number;
       keepFailedJobHistory?: boolean | number;
       shutdownTimeout?: number;
@@ -65,243 +57,71 @@ export class ScheduleEngine implements IOqronModule {
         ownedShards?: number[];
         region?: string;
       };
-      /**
-       * Module-level default disabled behavior for all schedule definitions.
-       * Individual definitions can override this.
-       * @default "hold"
-       */
       disabledBehavior?: DisabledBehavior;
-      /**
-       * Maximum held jobs per definition when disabledBehavior is "hold".
-       * @default 100
-       */
       maxHeldJobs?: number;
+      misfireThresholdMs?: number;
     },
-    private readonly container?: OqronContainer,
+    container?: OqronContainer,
   ) {
-    this.nodeId = randomUUID();
-    this.logger =
-      logger ?? createLogger({ level: "info" }, { module: "scheduler" });
-    this.stallDetector = new StallDetector(this.di.lock, this.logger, 15_000);
-    this.lagMonitor = new LagMonitor(
-      this.logger,
-      this.config?.lagMonitor?.maxLagMs ?? 500,
-      this.config?.lagMonitor?.sampleIntervalMs ?? 50,
-    );
-
+    super(logger, environment, project, config, container);
     for (const def of staticSchedules) {
       this.schedules.set(def.name, def);
     }
   }
 
-  private get di(): OqronContainer {
-    return this.container ?? OqronContainer.get();
+  // ── Abstract implementations ──────────────────────────────────────────────
+
+  protected getDefinition(name: string): ScheduleDefinition | undefined {
+    return this.schedules.get(name);
   }
 
-  /** Scoped key prefix for locks and leader election. */
-  private get lockPrefix(): string {
-    return `oqron:${this.project ?? "default"}:${this.environment ?? "development"}`;
+  protected setDefinition(name: string, def: ScheduleDefinition): void {
+    this.schedules.set(name, def);
   }
 
-  // ── Lifecycle ───────────────────────────────────────────────────────────────
-
-  async init(): Promise<void> {
-    this.logger.info("Initializing schedule engine", {
-      nodeId: this.nodeId,
-      staticCount: this.schedules.size,
-    });
-
-    _attachScheduleEngine(this);
-
-    const now = new Date();
-    for (const def of this.schedules.values()) {
-      await this.upsertAndSeed(def, now);
-    }
-  }
-
-  private async upsertAndSeed(def: ScheduleDefinition, now: Date) {
-    await this.di.storage.save("schedules", def.name, def);
-    const nextRun = this.computeNextRun(def, now);
-    if (nextRun) {
-      const existing =
-        (await this.di.storage.get<any>("schedules", def.name)) || {};
-      await this.di.storage.save("schedules", def.name, {
-        ...existing,
-        nextRunAt: nextRun,
-      });
-    }
-  }
-
-  /** Dynamically register and schedule a definition from trigger/schedule call */
-  async registerDynamic(def: ScheduleDefinition): Promise<void> {
-    this.schedules.set(def.name, def);
-    await this.upsertAndSeed(def, new Date());
-    this.logger.debug("Registered dynamic schedule", { name: def.name });
-  }
-
-  async cancel(name: string): Promise<void> {
+  protected removeDefinition(name: string): void {
     this.schedules.delete(name);
   }
 
-  async start(): Promise<void> {
-    const clustering = this.config?.clustering;
-
-    if (clustering && (clustering.totalShards ?? 1) > 1) {
-      // ── Sharded multi-region leader election ─────────────────────
-      this.shardedLeader = new ShardedLeaderElection(
-        this.di.lock,
-        this.logger,
-        `${this.lockPrefix}:scheduleengine:leader`,
-        this.nodeId,
-        clustering.totalShards!,
-        clustering.ownedShards ?? [0],
-        30_000,
+  protected validateDefinition(def: ScheduleDefinition): void {
+    if ("runAfter" in (def as ScheduleDefinition & Record<string, unknown>)) {
+      throw new Error(
+        `[OqronKit] Schedule "${def.name}" uses removed option "runAfter". Use "runAt" for one-shot schedules or "every" for recurring intervals.`,
       );
-      await this.shardedLeader.start();
-    } else {
-      // ── Single-leader election (default) ──────────────────────────
-      this.leader = new LeaderElection(
-        this.di.lock,
-        this.logger,
-        `${this.lockPrefix}:scheduleengine:leader`,
-        this.nodeId,
-        30_000,
+    }
+
+    const timingCount = [def.runAt, def.recurring, def.rrule, def.every].filter(
+      (value) => value !== undefined,
+    ).length;
+
+    if (timingCount > 1) {
+      throw new Error(
+        `[OqronKit] Schedule "${def.name}" must use only one timing strategy: runAt, every, recurring, or rrule.`,
       );
-      await this.leader.start();
     }
 
-    const interval = this.config?.tickInterval ?? 1_000;
-    this.tickTimer = setInterval(() => {
-      void this.tick();
-    }, interval);
-    this.tickTimer.unref();
-
-    this.logger.info("Schedule engine started", {
-      nodeId: this.nodeId,
-      interval,
-      clustering: clustering
-        ? {
-            totalShards: clustering.totalShards,
-            ownedShards: clustering.ownedShards,
-          }
-        : undefined,
-    });
-    this.lagMonitor.start();
-    this.stallDetector.start(
-      () =>
-        Array.from(this.activeJobs.values()).map((j) => ({
-          key: j.lockKey,
-          ownerId: this.nodeId,
-        })),
-      (key) => {
-        for (const [id, job] of this.activeJobs) {
-          if (job.lockKey === key) {
-            this.logger.error("Stalled schedule detected, aborting", {
-              key,
-              runId: id,
-            });
-            this.di.storage
-              .get<any>("jobs", id)
-              .then(async (dbJob) => {
-                if (dbJob) {
-                  dbJob.stalledCount = (dbJob.stalledCount ?? 0) + 1;
-                  if (!dbJob.timeline) dbJob.timeline = [];
-                  dbJob.timeline.push({
-                    ts: new Date(),
-                    from: dbJob.status,
-                    to: "stalled",
-                    reason: "Worker lock expired. Job aborted.",
-                  });
-                  dbJob.status = "stalled";
-                  try {
-                    await this.di.storage.save("jobs", id, dbJob);
-                  } catch (e) {
-                    this.logger.error(
-                      "Failed to commit stall telemetry for schedule",
-                      { runId: id, error: String(e) },
-                    );
-                  }
-                }
-              })
-              .finally(() => {
-                job.abort?.abort();
-                this.activeJobs.delete(id);
-              });
-          }
-        }
-      },
-    );
-  }
-
-  async stop(): Promise<void> {
-    if (this.tickTimer) clearInterval(this.tickTimer);
-    if (this.leader) await this.leader.stop();
-    if (this.shardedLeader) await this.shardedLeader.stop();
-    this.stallDetector.stop();
-    this.lagMonitor.stop();
-
-    const activePromises = Array.from(this.activeJobs.values())
-      .map((job) => job.promise)
-      .filter((p): p is Promise<void> => p !== undefined);
-
-    if (activePromises.length > 0) {
-      this.logger.info(
-        `Schedule Engine draining ${activePromises.length} active jobs...`,
+    if (def.runAt && Number.isNaN(new Date(def.runAt).getTime())) {
+      throw new Error(
+        `[OqronKit] Schedule "${def.name}" has an invalid runAt date`,
       );
-      const drainMs = this.config?.shutdownTimeout ?? 25_000;
-      const drainTimeout = new Promise<void>((r) => {
-        const h = setTimeout(r, drainMs);
-        h.unref();
-      });
-      await Promise.race([Promise.allSettled(activePromises), drainTimeout]);
     }
 
-    for (const job of this.activeJobs.values()) {
-      if (job.abort) job.abort.abort();
-      if (job.worker) {
-        await job.worker.stop();
-      } else {
-        await this.di.lock.release(job.lockKey, this.nodeId).catch(() => {});
-      }
-    }
-    this.activeJobs.clear();
-    this.logger.info("Schedule engine stopped");
-  }
-
-  async triggerManual(scheduleId: string): Promise<boolean> {
-    const def = this.schedules.get(scheduleId);
-    if (!def) return false;
-    this.logger.info("Manual trigger requested", { scheduleId });
-    void this.fire(def);
-    return true;
-  }
-
-  async enable(): Promise<void> {
-    this.enabled = true;
-    if (!this.tickTimer) {
-      await this.start();
+    if (def.every) {
+      this.everyToIntervalMs(def);
     }
   }
 
-  async disable(): Promise<void> {
-    this.enabled = false;
+  private everyToIntervalMs(def: ScheduleDefinition): number {
+    const every = def.every;
+    if (!every) return 0;
+    return everyConfigToIntervalMs(every);
   }
 
-  // ── Core scheduling helpers ─────────────────────────────────────────────────
-
-  private computeNextRun(def: ScheduleDefinition, from: Date): Date | null {
+  protected computeNextRun(def: ScheduleDefinition, from: Date): Date | null {
     try {
       if (def.runAt) {
-        return new Date(def.runAt);
-      }
-
-      if (def.runAfter) {
-        const add =
-          (def.runAfter.days ?? 0) * 86400000 +
-          (def.runAfter.hours ?? 0) * 3600000 +
-          (def.runAfter.minutes ?? 0) * 60000 +
-          (def.runAfter.seconds ?? 0) * 1000;
-        return new Date(from.getTime() + add);
+        const d = new Date(def.runAt);
+        return d > from ? d : null; // One-shot: null after firing prevents re-fire loop
       }
 
       if (def.rrule) {
@@ -327,16 +147,17 @@ export class ScheduleEngine implements IOqronModule {
           options.byminute = [def.recurring.at.minute];
           options.bysecond = [0];
         }
-
         const rule = new RRule(options);
         return rule.after(from);
       }
 
       if (def.every) {
-        const add =
-          (def.every.hours ?? 0) * 3600000 +
-          (def.every.minutes ?? 0) * 60000 +
-          (def.every.seconds ?? 0) * 1000;
+        const add = this.everyToIntervalMs(def);
+        const jitterFactor = DEFAULT_INTERVAL_JITTER_FACTOR;
+        if (jitterFactor > 0) {
+          const jitter = add * jitterFactor * (2 * Math.random() - 1);
+          return new Date(from.getTime() + add + jitter);
+        }
         return new Date(from.getTime() + add);
       }
     } catch (err) {
@@ -345,47 +166,127 @@ export class ScheduleEngine implements IOqronModule {
         err: String(err),
       });
     }
-
     return null;
   }
 
-  private async handleLeaderInit(): Promise<void> {
+  protected async handleLeaderInit(): Promise<void> {
     this.logger.info("Schedule Engine: Performing leader initialization...");
 
-    // Note: StallDetector is already started in start() with abort-capable
-    // callbacks. Do NOT re-initialize here — it would overwrite the abort
-    // callback with a weaker log-only version, silently disabling crash recovery.
-
-    // ── Missed-Fire Recovery ──────────────────────────────────────────────
-    // Check if any recurring schedules missed their fire window during downtime.
-    // One-shot schedules (runAt/runAfter) are skipped — they should only fire once.
     try {
-      const allSchedules = await this.di.storage.list<any>("schedules");
+      const allSchedules = await this.di.storage.list<any>(
+        this.storageNamespace,
+      );
       const now = new Date();
 
       for (const record of allSchedules) {
         const def = this.schedules.get(record.name);
         if (!def) continue;
+        if (def.runAt) continue;
 
-        // Skip one-shot schedules — they are not recurring
-        if (def.runAt || def.runAfter) continue;
-
-        // If nextRunAt is in the past and the schedule isn't paused, it missed
         if (
           record.nextRunAt &&
           !record.paused &&
           new Date(record.nextRunAt) < now
         ) {
+          const lateByMs = now.getTime() - new Date(record.nextRunAt).getTime();
+          const misfireThreshold =
+            this.config?.misfireThresholdMs ?? DEFAULT_MISFIRE_THRESHOLD_MS;
+          if (lateByMs < misfireThreshold) {
+            this.logger.debug(
+              "Schedule late but within misfire threshold — skipping recovery",
+              {
+                name: def.name,
+                lateByMs,
+                threshold: misfireThreshold,
+              },
+            );
+            continue;
+          }
+
+          const policy = def.missedFire ?? "skip";
+          if (policy === "skip") {
+            this.logger.info("Missed fire skipped per policy", {
+              name: def.name,
+            });
+            const nextRun = this.computeNextRun(def, now);
+            if (nextRun) {
+              await this.di.storage.save(this.storageNamespace, def.name, {
+                ...record,
+                nextRunAt: nextRun,
+                lastRunAt: now,
+              });
+            }
+            continue;
+          }
+
           this.logger.info("Triggering recovery for missed schedule", {
             name: def.name,
             missedAt: record.nextRunAt,
+            policy,
           });
-          void this.fire(def);
 
-          // Advance nextRunAt so we don't re-fire on the next tick
+          if (def.hooks?.onMissedFire) {
+            try {
+              const missedAt = new Date(record.nextRunAt);
+              const ctx = new ScheduleContext({
+                id: `missed-${def.name}-${now.getTime()}`,
+                scheduleName: def.name,
+                firedAt: now,
+                payload: def.payload,
+                logger: this.logger.child({
+                  schedule: def.name,
+                  scope: "missed-fire",
+                }),
+                signal: new AbortController().signal,
+                environment: this.environment,
+                project: this.project,
+              });
+              await def.hooks.onMissedFire(ctx, missedAt);
+            } catch (hookErr) {
+              this.logger.error("onMissedFire hook threw", {
+                name: def.name,
+                err: String(hookErr),
+              });
+            }
+          }
+
+          if (policy === "run-all") {
+            // Enumerate all missed occurrences using the shared MissedFireHandler
+            const { MissedFireHandler } = await import(
+              "./missed-fire.handler.js"
+            );
+            const mfh = new MissedFireHandler(this.logger);
+            const mfResult = await mfh.checkMissed(
+              {
+                name: def.name,
+                expression: record.expression,
+                intervalMs: record.intervalMs,
+                timezone: def.timezone,
+                missedFire: def.missedFire,
+                maxMissedRuns: def.maxMissedRuns,
+              },
+              record.lastRunAt ? new Date(record.lastRunAt) : null,
+              now,
+            );
+            if (mfResult.missed) {
+              const max = Math.min(
+                mfResult.missedDates.length,
+                def.maxMissedRuns ?? 100,
+              );
+              for (let i = 0; i < max; i++) {
+                void this.fire(def, mfResult.missedDates[i]);
+              }
+            } else {
+              // MissedFireHandler didn't detect missed dates — fire once as fallback
+              void this.fire(def, now);
+            }
+          } else {
+            // "run-once": fire the latest occurrence only
+            void this.fire(def, now);
+          }
           const nextRun = this.computeNextRun(def, now);
           if (nextRun) {
-            await this.di.storage.save("schedules", def.name, {
+            await this.di.storage.save(this.storageNamespace, def.name, {
               ...record,
               nextRunAt: nextRun,
               lastRunAt: now,
@@ -398,528 +299,315 @@ export class ScheduleEngine implements IOqronModule {
     }
   }
 
-  private async tick(): Promise<void> {
-    if (!this.enabled) return;
+  // ── Init ────────────────────────────────────────────────────────────────────
 
-    // Check leadership: either single-leader or at least one shard
-    const isLeader = this.shardedLeader
-      ? this.shardedLeader.isLeader
-      : this.leader?.isLeader;
-    if (!isLeader) return;
+  async init(): Promise<void> {
+    this.logger.info("Initializing schedule engine", {
+      nodeId: this.nodeId,
+      staticCount: this.schedules.size,
+    });
 
-    if (!this._hasRunLeaderInit) {
-      this._hasRunLeaderInit = true;
-      await this.handleLeaderInit();
-    }
+    _attachScheduleEngine(this);
 
-    try {
-      if (this.lagMonitor.isCircuitTripped) {
-        this.logger.debug("Tick skipped — event loop lag detected");
-        return;
-      }
-
-      const now = new Date();
-      const allSchedules = await this.di.storage.list<any>("schedules");
-      const dueRecords = allSchedules
-        .filter((s) => s.nextRunAt && new Date(s.nextRunAt) <= now)
-        // If using sharded leader, only process schedules that hash to our owned shards
-        .filter((s) =>
-          this.shardedLeader ? this.shardedLeader.ownsJob(s.name) : true,
-        );
-
-      for (const record of dueRecords) {
-        const def = this.schedules.get(record.name);
-        if (!def) continue;
-
-        // ── Disabled behavior enforcement ──────────────────────────────────
-        if (record.paused) {
-          const behavior =
-            def.disabledBehavior ?? this.config?.disabledBehavior ?? "hold";
-
-          // ALL disabled behaviors must advance the nextRunAt, otherwise we infinite-loop
-          // every tick since the record stays in the past.
-          const nextRun = this.computeNextRun(def, now);
-          if (nextRun) {
-            const existing =
-              (await this.di.storage.get<any>("schedules", def.name)) || {};
-            await this.di.storage.save("schedules", def.name, {
-              ...existing,
-              nextRunAt: nextRun,
-              lastRunAt: now,
-            });
-          }
-
-          if (behavior === "skip") {
-            continue;
-          }
-
-          if (behavior === "reject") {
-            this.logger.warn("Schedule fire rejected — instance is disabled", {
-              name: def.name,
-              behavior: "reject",
-            });
-            OqronEventBus.emit(
-              "job:fail",
-              "system_schedule",
-              record.name,
-              new Error(
-                `Schedule ${def.name} is disabled and configured to reject fires`,
-              ),
-            );
-            continue;
-          }
-
-          // behavior === "hold"
-          const holdId = randomUUID();
-          await this.di.storage.save("jobs", holdId, {
-            id: holdId,
-            type: "schedule",
-            queueName: "system_schedule",
-            moduleName: def.name,
-            scheduleId: def.name,
-            status: "paused",
-            pausedReason: "disabled-hold",
-            data: def.payload,
-            opts: {},
-            attemptMade: 0,
-            progressPercent: 0,
-            tags: def.tags ?? [],
-            environment: this.environment ?? "default",
-            project: this.project ?? "default",
-            queuedAt: now,
-            triggeredBy: "schedule",
-            logs: [
-              {
-                level: "warn",
-                msg: `Schedule ${def.name} fired while disabled — job held`,
-                ts: now,
-              },
-            ],
-            timeline: [
-              {
-                ts: now,
-                from: "waiting",
-                to: "paused",
-                reason: "Instance disabled — hold",
-              },
-            ],
-            steps: [],
-            createdAt: now,
-          });
-
-          // Prune excess held jobs for this definition (FIFO — oldest removed first)
-          const maxHeld = this.config?.maxHeldJobs ?? 100;
-          const heldJobs = await this.di.storage.list<any>(
-            "jobs",
-            {
-              moduleName: def.name,
-              status: "paused",
-              pausedReason: "disabled-hold",
-            },
-            { limit: 100_000 },
-          );
-
-          heldJobs.sort(
-            (a: any, b: any) =>
-              new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
-          );
-
-          if (heldJobs.length > maxHeld) {
-            const toRemove = heldJobs.slice(0, heldJobs.length - maxHeld);
-            for (const old of toRemove) {
-              await this.di.storage.delete("jobs", old.id);
-            }
-          }
-
-          this.logger.info("Schedule fire held — instance is disabled", {
-            name: def.name,
-            holdId,
-          });
-          continue;
-        }
-
-        if (def.condition) {
-          try {
-            const conditionVal = await def.condition(
-              new ScheduleContext({
-                id: "eval",
-                scheduleName: def.name,
-                firedAt: now,
-                logger: this.logger,
-                signal: new AbortController().signal,
-                payload: def.payload,
-                environment: this.environment,
-                project: this.project,
-              }),
-            );
-            if (!conditionVal) {
-              const nextRun = this.computeNextRun(def, now);
-              if (nextRun) {
-                const existing =
-                  (await this.di.storage.get<any>("schedules", def.name)) || {};
-                await this.di.storage.save("schedules", def.name, {
-                  ...existing,
-                  nextRunAt: nextRun,
-                });
-              }
-              continue;
-            }
-          } catch (e) {
-            this.logger.error("Condition crashed", {
-              name: def.name,
-              error: String(e),
-            });
-            continue;
-          }
-        }
-
-        let nextRun: Date | null = null;
-        if (!def.runAt && !def.runAfter) {
-          nextRun = this.computeNextRun(def, now);
-          if (!nextRun) {
-            this.logger.error(
-              "Cannot compute next run — suspending schedule to prevent runaway loop",
-              { name: def.name },
-            );
-            const existing =
-              (await this.di.storage.get<any>("schedules", def.name)) || {};
-            await this.di.storage.save("schedules", def.name, {
-              ...existing,
-              nextRunAt: null,
-            });
-            continue;
-          }
-        }
-
-        const existing =
-          (await this.di.storage.get<any>("schedules", def.name)) || {};
-        await this.di.storage.save("schedules", def.name, {
-          ...existing,
-          nextRunAt: nextRun,
-        });
-
-        void this.fire(def);
-      }
-    } catch (err) {
-      this.logger.error("Tick error", { err: String(err) });
+    const now = new Date();
+    for (const def of this.schedules.values()) {
+      await this.upsertAndSeed(def, now);
     }
   }
 
-  private async fire(def: ScheduleDefinition): Promise<void> {
-    const isOverlapSkip = def.overlap === "skip" || def.overlap === false;
+  private async upsertAndSeed(def: ScheduleDefinition, now: Date) {
+    this.validateDefinition(def);
 
-    if (isOverlapSkip) {
-      for (const job of this.activeJobs.values()) {
-        if (job.lockKey === `${this.lockPrefix}:schedule:run:${def.name}`) {
-          this.logger.debug("Skipping overlapping run", { name: def.name });
-          return;
-        }
-      }
+    const existing = await this.di.storage.get<any>(
+      this.storageNamespace,
+      def.name,
+    );
+
+    const codeVersion = def.version ?? 0;
+    const dbVersion = existing?.version ?? 0;
+
+    //  Downgrade protection
+    if (existing && codeVersion < dbVersion) {
+      this.logger.warn("Code version is older than DB — skipping overwrite", {
+        name: def.name,
+        codeVersion,
+        dbVersion,
+      });
+      return;
     }
 
-    if (def.maxConcurrent) {
-      let activeCount = 0;
-      for (const job of this.activeJobs.values()) {
-        if (
-          job.lockKey.startsWith(`${this.lockPrefix}:schedule:run:${def.name}`)
-        )
-          activeCount++;
-      }
-      if (activeCount >= def.maxConcurrent) {
-        this.logger.debug("Skipping — maxConcurrent reached", {
-          name: def.name,
-          active: activeCount,
-          max: def.maxConcurrent,
+    //  Version bump — controlled migration
+    if (existing && codeVersion > dbVersion) {
+      this.logger.info("Schedule version upgraded", {
+        name: def.name,
+        from: dbVersion,
+        to: codeVersion,
+      });
+
+      await this.di.storage.save(this.storageNamespace, def.name, {
+        ...def,
+        version: codeVersion,
+        // Preserve operational state
+        paused: existing.paused ?? def.status === "paused",
+        runCount: existing.runCount ?? 0,
+        successCount: existing.successCount ?? 0,
+        failCount: existing.failCount ?? 0,
+        lastRunId: existing.lastRunId,
+        lastStatus: existing.lastStatus,
+        lastError: existing.lastError,
+        lastDurationMs: existing.lastDurationMs,
+        // Force recompute
+        nextRunAt: null,
+        lastRunAt: existing.lastRunAt,
+        type: this.moduleType,
+      });
+
+      OqronEventBus.emit(
+        "schedule:version-upgraded",
+        def.name,
+        dbVersion,
+        codeVersion,
+      );
+
+      // Immediately compute new nextRunAt
+      const nextRun = this.computeNextRun(def, now);
+      if (nextRun) {
+        const updated = await this.di.storage.get<any>(
+          this.storageNamespace,
+          def.name,
+        );
+        await this.di.storage.save(this.storageNamespace, def.name, {
+          ...updated,
+          nextRunAt: nextRun,
         });
-        return;
+      }
+      return;
+    }
+
+    // Same version: standard upsert (preserve nextRunAt if config unchanged)
+    let shouldRecompute = !existing?.nextRunAt;
+    if (existing) {
+      const cmp = (a: any, b: any) => JSON.stringify(a) === JSON.stringify(b);
+      if (
+        !cmp(existing.every, def.every) ||
+        !cmp(existing.runAt, def.runAt) ||
+        existing.rrule !== def.rrule ||
+        !cmp(existing.recurring, def.recurring)
+      ) {
+        shouldRecompute = true;
       }
     }
 
-    const runId = randomUUID();
-    const lockKey = isOverlapSkip
-      ? `${this.lockPrefix}:schedule:run:${def.name}`
-      : `${this.lockPrefix}:schedule:run:${def.name}:${runId}`;
-    const startedAt = new Date();
-
-    let worker: HeartbeatWorker | undefined;
-    let acquired = false;
-
-    if (def.guaranteedWorker) {
-      worker = new HeartbeatWorker(
-        this.di.lock,
-        this.logger,
-        lockKey,
-        this.nodeId,
-        def.lockTtlMs ?? 30_000,
-        def.heartbeatMs ?? 10_000,
-      );
-      acquired = await worker.start();
-    } else {
-      acquired = await this.di.lock.acquire(
-        lockKey,
-        this.nodeId,
-        def.lockTtlMs ?? 30_000,
-      );
-    }
-    if (!acquired) return;
-
-    const abort = new AbortController();
-    const entry: ActiveJobEntry = { runId, lockKey, worker, abort };
-    this.activeJobs.set(runId, entry);
-
-    // Persist running job state
-    await this.di.storage.save("jobs", runId, {
-      id: runId,
-      type: "schedule",
-      queueName: "system_schedule",
-      moduleName: def.name,
-      status: "running",
-      data: def.payload,
-      opts: {},
-      attemptMade: 1,
-      progressPercent: 0,
-      tags: [],
-      scheduleId: def.name,
-      environment: this.environment ?? "default",
-      project: this.project ?? "default",
-      createdAt: startedAt,
-      queuedAt: startedAt,
-      triggeredBy: "schedule",
-      logs: [],
-      timeline: [
-        {
-          ts: startedAt,
-          from: "waiting",
-          to: "running",
-          reason: `Schedule ${def.name} fired`,
-        },
-      ],
-      steps: [],
-      startedAt,
+    await this.di.storage.save(this.storageNamespace, def.name, {
+      ...(existing || {}),
+      ...def,
+      version: codeVersion,
+      nextRunAt: shouldRecompute ? null : existing?.nextRunAt,
+      lastRunAt: existing?.lastRunAt,
+      paused: existing?.paused ?? def.status === "paused",
     });
 
-    OqronEventBus.emit("job:start", "system_schedule", runId, def.name);
-    entry.promise = Promise.resolve().then(async () => {
-      // Local accumulator — guarantees no log entries are lost to async races
-      const localLogs: Array<{ level: string; msg: string; ts: Date }> = [];
-      const localTimeline: Array<{
-        ts: Date;
-        from: string;
-        to: string;
-        reason: string;
-      }> = [];
+    if (shouldRecompute) {
+      const nextRun = this.computeNextRun(def, now);
+      if (nextRun) {
+        const updated = await this.di.storage.get<any>(
+          this.storageNamespace,
+          def.name,
+        );
+        await this.di.storage.save(this.storageNamespace, def.name, {
+          ...updated,
+          nextRunAt: nextRun,
+        });
+      }
+    }
+  }
 
-      const ctx = new ScheduleContext({
-        id: runId,
-        logger: this.logger.child({ schedule: def.name }),
-        signal: abort.signal,
-        firedAt: startedAt,
-        scheduleName: def.name,
-        payload: def.payload,
-        environment: this.environment,
-        project: this.project,
-        onProgress: async (percent, label) => {
-          try {
-            localTimeline.push({
-              ts: new Date(),
-              from: "running",
-              to: "running",
-              reason: `Progress: ${percent}% ${label || ""}`,
+  // ── Sharded leader election override ────────────────────────────────────────
+
+  async start(): Promise<void> {
+    const clustering = this.config?.clustering;
+    if (clustering && (clustering.totalShards ?? 1) > 1) {
+      this.shardedLeader = new ShardedLeaderElection(
+        this.di.lock,
+        this.logger,
+        `${this.lockPrefix}:scheduleengine:leader`,
+        this.nodeId,
+        clustering.totalShards!,
+        clustering.ownedShards ?? [0],
+        DEFAULT_LEADER_TTL_MS,
+      );
+      await this.shardedLeader.start();
+      // Skip base start() leader election — we handle it here
+      // But still need stallDetector, tick timer, lag monitor from base
+      await this.startInfraOnly();
+    } else {
+      await super.start();
+    }
+  }
+
+  /** Start only infrastructure (no leader election) — used when sharded leader is active */
+  private async startInfraOnly(): Promise<void> {
+    this.stallDetector = new StallDetector(
+      this.di.lock,
+      this.logger,
+      DEFAULT_STALL_DETECTOR_INTERVAL_MS,
+    );
+
+    const interval = this.baseConfig?.tickInterval ?? DEFAULT_TICK_INTERVAL_MS;
+    this.tickTimer = setInterval(() => {
+      void this.tick();
+    }, interval);
+    this.tickTimer.unref();
+
+    this.logger.info("Schedule engine started (sharded)", {
+      nodeId: this.nodeId,
+      interval,
+      clustering: this.config?.clustering,
+    });
+
+    this.lagMonitor.start();
+    this.metrics.start();
+    this.stallDetector.start(
+      () =>
+        Array.from(this.activeJobs.values()).map((j) => ({
+          key: j.lockKey,
+          ownerId: this.nodeId,
+        })),
+      async (key) => {
+        for (const [id, job] of this.activeJobs) {
+          if (job.lockKey === key) {
+            this.logger.error("Stalled schedule detected, aborting", {
+              key,
+              runId: id,
             });
-            const job = await this.di.storage.get<any>("jobs", runId);
-            if (job) {
-              await this.di.storage.save("jobs", runId, {
-                ...job,
-                progressPercent: percent,
-                progressLabel: label,
-                timeline: [...(job.timeline || []), ...localTimeline],
-                logs: [...(job.logs || []), ...localLogs],
+            job.abort?.abort();
+            this.activeJobs.delete(id);
+
+            //  Persist stall telemetry (matching base class handler)
+            try {
+              const jobRecord = await this.di.storage.get<any>("jobs", id);
+              if (jobRecord) {
+                await this.di.storage.save("jobs", id, {
+                  ...jobRecord,
+                  stalledCount: (jobRecord.stalledCount ?? 0) + 1,
+                  timeline: [
+                    ...(jobRecord.timeline || []),
+                    {
+                      ts: new Date(),
+                      from: jobRecord.status,
+                      to: "stalled",
+                      reason: `Lock expired for key ${key}`,
+                    },
+                  ],
+                });
+              }
+            } catch (err) {
+              this.logger.warn("Failed to persist stall telemetry", {
+                runId: id,
+                error: (err as Error).message,
               });
             }
-          } catch (err) {
-            this.logger.error("Failed to update schedule progress", {
-              runId,
-              err,
-            });
+
+            OqronEventBus.emit("job:stalled", this.queueName, id);
           }
-        },
-        onLog: (level, msg) => {
-          // Synchronous push — no async race, no lost logs
-          (this.logger as any)[level]?.(`[Schedule:${def.name}] ${msg}`, {
-            runId,
-          });
-          localLogs.push({ level, msg, ts: new Date() });
-        },
-      });
-
-      let status: "completed" | "failed" = "completed";
-      let error: string | undefined;
-      let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
-      let finalResult: unknown;
-      let attempts = 1;
-      const maxAttempts = (def.retries?.max ?? 0) + 1;
-
-      while (attempts <= maxAttempts) {
-        try {
-          if (def.hooks?.beforeRun) await def.hooks.beforeRun(ctx);
-
-          if (def.timeout) {
-            const timeoutPromise = new Promise<never>((_, reject) => {
-              timeoutHandle = setTimeout(() => {
-                abort.abort();
-                reject(new Error(`Handler timed out after ${def.timeout}ms`));
-              }, def.timeout);
-            });
-            finalResult = await Promise.race([
-              def.handler(ctx),
-              timeoutPromise,
-            ]);
-          } else {
-            finalResult = await def.handler(ctx);
-          }
-
-          if (def.hooks?.afterRun) {
-            await def.hooks.afterRun(ctx, finalResult);
-          }
-
-          status = "completed";
-          error = undefined;
-          break; // Success!
-        } catch (err: unknown) {
-          error = err instanceof Error ? err.message : String(err);
-          status = "failed";
-
-          if (def.hooks?.onError && err instanceof Error) {
-            try {
-              await Promise.resolve(def.hooks.onError(ctx, err));
-            } catch (e) {
-              this.logger.error("onError hook threw", { err: String(e) });
-            }
-          }
-
-          if (attempts < maxAttempts) {
-            this.logger.warn("Schedule handler threw, retrying...", {
-              name: def.name,
-              runId,
-              attempt: attempts,
-              error,
-            });
-
-            const baseDelay = def.retries?.baseDelay ?? 2000;
-            const delay =
-              def.retries?.strategy === "exponential"
-                ? baseDelay * 2 ** (attempts - 1)
-                : baseDelay;
-
-            attempts++;
-            await new Promise((resolve) => setTimeout(resolve, delay));
-          } else {
-            this.logger.error("Schedule handler failed completely", {
-              name: def.name,
-              runId,
-              attempts,
-              error,
-            });
-            break;
-          }
-        } finally {
-          if (timeoutHandle) clearTimeout(timeoutHandle);
         }
+      },
+    );
+  }
+
+  async stop(): Promise<void> {
+    if (this.shardedLeader) await this.shardedLeader.stop();
+    await super.stop();
+  }
+
+  // ── Dynamic registration (legacy compat — delegates to base CRUD) ──────────
+
+  /** @deprecated Use `upsert(def)` instead. Kept for backward compatibility. */
+  async registerDynamic(def: ScheduleDefinition): Promise<void> {
+    await this.upsert(def);
+  }
+
+  /** @deprecated Use `remove(name)` instead. Kept for backward compatibility. */
+  async cancel(name: string): Promise<void> {
+    await this.remove(name);
+  }
+
+  // ──  Condition guard via shouldFire() hook ──────────────────────────────
+
+  protected async shouldFire(
+    def: ScheduleDefinition,
+    _record: any,
+  ): Promise<boolean> {
+    if (def.condition) {
+      try {
+        const ctx = new ScheduleContext({
+          id: "condition-check",
+          scheduleName: def.name,
+          firedAt: new Date(),
+          payload: def.payload,
+          logger: this.logger.child({
+            schedule: def.name,
+            context: "condition",
+          }),
+          signal: new AbortController().signal,
+          environment: this.environment,
+          project: this.project,
+        });
+        return await def.condition(ctx);
+      } catch (err) {
+        this.logger.error("Condition guard threw — skipping fire", {
+          name: def.name,
+          error: (err as Error).message,
+        });
+        return false;
       }
+    }
+    return true;
+  }
 
-      const finishedAt = new Date();
-      const existingJob = (await this.di.storage.get<any>("jobs", runId)) ?? {};
+  protected canTickRecord(def: ScheduleDefinition, record: any): boolean {
+    if (!this.shardedLeader) return true;
+    return (
+      this.shardedLeader.isLeader &&
+      this.shardedLeader.ownsJob(record.name ?? def.name)
+    );
+  }
 
-      // Push the final completion event into local accumulator
-      localTimeline.push({
-        ts: finishedAt,
-        from: "running",
-        to: status,
-        reason:
-          status === "failed"
-            ? (error ?? "Unknown error")
-            : "Finished successfully",
-      });
+  protected shouldFireWithoutNextRun(
+    def: ScheduleDefinition,
+    _record: any,
+  ): boolean {
+    return !!def.runAt;
+  }
 
-      // Merge: initial timeline from DB + all locally accumulated entries
-      const mergedTimeline = [
-        ...(existingJob.timeline || []),
-        ...localTimeline,
-      ];
-      // Merge: initial logs from DB + all locally accumulated entries
-      const mergedLogs = [...(existingJob.logs || []), ...localLogs];
-
-      await this.di.storage.save("jobs", runId, {
-        ...existingJob,
-        id: runId,
-        type: "schedule",
-        queueName: "system_schedule",
-        moduleName: def.name,
-        status,
-        data: def.payload,
-        opts: {},
-        attemptMade: attempts,
-        progressPercent: status === "completed" ? 100 : 0,
-        progressLabel: status === "completed" ? "Completed" : "Failed",
-        tags: def.tags ?? [],
-        scheduleId: def.name,
-        workerId: this.nodeId,
-        environment: this.environment ?? "default",
-        project: this.project ?? "default",
-        durationMs: finishedAt.getTime() - startedAt.getTime(),
-        error,
-        stacktrace: error && status === "failed" ? [error] : undefined,
-        returnValue: finalResult !== undefined ? finalResult : undefined,
-        createdAt: startedAt,
-        queuedAt: existingJob.queuedAt ?? startedAt,
-        startedAt,
-        processedOn: startedAt,
-        finishedAt,
-        logs: mergedLogs,
-        timeline: mergedTimeline,
-      });
-
-      if (worker) {
-        await worker.stop();
-      } else {
-        await this.di.lock.release(lockKey, this.nodeId).catch(() => {});
-      }
-      this.activeJobs.delete(runId);
-
-      // History pruning via shared utility
-      const keepHistory =
-        def.keepHistory ?? this.config?.keepJobHistory ?? true;
-      const keepFailed =
-        def.keepFailedHistory ?? this.config?.keepFailedJobHistory ?? true;
-
-      await pruneAfterCompletion({
-        namespace: "jobs",
-        jobId: runId,
-        status,
-        jobRemoveConfig: keepHistoryToRemoveConfig(
-          status === "completed" ? keepHistory : keepFailed,
-        ),
-        filterKey: "scheduleId",
-        filterValue: def.name,
-      });
-
-      this.logger.info("Schedule finished", {
-        name: def.name,
-        runId,
-        status,
-        attempts,
-      });
-
-      if (status === "completed") {
-        OqronEventBus.emit("job:success", "system_schedule", runId);
-      } else {
-        OqronEventBus.emit(
-          "job:fail",
-          "system_schedule",
-          runId,
-          new Error(error ?? "Unknown error"),
-        );
-      }
+  protected createExecutionContext(opts: {
+    def: ScheduleDefinition;
+    runId: string;
+    abort: AbortController;
+    startedAt: Date;
+    localLogs: Array<{ level: string; msg: string; ts: Date }>;
+    localTimeline: Array<{
+      ts: Date;
+      from: string;
+      to: string;
+      reason: string;
+    }>;
+  }): any {
+    return new ScheduleContext({
+      id: opts.runId,
+      logger: this.logger.child({ schedule: opts.def.name }),
+      signal: opts.abort.signal,
+      firedAt: opts.startedAt,
+      scheduleName: opts.def.name,
+      payload: opts.def.payload,
+      environment: this.environment,
+      project: this.project,
+      onProgress: this.createOnProgress(
+        opts.runId,
+        opts.localLogs,
+        opts.localTimeline,
+      ),
+      onLog: this.createOnLog(opts.def.name, opts.runId, opts.localLogs),
     });
   }
 }

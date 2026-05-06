@@ -1,28 +1,42 @@
 import { normalizeModules } from "../../modules.js";
 import type { OqronConfig } from "../types/config.types.js";
-import { applyModuleDefaults, type ValidatedConfig } from "./schema.js";
+import {
+  applyModuleDefaults,
+  OqronConfigSchema,
+  type ValidatedConfig,
+} from "./schema.js";
 
 export function reconfigureConfig(config: OqronConfig): ValidatedConfig {
+  const parsed = OqronConfigSchema.safeParse(config);
+  if (!parsed.success) {
+    throw new Error(
+      `[OqronKit] Invalid config: ${parsed.error.issues
+        .map((issue) => `${issue.path.join(".") || "config"}: ${issue.message}`)
+        .join("; ")}`,
+    );
+  }
+  const validated = parsed.data as OqronConfig;
+
   // 1. Normalize the flexible module inputs into OqronModuleDef[]
-  const rawModules = normalizeModules(config.modules ?? []);
+  const rawModules = normalizeModules(validated.modules ?? []);
 
   // 2. Apply defaults to each module definition
   const modules = rawModules.map(applyModuleDefaults);
 
   return {
-    project: config.project ?? "oqronkit",
-    environment: config.environment ?? "development",
-    mode: config.mode ?? "default",
+    project: validated.project ?? "oqronkit",
+    environment: validated.environment ?? "development",
+    mode: validated.mode ?? "default",
 
-    redis: config.redis,
+    redis: validated.redis,
 
     modules,
 
-    triggers: config.triggers,
-    tags: config.tags ?? [],
+    triggers: validated.triggers,
+    tags: validated.tags ?? [],
 
     logger:
-      config.logger === false
+      validated.logger === false
         ? false
         : {
             enabled: true,
@@ -30,18 +44,18 @@ export function reconfigureConfig(config: OqronConfig): ValidatedConfig {
             prettify: false,
             showMetadata: true,
             redact: [],
-            ...(typeof config.logger === "object" ? config.logger : {}),
+            ...(typeof validated.logger === "object" ? validated.logger : {}),
           },
 
     telemetry: {
       prometheus: {
         enabled: false,
         path: "/metrics",
-        ...config.telemetry?.prometheus,
+        ...validated.telemetry?.prometheus,
       },
       opentelemetry: {
         enabled: false,
-        ...config.telemetry?.opentelemetry,
+        ...validated.telemetry?.opentelemetry,
       },
     },
 
@@ -52,18 +66,18 @@ export function reconfigureConfig(config: OqronConfig): ValidatedConfig {
       logCollector: true,
       logCollectorMaxGlobal: 500,
       logCollectorMaxPerCategory: 200,
-      ...config.observability,
+      ...validated.observability,
     },
 
     ui: {
       enabled: false,
-      ...config.ui,
-      auth: config.ui?.auth,
+      ...validated.ui,
+      auth: validated.ui?.auth,
       retention: {
         runs: "30d",
         events: "7d",
         metrics: "30d",
-        ...config.ui?.retention,
+        ...validated.ui?.retention,
       },
     },
 
@@ -71,14 +85,14 @@ export function reconfigureConfig(config: OqronConfig): ValidatedConfig {
       enabled: true,
       timeout: 30000,
       signals: ["SIGINT", "SIGTERM"],
-      ...config.shutdown,
+      ...validated.shutdown,
     },
 
-    postgres: config.postgres
+    postgres: validated.postgres
       ? {
-          connectionString: config.postgres.connectionString,
-          tablePrefix: config.postgres.tablePrefix ?? "oqron",
-          poolSize: config.postgres.poolSize ?? 10,
+          connectionString: validated.postgres.connectionString,
+          tablePrefix: validated.postgres.tablePrefix ?? "oqron",
+          poolSize: validated.postgres.poolSize ?? 10,
         }
       : undefined,
   };

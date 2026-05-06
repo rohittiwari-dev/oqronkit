@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
-import { Broker, OqronRegistry, Storage } from "../engine/index.js";
+import {
+  Broker,
+  OqronEventBus,
+  OqronRegistry,
+  Storage,
+} from "../engine/index.js";
 import type { OqronConfig } from "../engine/types/config.types.js";
 import type {
   JobFilter,
@@ -7,6 +12,13 @@ import type {
   JobType,
   OqronJob,
 } from "../engine/types/job.types.js";
+import { getLimiter } from "../ratelimit/registry.js";
+import type {
+  RateLimitEvent,
+  RateLimitInstanceRecord,
+  RateLimitKeyStatus,
+  RateLimitStats,
+} from "../ratelimit/types.js";
 
 // ── Result types ────────────────────────────────────────────────────────────
 
@@ -21,6 +33,7 @@ export interface QueueMetrics {
   waiting: number;
   completed: number;
   failed: number;
+  cancelled: number;
   delayed: number;
   paused: number;
 }
@@ -149,16 +162,50 @@ export class OqronManager {
    */
   async enableInstance(type: JobType, name: string): Promise<boolean> {
     if (type === "task" || type === ("queue" as any)) {
-      await Storage.save("queue_instances", name, { enabled: true });
+      await this.resumeQueue(name);
       return true;
     }
     if (type === "cron" || type === "schedule") {
-      const def = await Storage.get<any>("schedules", name);
+      const ns = type === "cron" ? "cron_schedules" : "schedule_schedules";
+      const def =
+        (await Storage.get<any>(ns, name)) ??
+        (await Storage.get<any>(
+          type === "cron" ? "schedule_schedules" : "cron_schedules",
+          name,
+        ));
       if (def) {
+        const actualNs =
+          def.type === "cron" ? "cron_schedules" : "schedule_schedules";
         def.paused = false;
-        await Storage.save("schedules", name, def);
+        await Storage.save(actualNs, name, def);
+
+        // Release held jobs on resume — mirror queue's releaseHeldJobs pattern
+        let batchCount = 0;
+        while (batchCount < 20) {
+          batchCount++;
+          const batch = await Storage.list<any>(
+            "jobs",
+            {
+              moduleName: name,
+              status: "paused",
+              pausedReason: "disabled-hold",
+            },
+            { limit: 100 },
+          );
+          if (batch.length === 0) break;
+          for (const held of batch) {
+            held.status = "waiting";
+            held.pausedReason = undefined;
+            await Storage.save("jobs", held.id, held);
+          }
+        }
+
+        OqronEventBus.emit("schedule:resumed", name);
         return true;
       }
+    }
+    if (type === ("ratelimit" as any)) {
+      return this.enableRateLimiter(name);
     }
     return false;
   }
@@ -168,18 +215,111 @@ export class OqronManager {
    */
   async disableInstance(type: JobType, name: string): Promise<boolean> {
     if (type === "task" || type === ("queue" as any)) {
-      await Storage.save("queue_instances", name, { enabled: false });
+      await this.pauseQueue(name);
       return true;
     }
     if (type === "cron" || type === "schedule") {
-      const def = await Storage.get<any>("schedules", name);
+      const ns = type === "cron" ? "cron_schedules" : "schedule_schedules";
+      const def =
+        (await Storage.get<any>(ns, name)) ??
+        (await Storage.get<any>(
+          type === "cron" ? "schedule_schedules" : "cron_schedules",
+          name,
+        ));
       if (def) {
+        const actualNs =
+          def.type === "cron" ? "cron_schedules" : "schedule_schedules";
         def.paused = true;
-        await Storage.save("schedules", name, def);
+        await Storage.save(actualNs, name, def);
+        OqronEventBus.emit("schedule:paused", name);
         return true;
       }
     }
+    if (type === ("ratelimit" as any)) {
+      return this.disableRateLimiter(name);
+    }
     return false;
+  }
+  // ──  Schedule Instance Listing ───────────────────────────────────────────
+
+  /**
+   * List all registered cron and schedule instances with their current state.
+   * Merges both namespaces and optionally filters by type.
+   */
+  async listSchedules(opts?: { type?: "cron" | "schedule" }): Promise<any[]> {
+    const [cronRecords, schedRecords] = await Promise.all([
+      opts?.type === "schedule" ? [] : Storage.list<any>("cron_schedules"),
+      opts?.type === "cron" ? [] : Storage.list<any>("schedule_schedules"),
+    ]);
+    return [...cronRecords, ...schedRecords];
+  }
+
+  // ──  Single Schedule Detail ─────────────────────────────────────────────
+
+  /**
+   * Get the full state of a single schedule/cron instance by name.
+   * Checks both namespaces.
+   */
+  async getScheduleDetail(name: string): Promise<any | null> {
+    return (
+      (await Storage.get<any>("cron_schedules", name)) ??
+      (await Storage.get<any>("schedule_schedules", name))
+    );
+  }
+
+  // ── Rate Limiter Management ─────────────────────────────────────────────
+
+  async listRateLimiters(): Promise<RateLimitInstanceRecord[]> {
+    return Storage.list<RateLimitInstanceRecord>("ratelimit_instances");
+  }
+
+  async getRateLimiterStats(name: string): Promise<RateLimitStats | null> {
+    return Storage.get<RateLimitStats>("ratelimit_stats", name);
+  }
+
+  async enableRateLimiter(name: string): Promise<boolean> {
+    const rec = await Storage.get<RateLimitInstanceRecord>(
+      "ratelimit_instances",
+      name,
+    );
+    if (!rec) return false;
+    rec.enabled = true;
+    await Storage.save("ratelimit_instances", name, rec);
+    OqronEventBus.emit("ratelimit:instance:enabled", name);
+    return true;
+  }
+
+  async disableRateLimiter(name: string): Promise<boolean> {
+    const rec = await Storage.get<RateLimitInstanceRecord>(
+      "ratelimit_instances",
+      name,
+    );
+    if (!rec) return false;
+    rec.enabled = false;
+    await Storage.save("ratelimit_instances", name, rec);
+    OqronEventBus.emit("ratelimit:instance:disabled", name);
+    return true;
+  }
+
+  async getRateLimiterEvents(
+    name: string,
+    opts?: { limit?: number; offset?: number },
+  ): Promise<{ events: RateLimitEvent[]; total: number }> {
+    const filter = { limiterName: name };
+    const [events, total] = await Promise.all([
+      Storage.list<RateLimitEvent>("ratelimit_events", filter, opts),
+      Storage.count("ratelimit_events", filter),
+    ]);
+    return { events, total };
+  }
+
+  async getRateLimiterKeyStatus(
+    name: string,
+    adminKey: string,
+  ): Promise<RateLimitKeyStatus | null> {
+    const limiter = getLimiter(name);
+    if (!limiter) return null;
+    return limiter.getStatus(adminKey);
   }
 
   // ── Queue Administration ───────────────────────────────────────────────────
@@ -193,19 +333,22 @@ export class OqronManager {
     const offset = opts.offset ?? 0;
 
     // Fetch metrics counts via parallel count queries — NOT full-scan
-    const [active, waiting, completed, failed, delayed] = await Promise.all([
-      Storage.count("jobs", { queueName: name, status: "active" }),
-      Storage.count("jobs", { queueName: name, status: "waiting" }),
-      Storage.count("jobs", { queueName: name, status: "completed" }),
-      Storage.count("jobs", { queueName: name, status: "failed" }),
-      Storage.count("jobs", { queueName: name, status: "delayed" }),
-    ]);
+    const [active, waiting, completed, failed, cancelled, delayed] =
+      await Promise.all([
+        Storage.count("jobs", { queueName: name, status: "active" }),
+        Storage.count("jobs", { queueName: name, status: "waiting" }),
+        Storage.count("jobs", { queueName: name, status: "completed" }),
+        Storage.count("jobs", { queueName: name, status: "failed" }),
+        Storage.count("jobs", { queueName: name, status: "cancelled" }),
+        Storage.count("jobs", { queueName: name, status: "delayed" }),
+      ]);
 
     const metricsResult: QueueMetrics = {
       active,
       waiting,
       completed,
       failed,
+      cancelled,
       delayed,
       paused: 0,
     };
@@ -221,24 +364,55 @@ export class OqronManager {
   }
 
   async pauseQueue(name: string): Promise<void> {
+    const queueEngine = OqronRegistry.getInstance()
+      .getAll()
+      .find((m) => m.name === "queue") as any;
+    if (queueEngine && typeof queueEngine.pauseQueue === "function") {
+      await queueEngine.pauseQueue(name);
+    } else {
+      const existing = await Storage.get<any>("queue_instances", name);
+      await Storage.save("queue_instances", name, {
+        ...(existing || {}),
+        enabled: false,
+      });
+    }
     await Broker.pause(name);
   }
 
   async resumeQueue(name: string): Promise<void> {
+    const queueEngine = OqronRegistry.getInstance()
+      .getAll()
+      .find((m) => m.name === "queue") as any;
+    if (queueEngine && typeof queueEngine.resumeQueue === "function") {
+      await queueEngine.resumeQueue(name);
+    } else {
+      const existing = await Storage.get<any>("queue_instances", name);
+      await Storage.save("queue_instances", name, {
+        ...(existing || {}),
+        enabled: true,
+      });
+    }
     await Broker.resume(name);
   }
 
   async retryAllFailed(name: string): Promise<number> {
-    const failedJobs = await Storage.list<OqronJob>(
-      "jobs",
-      { queueName: name, status: "failed" },
-      { limit: 1000 },
-    );
-
     let retried = 0;
-    for (const job of failedJobs) {
-      await this.retryJob(job.id);
-      retried++;
+    const batchSize = 500;
+
+    while (true) {
+      const failedJobs = await Storage.list<OqronJob>(
+        "jobs",
+        { queueName: name, status: "failed" },
+        { limit: batchSize },
+      );
+      if (failedJobs.length === 0) break;
+
+      for (const job of failedJobs) {
+        await this.retryJob(job.id);
+        retried++;
+      }
+
+      if (failedJobs.length < batchSize) break;
     }
 
     return retried;
@@ -251,18 +425,28 @@ export class OqronManager {
   }
 
   /**
-   * Retry a failed job by creating a NEW job record with a `retriedFromId`
-   * memoization link to the original. The original job's status is updated
-   * to indicate it has been retried.
-   *
-   * This ensures full audit trail — the original failure record is preserved,
-   * and the new retry record can be independently tracked.
+   *  Retry a failed job. For scheduler jobs (cron/schedule), triggers
+   * the schedule directly instead of publishing to the Broker.
+   * For queue/task jobs, creates a new job record with memoization link.
    */
   async retryJob(jobId: string): Promise<string | undefined> {
     const job = await Storage.get<OqronJob>("jobs", jobId);
     if (!job || job.status !== "failed") return undefined;
 
-    // Create a new job record linked to the original
+    //  Scheduler jobs don't use Broker — trigger via engine
+    if (job.type === "cron" || job.type === "schedule") {
+      const targetName = job.scheduleId ?? job.moduleName;
+      if (!targetName) return undefined;
+
+      const triggered = await this.triggerModule(targetName);
+      if (triggered) {
+        OqronEventBus.emit("job:retried", jobId, `triggered:${targetName}`);
+        return `triggered:${targetName}`;
+      }
+      return undefined;
+    }
+
+    // Queue/task jobs: create new record + Broker
     const retryId = randomUUID();
     const retryJob: OqronJob = {
       ...job,
@@ -291,26 +475,82 @@ export class OqronManager {
       stalledCount: undefined,
     };
 
-    // Save the new retry job
     await Storage.save("jobs", retryId, retryJob);
-
-    // Mark original as "retried" in retryReason for audit
     await Storage.save("jobs", jobId, {
       ...job,
       retryReason: `Retried as ${retryId}`,
     });
+    await Broker.publish(
+      retryJob.queueName,
+      retryId,
+      retryJob.opts.delay,
+      retryJob.opts?.priority,
+    );
 
-    // Publish to broker for processing
-    await Broker.publish(retryJob.queueName, retryId, retryJob.opts.delay);
-
+    OqronEventBus.emit("job:retried", jobId, retryId);
     return retryId;
+  }
+
+  /**
+   *  Rerun any job regardless of status (completed, failed, etc.).
+   * For scheduler jobs: triggers the schedule engine directly.
+   * For queue/task jobs: creates a new job record via Broker.
+   */
+  async rerunJob(jobId: string): Promise<string | undefined> {
+    const job = await Storage.get<OqronJob>("jobs", jobId);
+    if (!job) return undefined;
+
+    if (job.type === "cron" || job.type === "schedule") {
+      const targetName = job.scheduleId ?? job.moduleName;
+      if (!targetName) return undefined;
+      const triggered = await this.triggerModule(targetName);
+      return triggered ? `triggered:${targetName}` : undefined;
+    }
+
+    // Queue/task: clone as new waiting job
+    const rerunId = randomUUID();
+    const rerunJob: OqronJob = {
+      ...job,
+      id: rerunId,
+      status: "waiting",
+      attemptMade: 0,
+      error: undefined,
+      stacktrace: undefined,
+      returnValue: undefined,
+      retriedFromId: jobId,
+      triggeredBy: "rerun",
+      createdAt: new Date(),
+      startedAt: undefined,
+      finishedAt: undefined,
+      durationMs: undefined,
+      latencyMs: undefined,
+      memoryUsageMb: undefined,
+      processedOn: undefined,
+      queuedAt: new Date(),
+      logs: undefined,
+      timeline: undefined,
+      steps: undefined,
+      progressPercent: 0,
+      progressLabel: undefined,
+      workerId: undefined,
+      stalledCount: undefined,
+    };
+
+    await Storage.save("jobs", rerunId, rerunJob);
+    await Broker.publish(
+      rerunJob.queueName,
+      rerunId,
+      rerunJob.opts.delay,
+      rerunJob.opts?.priority,
+    );
+    return rerunId;
   }
 
   async cancelJob(jobId: string): Promise<void> {
     const job = await Storage.get<OqronJob>("jobs", jobId);
 
     // If the job is actively running, try to abort it via the engine
-    if (job && job.status === "active") {
+    if (job && (job.status === "active" || job.status === "running")) {
       const registry = OqronRegistry.getInstance();
       for (const mod of registry.getAll()) {
         if (mod.cancelActiveJob) {
@@ -320,8 +560,29 @@ export class OqronManager {
       }
     }
 
-    // For non-active jobs or if no engine claimed it, just delete from storage
-    await Storage.delete("jobs", jobId);
+    // Clean broker state before writing tombstone
+    if (job?.queueName) {
+      try {
+        await Broker.ack(job.queueName, jobId);
+      } catch {
+        // Best effort: broker may have already acked
+      }
+    }
+
+    // Write cancelled tombstone — retention system handles cleanup
+    if (job) {
+      job.status = "cancelled";
+      job.finishedAt = new Date();
+      job.error = "Cancelled via manager";
+      job.timeline ??= [];
+      job.timeline.push({
+        ts: new Date(),
+        from: job.status,
+        to: "cancelled" as const,
+        reason: "Manager cancel",
+      });
+      await Storage.save("jobs", jobId, job);
+    }
   }
 
   // ── Job Queries ────────────────────────────────────────────────────────────
@@ -425,5 +686,116 @@ export class OqronManager {
     }
 
     return chain;
+  }
+
+  // ── Webhook Management ────────────────────────────────────────────────────────────
+
+  /** Get the WebhookEngine from the registry (if available) */
+  private getWebhookEngine(): any | null {
+    const registry = OqronRegistry.getInstance();
+    const mod = registry.getAll().find((m) => m.name === "webhook");
+    return mod ?? null;
+  }
+
+  /** List all registered webhook dispatchers */
+  async listWebhookDispatchers(): Promise<
+    Array<{
+      name: string;
+      enabled: boolean;
+      endpointCount: number;
+      version: number;
+    }>
+  > {
+    const { getRegisteredWebhooks } = await import("../webhook/registry.js");
+    const dispatchers = getRegisteredWebhooks();
+    const results: Array<{
+      name: string;
+      enabled: boolean;
+      endpointCount: number;
+      version: number;
+    }> = [];
+
+    for (const d of dispatchers) {
+      const instance = await Storage.get<any>("webhook_instances", d.name);
+      const endpoints = Array.isArray(d.endpoints) ? d.endpoints : [];
+      results.push({
+        name: d.name,
+        enabled: instance?.enabled ?? true,
+        endpointCount: endpoints.length,
+        version: d.version ?? 0,
+      });
+    }
+
+    return results;
+  }
+
+  /** Get detailed info for a single webhook dispatcher */
+  async getWebhookDispatcherDetail(name: string): Promise<{
+    name: string;
+    enabled: boolean;
+    version: number;
+    method: string;
+    timeout: number;
+    concurrency: number;
+    endpoints: Array<{ name: string; events: string[]; enabled: boolean }>;
+  } | null> {
+    const { getWebhookByName } = await import("../webhook/registry.js");
+    const d = getWebhookByName(name);
+    if (!d) return null;
+
+    const instance = await Storage.get<any>("webhook_instances", name);
+    const endpoints = Array.isArray(d.endpoints) ? d.endpoints : [];
+
+    return {
+      name: d.name,
+      enabled: instance?.enabled ?? true,
+      version: d.version ?? 0,
+      method: d.method ?? "POST",
+      timeout: d.timeout ?? 30000,
+      concurrency: d.concurrency ?? 10,
+      endpoints: endpoints.map((ep: any) => ({
+        name: ep.name,
+        events: ep.events ?? [],
+        enabled: ep.enabled ?? true,
+      })),
+    };
+  }
+
+  /** Query webhook delivery jobs for a specific dispatcher */
+  async getWebhookDeliveries(
+    dispatcherName: string,
+    opts?: { status?: string; limit?: number; offset?: number },
+  ): Promise<{ jobs: OqronJob[]; total: number }> {
+    const filter: JobFilter = {
+      type: "webhook" as JobType,
+      queueName: dispatcherName,
+      status: opts?.status as JobStatus | undefined,
+      limit: opts?.limit ?? 50,
+      offset: opts?.offset ?? 0,
+    };
+    return this.queryJobs(filter);
+  }
+
+  /** Pause a webhook dispatcher */
+  async pauseWebhookDispatcher(name: string): Promise<boolean> {
+    const engine = this.getWebhookEngine();
+    if (!engine || typeof engine.pauseDispatcher !== "function") return false;
+    await engine.pauseDispatcher(name);
+    return true;
+  }
+
+  /** Resume a webhook dispatcher */
+  async resumeWebhookDispatcher(name: string): Promise<boolean> {
+    const engine = this.getWebhookEngine();
+    if (!engine || typeof engine.resumeDispatcher !== "function") return false;
+    await engine.resumeDispatcher(name);
+    return true;
+  }
+
+  /** Resend a failed/DLQ webhook job */
+  async resendWebhookJob(jobId: string): Promise<string | null> {
+    const engine = this.getWebhookEngine();
+    if (!engine || typeof engine.resendJob !== "function") return null;
+    return engine.resendJob(jobId);
   }
 }

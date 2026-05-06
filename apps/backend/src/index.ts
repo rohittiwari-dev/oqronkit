@@ -22,7 +22,13 @@
 
 import { mkdirSync } from "node:fs";
 import express from "express";
-import { cronModule, OqronKit, queueModule, scheduleModule } from "oqronkit";
+import {
+  cronModule,
+  OqronKit,
+  queueModule,
+  scheduleModule,
+  workerModule,
+} from "oqronkit";
 
 // ─── 1. Prepare data directory ───────────────────────────────────────────────
 mkdirSync("data", { recursive: true });
@@ -34,7 +40,7 @@ async function main(): Promise<void> {
   await OqronKit.init({
     config: {
       // All four modules active — cron, scheduler, taskQueue, worker
-      modules: [cronModule, scheduleModule, queueModule],
+      modules: [cronModule, scheduleModule, queueModule, workerModule],
 
       // Pretty-print structured logs for development
       logger: {

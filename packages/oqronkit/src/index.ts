@@ -15,8 +15,10 @@ import {
   type CronModuleDef,
   getModuleConfig,
   type QueueModuleDef,
+  type RateLimitModuleDef,
   type SchedulerModuleDef,
   type WebhookModuleDef,
+  type WorkerModuleDef,
 } from "./modules.js";
 import { expressRouter as _expressRouter } from "./server/express.js";
 import { fastifyPlugin as _fastifyPlugin } from "./server/fastify.js";
@@ -24,6 +26,14 @@ import { TelemetryManager } from "./telemetry/index.js";
 
 let _config: ValidatedConfig | null = null;
 let _logger: Logger | null = null;
+let _signalHandlers: Array<{ signal: string; handler: () => void }> = [];
+
+function removeSignalHandlers(): void {
+  for (const { signal, handler } of _signalHandlers) {
+    process.off(signal as NodeJS.Signals, handler);
+  }
+  _signalHandlers = [];
+}
 
 export type {
   ClusteringConfig,
@@ -46,7 +56,6 @@ export type {
   ScheduleDefinition,
   ScheduleHooks,
   ScheduleRecurring,
-  ScheduleRunAfter,
 } from "./engine/index.js";
 // ── Re-exports: single source of truth for ALL user-facing APIs ─────────────
 export {
@@ -64,7 +73,6 @@ export {
   type QueueInfoResult,
   type QueueMetrics,
 } from "./manager/oqron-manager.js";
-// ── Module factories ────────────────────────────────────────────────────────
 export {
   type CronModuleConfig,
   type CronModuleDef,
@@ -77,15 +85,56 @@ export {
   type QueueModuleConfig,
   type QueueModuleDef,
   queueModule,
+  type RateLimitModuleConfig,
+  type RateLimitModuleDef,
+  rateLimitModule,
   type SchedulerModuleConfig,
   type SchedulerModuleDef,
   scheduleModule,
   type WebhookModuleConfig,
   type WebhookModuleDef,
+  type WorkerModuleConfig,
+  type WorkerModuleDef,
   webhookModule,
+  workerModule,
 } from "./modules.js";
 export { queue } from "./queue/define-queue.js";
-export type { IQueue, QueueConfig, QueueJobContext } from "./queue/types.js";
+export {
+  type QueueMetricEntry,
+  QueueMetrics as QueueModuleMetrics,
+  type QueueMetricsSnapshot,
+} from "./queue/queue-metrics.js";
+export { applyGlobalTags as applyGlobalQueueTags } from "./queue/registry.js";
+export type {
+  IPublisherQueue,
+  IQueue,
+  QueueConfig,
+  QueueJobContext,
+} from "./queue/types.js";
+export { rateLimit } from "./ratelimit/define-ratelimit.js";
+export type { RateLimitMiddlewareOptions } from "./ratelimit/middleware.js";
+export {
+  expressMiddleware,
+  honoMiddleware,
+} from "./ratelimit/middleware.js";
+export type {
+  CheckOptions,
+  IRateLimiter,
+  PenaltyConfig,
+  QuotaUsage,
+  QuotaWarnings,
+  RateLimitAlgorithm,
+  RateLimitConfig,
+  RateLimitEvent,
+  RateLimitInstanceRecord,
+  RateLimitKeyStatus,
+  RateLimitResult,
+  RateLimitSnapshot,
+  RateLimitStats,
+  RateLimitTier,
+  TierBreakdown,
+  WindowDuration,
+} from "./ratelimit/types.js";
 export {
   cron,
   type DefineCronOptions,
@@ -94,7 +143,23 @@ export {
   schedule,
 } from "./scheduler/index.js";
 export {
+  type CircuitBreakerConfig,
+  type CircuitState,
+  // Circuit breaker (G7)
+  createCircuitBreaker,
+  // Dynamic CRUD (B14)
+  createWebhook,
+  deleteWebhook,
+  type ICircuitBreaker,
   type IWebhookDispatcher,
+  pauseWebhook,
+  // G10: Resend/replay
+  resendWebhook,
+  resumeWebhook,
+  signWebhookPayload,
+  updateWebhook,
+  // Signing utilities (B12/B13)
+  verifyWebhookSignature,
   type WebhookConfig,
   type WebhookDeliveryPayload,
   type WebhookDeliveryResult,
@@ -106,13 +171,25 @@ export {
   type WebhookSecurityInput,
   webhook,
 } from "./webhook/index.js";
+export { worker } from "./worker/define-worker.js";
+export { applyGlobalTags as applyGlobalWorkerTags } from "./worker/registry.js";
+export type { IWorker, WorkerConfig } from "./worker/types.js";
+export {
+  type WorkerMetricEntry,
+  WorkerMetrics,
+  type WorkerMetricsSnapshot,
+} from "./worker/worker-metrics.js";
 
 // ── Trigger Auto-Discovery ──────────────────────────────────────────────────
 
 /** Well-known directories checked when `triggers` is not set */
 const TRIGGER_PROBE_PATHS = ["src/triggers", "triggers", "src/jobs", "jobs"];
 
-/** Recursively import all .ts/.js files in a directory */
+/**
+ * Recursively import all .ts/.js files in a trusted triggers directory.
+ * Importing trigger files executes project code during init; do not point this
+ * at untrusted, user-writable, or broad repository roots.
+ */
 async function scanDir(dir: string): Promise<number> {
   let count = 0;
   const entries = await readdir(dir, { withFileTypes: true });
@@ -123,7 +200,6 @@ async function scanDir(dir: string): Promise<number> {
     } else if (entry.isFile() && /\.(js|ts|mjs|cjs)$/.test(entry.name)) {
       await import(pathToFileURL(full).toString());
       count++;
-      ``;
     }
   }
   return count;
@@ -188,7 +264,7 @@ export const OqronKit = {
     _config = reconfigureConfig(opts?.config ?? (await loadConfig(cwd)));
 
     const loggerConfig =
-      _config.logger === false ? { enabled: true } : _config.logger;
+      _config.logger === false ? { enabled: false } : _config.logger;
 
     _logger = createLogger(loggerConfig, { module: "oqronkit" });
 
@@ -199,11 +275,14 @@ export const OqronKit = {
 
     // --- Shutdown hooks ---
     if (_config.shutdown.enabled) {
+      removeSignalHandlers();
       for (const signal of _config.shutdown.signals) {
-        process.on(signal, () => {
+        const handler = () => {
           _logger?.info(`${signal} received — initiating graceful shutdown…`);
-          void this.stop().then(() => process.exit(0));
-        });
+          void OqronKit.stop().then(() => process.exit(0));
+        };
+        process.on(signal as NodeJS.Signals, handler);
+        _signalHandlers.push({ signal, handler });
       }
     }
 
@@ -257,6 +336,16 @@ export const OqronKit = {
       OqronRegistry.getInstance().register(engine);
     }
 
+    const workerConf = getModuleConfig<WorkerModuleDef>(
+      _config.modules,
+      "worker",
+    );
+    if (workerConf) {
+      const { WorkerEngine } = await import("./worker/worker-engine.js");
+      const engine = new WorkerEngine(_config, _logger!, workerConf);
+      OqronRegistry.getInstance().register(engine);
+    }
+
     const webhookConf = getModuleConfig<WebhookModuleDef>(
       _config.modules,
       "webhook",
@@ -265,6 +354,18 @@ export const OqronKit = {
       const { WebhookEngine } = await import("./webhook/webhook-engine.js");
       const engine = new WebhookEngine(_config, _logger!, webhookConf);
       OqronRegistry.getInstance().register(engine);
+    }
+
+    const ratelimitConf = getModuleConfig<RateLimitModuleDef>(
+      _config.modules,
+      "ratelimit",
+    );
+    if (ratelimitConf) {
+      const { RateLimitModule } = await import(
+        "./ratelimit/ratelimit-module.js"
+      );
+      const rlModule = new RateLimitModule(_config, _logger!, ratelimitConf);
+      OqronRegistry.getInstance().register(rlModule);
     }
 
     const registry = OqronRegistry.getInstance();
@@ -296,15 +397,26 @@ export const OqronKit = {
         .filter((m) => m.enabled)
         .map((m) => m.stop()),
     );
-    const timeoutPromise = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error("Timeout")), timeoutMs),
-    );
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    const timeoutPromise = new Promise((_, reject) => {
+      timeoutHandle = setTimeout(() => reject(new Error("Timeout")), timeoutMs);
+      timeoutHandle.unref();
+    });
     try {
       await Promise.race([stopPromise, timeoutPromise]);
-      await stopEngine();
-      log.info("OqronKit stopped.");
     } catch (err) {
       log.error("Error during stop", { error: String(err) });
+    } finally {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+      TelemetryManager.getInstance().stop();
+      await stopEngine().catch((err) =>
+        log.error("Error stopping engine", { error: String(err) }),
+      );
+      OqronRegistry.getInstance()._reset();
+      removeSignalHandlers();
+      _config = null;
+      _logger = null;
+      log.info("OqronKit stopped.");
     }
   },
 
@@ -314,13 +426,26 @@ export const OqronKit = {
   },
 
   async pause(scheduleId: string): Promise<void> {
-    const s = await Storage.get<{ paused?: boolean }>("schedules", scheduleId);
-    if (s) await Storage.save("schedules", scheduleId, { ...s, paused: true });
+    for (const ns of ["cron_schedules", "schedule_schedules"]) {
+      const s = await Storage.get<{ paused?: boolean }>(ns, scheduleId);
+      if (s) {
+        await Storage.save(ns, scheduleId, { ...s, paused: true });
+        return;
+      }
+    }
   },
 
   async resume(scheduleId: string): Promise<void> {
-    const s = await Storage.get<{ paused?: boolean }>("schedules", scheduleId);
-    if (s) await Storage.save("schedules", scheduleId, { ...s, paused: false });
+    for (const ns of ["cron_schedules", "schedule_schedules"]) {
+      const s = await Storage.get<{ paused?: boolean }>(ns, scheduleId);
+      if (s) {
+        await Storage.save(ns, scheduleId, {
+          ...s,
+          paused: false,
+        });
+        return;
+      }
+    }
   },
 
   /**

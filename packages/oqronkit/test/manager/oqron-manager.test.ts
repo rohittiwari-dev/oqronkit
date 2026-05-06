@@ -4,6 +4,7 @@ import { OqronRegistry } from "../../src/engine/registry.js";
 import { OqronManager } from "../../src/manager/oqron-manager.js";
 import type { OqronConfig } from "../../src/engine/types/config.types.js";
 import type { OqronJob } from "../../src/engine/types/job.types.js";
+import type { IOqronModule } from "../../src/engine/types/module.types.js";
 
 const config: OqronConfig = {
   project: "test",
@@ -18,14 +19,17 @@ describe("OqronManager", () => {
     OqronRegistry.getInstance()._reset();
 
     // Register a fake module so getSystemStats sees something
-    OqronRegistry.getInstance().register({
+    const fakeMod: IOqronModule = {
       name: "queue",
       enabled: true,
       init: async () => {},
       start: async () => {},
       stop: async () => {},
+      async enable() { fakeMod.enabled = true; },
+      async disable() { fakeMod.enabled = false; },
       triggerManual: async () => false,
-    });
+    };
+    OqronRegistry.getInstance().register(fakeMod);
 
     manager = OqronManager.from(config);
   });
@@ -225,14 +229,17 @@ describe("OqronManager", () => {
   });
 
   describe("cancelJob()", () => {
-    it("removes a job from storage", async () => {
+    it("writes a cancelled tombstone for the job", async () => {
       await Storage.save("jobs", "cancel-1", {
         id: "cancel-1",
         status: "waiting",
+        queueName: "q",
       });
       await manager.cancelJob("cancel-1");
-      const job = await Storage.get("jobs", "cancel-1");
-      expect(job).toBeNull();
+      const job = await Storage.get<OqronJob>("jobs", "cancel-1");
+      expect(job).toBeDefined();
+      expect(job!.status).toBe("cancelled");
+      expect(job!.error).toBe("Cancelled via manager");
     });
   });
 

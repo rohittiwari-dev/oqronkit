@@ -1,0 +1,123 @@
+---
+title: Webhook
+description: Fan-out event distribution with HMAC signing and glob matching
+icon: Bell
+---
+
+# Webhook
+
+OqronKit's Webhook module handles fan-out event distribution with HMAC signing, glob pattern matching, circuit breakers, and a dead letter queue.
+
+## Basic Usage
+
+```ts title="triggers/webhooks.ts"
+import { webhook } from 'oqronkit'
+
+export const platformWebhooks = webhook({
+  name: 'platform-events',
+  concurrency: 10,
+
+  retries: {
+    max: 3,
+    strategy: 'exponential',
+    baseDelay: 2000,
+  },
+
+  security() {
+    return {
+      signingSecret: process.env.WEBHOOK_SECRET!,
+    }
+  },
+
+  async endpoints() {
+    return [
+      {
+        name: 'AcmeCorp Integration',
+        url: 'https://api.acme.com/v1/webhooks/receive',
+        events: ['order.**', 'user.signup'], // Glob matching
+        security: {
+          signingAlgorithm: 'sha256',
+          signingSecret: process.env.ACME_SECRET!,
+          signingHeader: 'x-acme-signature',
+        },
+      },
+      {
+        name: 'Internal Analytics',
+        url: 'https://data.internal.svc/ingest',
+        events: ['user.*.activated', 'system.health'],
+      },
+    ]
+  },
+})
+```
+
+## Fire Events
+
+```ts
+// Matches AcmeCorp (order.**) — ignored by Internal Analytics
+platformWebhooks.fire('order.payment.completed', {
+  orderId: 'ord_123',
+  amount: 450.0,
+  currency: 'USD',
+})
+
+// Matches AcmeCorp (user.signup)
+platformWebhooks.fire('user.signup', {
+  userId: 'usr_abc',
+  email: 'newuser@example.com',
+})
+
+// Matches Internal Analytics (user.*.activated)
+platformWebhooks.fire('user.onboarding.activated', {
+  userId: 'usr_abc',
+  timestamp: Date.now(),
+})
+```
+
+## Dynamic CRUD
+
+```ts
+import { createWebhook, updateWebhook, deleteWebhook, pauseWebhook, resumeWebhook, resendWebhook } from 'oqronkit'
+
+// Create at runtime
+await createWebhook({ /* ... */ })
+
+// Pause/Resume
+await pauseWebhook('webhook-id')
+await resumeWebhook('webhook-id')
+
+// Resend a failed delivery
+await resendWebhook('delivery-id')
+```
+
+> **v0.0.2 improvements:**
+> - **Abort signal support** — Cancelling an active webhook job via `cancelJob()` now immediately aborts the in-flight HTTP request, rather than waiting for the full timeout.
+> - **Resend clears delay** — `resendWebhook()` now clears `runAt` and `opts.delay` on the cloned job, ensuring immediate re-dispatch instead of inheriting the original schedule.
+
+## Signature Verification
+
+```ts
+import { verifyWebhookSignature, signWebhookPayload } from 'oqronkit'
+
+// Verify incoming webhook (consumer side)
+const isValid = verifyWebhookSignature(payload, signature, secret, 'sha256')
+
+// Sign outgoing payload (producer side)
+const sig = signWebhookPayload(payload, secret, 'sha256')
+```
+
+## Circuit Breaker
+
+```ts
+import { createCircuitBreaker } from 'oqronkit'
+
+const breaker = createCircuitBreaker({
+  failureThreshold: 5,
+  resetTimeout: 30_000,
+})
+```
+
+## Next Steps
+
+- [Rate Limiter](/docs/rate-limiter) — Protect webhook dispatch with rate limits
+- [Task Queue](/docs/task-queue) — Use queues for reliable background processing

@@ -1,116 +1,49 @@
 # Changelog
 
-
-### Patch Changes
-
-- ## 0.0.1
-
-  ### New Features & Architecture Changes
-
-  - **Unified Monolithic DX (Distributed Scale):** Deprecated the old decoupled `Worker` and `TaskQueue` concepts. Introduced the single `queue()` factory that defines publisher and consumer together. It gives a simple monolithic developer experience while effortlessly scaling out as a distributed processor natively across containers via locks.
-  - **Webhook Module:** Added complete implementation of the `webhook()` dispatch engine. Features deep-glob segment routing (`*`, `**`), rigorous HMAC SHA-256/512 signature verification, extensible signing pipelines, DLQ, and fan-out capability.
-  - **Standardized `disabledBehavior` Engine:** All modules (`cron`, `schedule`, `queue`, `webhook`) now natively support capping/handling offline states via `hold`, `skip`, or `reject` policies to intelligently cap unbounded task accumulations.
-  - **Trigger Auto-Discovery** — Added trigger auto-discovery support with new configuration options. Removed unused trigger modules from the backend.
-  - **Admin Module & Isolation** — Added admin module and instance handlers with improved isolation prefixing.
-
-  ### Fixes & Improvements
-
-  - Refined `nextRun` calculation and optimized job pruning logic.
-  - Enhanced robustness of memory lock/store handling and cron compatibility.
-  - Comprehensive documentation overhaul reflecting the 4 core modules array format and modernized factories.
-  - General housekeeping including whitespace fixes, import cleanups, and test mock field renaming.
-
-- ## 0.0.1-alpha.4
-
-  ### New Features
-
-  - **Job Dependencies (DAG)** — Jobs can declare `dependsOn: [parentId]` to wait for parent completion before processing. Children stay in `"waiting-children"` status until all parents finish. Three configurable failure policies: `"block"` (default), `"cascade-fail"`, and `"ignore"`.
-  - **Cron Clustering** — `ShardedLeaderElection` enables multi-region geo-distributed scheduling. Schedule names are MD5-hashed to shard indices; each region claims a subset of shards. If a region goes down, surviving nodes recover the orphaned shard locks after TTL expiry.
-  - **Sandboxed Processors** — `SandboxWorker` provides `worker_threads` isolation with enforced `resourceLimits` (memory caps) and execution timeouts. Untrusted code runs in a separate V8 isolate — OOM crashes the sandbox thread, not the host process.
-  - **Full DI Container Migration** — Replaced all remaining global adapter imports (`Storage`, `Broker`, `Lock`) with explicit `OqronContainer` injection across `ScheduleEngine`, `Queue`, `QueueEvents`, and `TaskQueue`.
-
-  ### Environment Isolation Hardening
-
-  - **Adapter prefix now includes `environment`** — Redis keys changed from `{project}:store:...` to `{project}:{environment}:store:...`. Two deployments sharing the same Redis with different environments are now physically isolated at the key level.
-  - **Lock and leader keys namespaced** — Leader election keys (`oqron:scheduler:leader`) and execution lock keys (`oqron:run:{name}`) now include `{project}:{environment}`, preventing cross-environment leader theft and lock collisions.
-  - **Job records stamped with environment** — `taskQueue().add()` and `Queue.add()` now stamp `environment` and `project` from `OqronContainer.config` onto every job record, closing the gap where engine guards were silently bypassed for unstamped jobs.
-  - **Environment-mismatched jobs nack'd** — Workers now `broker.nack()` jobs from the wrong environment back to the queue instead of silently dropping them.
-  - **`OqronContainer` now holds `OqronConfig`** — Config is injected via constructor (Option A) for multi-instance support. Accessible via `container.config`.
-
-  ### Tests
-
-  - **275 tests across 29 files** (up from 253 tests across 26 files)
-  - New test suites: `job-dependencies.test.ts` (10 tests), `sharded-leader.test.ts` (7 tests), `sandbox.test.ts` (5 tests)
-  - A+ maturity rating across all modules
-
-  ### Documentation
-
-  - `02-Core-Concepts.md` — Added §8 Job Dependencies (DAG), §9 Cron Clustering, §10 Sandboxed Processors
-  - `08-Configuration-Reference.md` — Added `clustering` and `sandbox` config schemas
-  - `09-Real-World-Examples.md` — Added ETL DAG pipeline, multi-region cron, sandboxed code runner examples
-  - `10-Roadmap-and-Future.md` — Moved advanced patterns from "Future" to "Current State"
-  - New backend example: `apps/backend/src/jobs/advanced-patterns.ts`
-
-- ## 0.0.1-alpha.3
-
-  ### New Features
-
-  - **DI Container** (`OqronContainer`) — replaces module globals with injectable, multi-instance-ready container. Backward-compatible Proxy shims ensure zero breaking changes.
-  - **Job Cancellation** — `AbortController`-based mid-execution cancel. Handlers receive `ctx.signal` (AbortSignal) and can check `ctx.signal.aborted` periodically. `OqronManager.cancelJob()` aborts active jobs, stops heartbeats, and acks the broker.
-  - **Job Ordering Strategies** — FIFO, LIFO, and Priority strategies configurable per-queue or globally via `strategy` option.
-  - **PostgreSQL Adapter** — `PostgresStore` (JSONB+GIN), `PostgresBroker` (`FOR UPDATE SKIP LOCKED`), `PostgresLock` (advisory locks).
-  - **Redis Adapter Suite** — `RedisStore`, `RedisBroker` (sorted sets + Lua), `RedisLock` (Redlock).
-
-  ### Infrastructure
-
-  - `IOqronModule.cancelActiveJob()` — new optional method for engines to support mid-execution cancellation
-  - `TaskJobContext.signal` — AbortSignal passed to all taskQueue handlers
-  - `OqronContainer.init()` / `.get()` / `.reset()` / `.tryGet()` lifecycle
-  - `core.ts` exports `Storage`, `Broker`, `Lock` as Proxy shims (backward-compatible)
-  - Updated all engine constructors to accept optional `OqronContainer` for multi-instance support
-
-  ### Tests
-
-  - **253 tests across 26 files** (up from 163 tests across 20 files)
-  - New test suites: `container.test.ts` (14 tests), `cancel-job.test.ts` (13 tests)
-  - A+ maturity rating across all 16 modules
-
-  ### Documentation
-
-  - Updated all 10 documentation chapters for v1 features
-  - Updated backend example with `ctx.signal`, `strategy`, and cancel endpoint
-  - Complete README rewrite with v1 feature showcase
-
 All notable changes to OqronKit will be documented in this file.
 
-## [0.0.1-alpha.1] - 2026-03-29
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [0.0.2] — 2026-05-06
+
+### Fixed
+
+#### Execution Ownership
+- **Container claimBlocking forwarding** — `OqronContainer`'s isolated broker now correctly forwards the optional `claimBlocking` method, preventing CPU-burning polling fallback.
+- **Stall handler cleanup** — When the stall detector fires, the stuck handler's `AbortController` is now aborted and its concurrency slot is released, preventing permanent "zombie" capacity loss.
+- **Worker stall filter** — Stall detector now includes inactive heartbeats in its scan, ensuring jobs with failed lock renewals are still recovered.
+- **Batch cancellation check** — Batch finalization now verifies `signal.aborted` before accepting "fulfilled" status, preventing cancelled-but-completed race conditions.
+
+#### Stuck Job Prevention
+- **Webhook held-job release** — `resumeDispatcher()` now releases jobs enqueued with `disabledBehavior: "hold"` while the dispatcher was paused.
+- **Queue resume dependency check** — `resumeQueue()` now verifies `dependsOn` dependencies before promoting held jobs, routing unmet deps to `"waiting-children"` instead of `"waiting"`.
+- **Manager loop safety cap** — The held-job release loop in `OqronManager` is now capped at 20 batches (2000 jobs) to prevent infinite loops on storage errors.
+- **Retry/rerun priority passthrough** — `retryJob()` and `rerunJob()` now correctly pass `opts.priority` to `Broker.publish()`.
+
+#### Correctness & Consistency
+- **Retry `runAt` timestamp** — Delayed retries now set `job.runAt`, making retry schedules visible to reconciliation and dashboards.
+- **Default priority persistence** — Queue-level `config.priority` is now persisted on `job.opts.priority` at creation time, ensuring retries and stall recovery preserve priority.
+- **Cancel writes tombstone** — `cancelJob()` now writes a `"cancelled"` tombstone with `finishedAt` and timeline entry instead of deleting, preserving audit history. Retention policies handle cleanup.
+- **Schedule `run-all` missed fire** — `missedFire: "run-all"` now correctly enumerates all missed occurrences via `MissedFireHandler` instead of firing only once.
+- **Cron type stamp** — Same-version upserts now include `moduleType`, preventing namespace corruption in manager lookups.
+
+#### Hardening & Polish
+- **`logger: false` inversion** — Setting `logger: false` now correctly disables all logging.
+- **`stop()` timeout leak** — Shutdown timeout handle is now stored, `.unref()`'d, and cleared in `finally`.
+- **Signal handler binding** — Graceful shutdown signals now bind to `OqronKit.stop()` explicitly, preventing `this` binding errors.
+- **Webhook cancel aborts HTTP** — `deliverWebhook` now accepts an external `AbortSignal`, allowing immediate cancellation of in-flight HTTP requests.
+- **MemoryStore falsey values** — `MemoryStore.get` now correctly handles falsey values (`0`, `false`, `""`).
+- **MemoryBroker `extendLock` O(1)** — Added optional `brokerName` parameter for direct key lookup instead of O(n) scan.
+- **Redis `claimBlocking` pause re-check** — Re-checks pause state after `BLPOP` returns, pushing the item back if paused during the blocking wait.
+- **UI auth validation** — Zod schema now rejects partial auth config (only username or only password).
+- **Webhook resend clears delay** — Resend clones now clear `runAt` and `opts.delay` for immediate dispatch.
+
+## [0.0.1] — 2026-03-30
 
 ### Added
-
-- **Core Scheduling:** Cron expressions, interval-based, and `every` syntax scheduling
-- **Schedule Engine:** One-shot (`runAt`/`runAfter`), recurring, and RRule-based scheduling
-- **Database Adapters:** Memory, SQLite (`better-sqlite3`), PostgreSQL (`pg`), Redis (`ioredis`)
-- **Lock Adapters:** Memory, SQLite-backed, PostgreSQL-backed, Redis-backed (`SET NX PX` + Lua)
-- **Custom Adapter Factories:** `createDbAdapter()` and `createLockAdapter()` for custom backends
-- **Multi-Tenant Isolation:** `NamespacedOqronAdapter` with `project:environment:` prefixing
-- **Graceful Shutdown:** `Promise.allSettled()` drain with configurable timeout before lock release
-- **Pause/Resume API:** `OqronKit.pause()` / `.resume()` for admin kill-switch without redeployment
-- **Event Loop Protection:** `LagMonitor` circuit breaker (configurable threshold)
-- **Concurrency Rate Limiting:** `maxConcurrent` per schedule definition
-- **Stall Detection:** `StallDetector` auto-aborts orphaned jobs whose locks expired
-- **Leader Election:** Only one node per cluster runs initialization and missed-fire recovery
-- **Prometheus Observability:** `OqronKit.getMetrics()` with counters, gauges, and duration summaries
-- **EventBus:** `OqronEventBus` with `job:start`, `job:success`, `job:fail` events
-- **Server Integration:** Express router and Fastify plugin for `/health`, `/events` endpoints
-- **Auto-Discovery:** Recursive `jobsDir` scanning for `.ts`/`.js` job definitions
-- **Handler Timeout:** `AbortController` signal propagation with configurable per-job timeout
-- **Retry Strategy:** Exponential and fixed backoff with configurable max attempts
-- **Missed Fire Recovery:** `skip`, `run-once`, and `run-all` policies
-- **Job Tags:** Tags on schedule definitions and execution history for audit filtering
-- **Optional Peer Dependencies:** `better-sqlite3`, `pg`, and `ioredis` are optional — install only what you need
-
-### Changed
-
-- Renamed `ChronoError` → `OqronError` (backwards-compatible alias retained)
-- Renamed `chrono_locks` table → `oqron_locks`
-- Renamed `CHRONO_ENV` environment variable → `OQRON_ENV`
+- Initial release with 12 enterprise modules: Task Queue, Distributed Worker, Scheduler, Rate Limiter, Webhook, Batch, Workflow (DAG), Stack, Saga, Pipeline, PubSub, Cache, Ingest.
+- Adapter-driven architecture with Memory, Redis, and Postgres adapters.
+- Crash-safe execution via heartbeat locks and stall detection.
+- Built-in Admin UI dashboard with auth support.
+- 741-test suite with full module coverage.

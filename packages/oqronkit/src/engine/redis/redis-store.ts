@@ -1,5 +1,9 @@
 import type { Redis } from "ioredis";
-import type { IStorageEngine, ListOptions } from "../types/engine.js";
+import type {
+  IStorageEngine,
+  ListOptions,
+  WhereCondition,
+} from "../types/engine.js";
 
 /**
  * Redis implementation of the universal Storage Engine.
@@ -31,14 +35,13 @@ export class RedisStore implements IStorageEngine {
     const indexKey = this.getIndexKey(namespace);
 
     // Serialize entire object as a single JSON blob — no field-flattening
-    const json = JSON.stringify(data, (_k, v) => {
-      if (v instanceof Date) return { __type: "Date", __val: v.toISOString() };
-      return v;
-    });
+    const json = JSON.stringify(this.encodeDates(data));
 
     const record = data as Record<string, unknown>;
-    const createdAt = record.createdAt;
-    const ts = createdAt instanceof Date ? createdAt.getTime() : Date.now();
+    const ts =
+      this.toEpochMs(record.createdAt) ??
+      this.toEpochMs(record.expiresAt) ??
+      Date.now();
 
     const pipeline = this.redis.multi();
     pipeline.set(key, json);
@@ -62,11 +65,15 @@ export class RedisStore implements IStorageEngine {
 
     // Use offset/limit for pagination — no more hard-cap at 100
     const offset = opts?.offset ?? 0;
-    const limit = opts?.limit ?? 500; // sensible default, not a hard cap
+    const limit = opts?.limit;
+    const needsInMemoryFiltering =
+      !!filter || !!(opts?.where && opts.where.length > 0);
+    const end =
+      needsInMemoryFiltering || limit === undefined ? -1 : offset + limit - 1;
     const ids = await this.redis.zrevrange(
       indexKey,
-      offset,
-      offset + limit - 1,
+      needsInMemoryFiltering ? 0 : offset,
+      end,
     );
 
     if (ids.length === 0) return [];
@@ -101,6 +108,22 @@ export class RedisStore implements IStorageEngine {
       });
     }
 
+    //  Apply comparison conditions in memory
+    if (opts?.where) {
+      entities = entities.filter((item: any) =>
+        this.matchesWhere(item, opts.where!),
+      );
+    }
+
+    if (needsInMemoryFiltering) {
+      if (limit !== undefined) {
+        return entities.slice(offset, offset + limit);
+      }
+      if (offset > 0) {
+        return entities.slice(offset);
+      }
+    }
+
     return entities;
   }
 
@@ -113,7 +136,7 @@ export class RedisStore implements IStorageEngine {
     if (!_filter) return this.redis.zcard(indexKey);
 
     // With filter, we must scan — use list() with the filter applied
-    const all = await this.list(namespace, _filter, { limit: 100_000 });
+    const all = await this.list(namespace, _filter);
     return all.length;
   }
 
@@ -150,5 +173,69 @@ export class RedisStore implements IStorageEngine {
       }
       return v;
     });
+  }
+
+  private encodeDates(value: any): any {
+    if (value instanceof Date) {
+      return { __type: "Date", __val: value.toISOString() };
+    }
+    if (Array.isArray(value)) return value.map((v) => this.encodeDates(v));
+    if (value && typeof value === "object") {
+      const out: Record<string, unknown> = {};
+      for (const [key, val] of Object.entries(value)) {
+        out[key] = this.encodeDates(val);
+      }
+      return out;
+    }
+    return value;
+  }
+
+  private toEpochMs(value: unknown): number | undefined {
+    if (value instanceof Date) return value.getTime();
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+    if (typeof value === "string") {
+      const parsed = new Date(value).getTime();
+      return Number.isNaN(parsed) ? undefined : parsed;
+    }
+    if (
+      value &&
+      typeof value === "object" &&
+      (value as any).__type === "Date" &&
+      typeof (value as any).__val === "string"
+    ) {
+      const parsed = new Date((value as any).__val).getTime();
+      return Number.isNaN(parsed) ? undefined : parsed;
+    }
+    return undefined;
+  }
+
+  /**  Evaluates an item against all WhereConditions (AND semantics) */
+  private matchesWhere(item: any, conditions: WhereCondition[]): boolean {
+    for (const cond of conditions) {
+      const raw = item[cond.field];
+      if (raw === null || raw === undefined) return false;
+
+      const a = this.toEpochMs(raw) ?? raw;
+      const b = this.toEpochMs(cond.value) ?? cond.value;
+
+      switch (cond.op) {
+        case "$lt":
+          if (!(a < (b as any))) return false;
+          break;
+        case "$lte":
+          if (!(a <= (b as any))) return false;
+          break;
+        case "$gt":
+          if (!(a > (b as any))) return false;
+          break;
+        case "$gte":
+          if (!(a >= (b as any))) return false;
+          break;
+        case "$ne":
+          if (!(a !== b)) return false;
+          break;
+      }
+    }
+    return true;
   }
 }

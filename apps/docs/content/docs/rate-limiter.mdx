@@ -1,0 +1,95 @@
+---
+title: Rate Limiter
+description: Distributed sliding-window rate limiting with tiered policies
+icon: Shield
+---
+
+# Rate Limiter
+
+OqronKit's Rate Limiter provides distributed, multi-tier rate limiting with sliding-window algorithms. It integrates with queues, crons, and schedules — or use it standalone as Express/Hono middleware.
+
+## Basic Usage
+
+```ts title="triggers/rate-limiters.ts"
+import { rateLimit } from 'oqronkit'
+
+const apiLimiter = rateLimit.create({
+  name: 'api-requests',
+  algorithm: 'sliding-window',
+  tiers: [
+    {
+      name: 'ip',
+      key: (ctx) => ctx.ip,
+      max: 100,
+      window: '1m',
+    },
+    {
+      name: 'user',
+      key: (ctx) => ctx.user?.id,
+      max: 1000,
+      window: '1h',
+      enabled: (ctx) => !!ctx.user,
+    },
+  ],
+})
+
+// Check a request
+const result = await apiLimiter.check({ ip: '1.1.1.1', user: null })
+if (!result.allowed) {
+  return res.status(429).json({ retryAfter: result.retryAfter })
+}
+```
+
+## Express Middleware
+
+```ts
+import { expressMiddleware } from 'oqronkit'
+
+app.use('/api', expressMiddleware({
+  limiter: apiLimiter,
+  keyExtractor: (req) => ({ ip: req.ip, user: req.user }),
+}))
+```
+
+## Hono Middleware
+
+```ts
+import { honoMiddleware } from 'oqronkit'
+
+app.use('/api/*', honoMiddleware({
+  limiter: apiLimiter,
+  keyExtractor: (c) => ({ ip: c.req.header('x-forwarded-for'), user: c.get('user') }),
+}))
+```
+
+## Compose with Schedulers
+
+Rate limiters can gate cron/schedule fires to prevent overloading external APIs:
+
+```ts
+import { cron, rateLimit } from 'oqronkit'
+
+const supplierLimiter = rateLimit.create({
+  name: 'supplier-api',
+  algorithm: 'sliding-window',
+  tiers: [{ name: 'global', key: () => 'global', max: 100, window: '1h' }],
+})
+
+const inventorySync = cron({
+  name: 'inventory-sync',
+  every: { minutes: 15 },
+  rateLimiter: supplierLimiter, // Skips fire if over budget
+  handler: async (ctx) => { /* ... */ },
+})
+```
+
+## Destroy a Limiter
+
+```ts
+rateLimit.destroy('api-requests') // Removes from global registry
+```
+
+## Next Steps
+
+- [Webhook](/docs/webhook) — Event-driven webhook dispatch
+- [Scheduler](/docs/scheduler) — Compose rate limiters with crons

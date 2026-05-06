@@ -23,6 +23,8 @@ export function expressRouter(): any {
         path: matchPath,
         query: req.query || {},
         params: req.params || {},
+        headers: req.headers || {},
+        body: req.body,
       });
 
       if (
@@ -36,6 +38,11 @@ export function expressRouter(): any {
         return next();
       }
 
+      if (result.headers) {
+        for (const [key, value] of Object.entries(result.headers)) {
+          res.setHeader(key, value);
+        }
+      }
       res.status(result.status).json(result.body);
     } catch (err) {
       next(err);

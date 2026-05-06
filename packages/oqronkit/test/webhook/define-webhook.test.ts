@@ -86,6 +86,23 @@ describe("Webhook Factory (define-webhook)", () => {
       );
     });
 
+    it("does not persist webhook signing secrets into job payloads", async () => {
+      const dispatcher = webhook<any>({
+        name: "signed-dispatcher",
+        security: { signingSecret: "super-secret" },
+        endpoints: [
+          { name: "ep1", url: "http://ep1.com", events: ["user.*"] },
+        ],
+      });
+
+      const jobs = await dispatcher.fire("user.created", { id: 1 });
+
+      expect((jobs[0].data as any).security).toBeUndefined();
+      const savedJob = mockDi.storage.save.mock.calls[0][2];
+      expect((savedJob.data as any).security).toBeUndefined();
+      expect(JSON.stringify(savedJob)).not.toContain("super-secret");
+    });
+
     it("should fire to multiple matching endpoints", async () => {
       const config: WebhookConfig = {
         name: "multi-match",
@@ -204,6 +221,7 @@ describe("Webhook Factory (define-webhook)", () => {
       const jobs = await dispatcher.fire("user.created", { val: "test" });
 
       expect(jobs[0].data.headers).toEqual({
+        "Content-Type": "application/json",
         "x-global": "yes",
         "x-local": "abc",
       });
@@ -434,6 +452,25 @@ describe("Webhook Factory (define-webhook)", () => {
           enabled: true,
         }),
       );
+    });
+
+    it("does not persist endpoint signing secrets via addEndpoint()", async () => {
+      const config: WebhookConfig = {
+        name: "ep-secret-mgmt",
+        endpoints: [],
+      };
+      const dispatcher = webhook<any>(config);
+
+      await dispatcher.addEndpoint({
+        name: "new-ep",
+        url: "http://new.com",
+        events: ["user.*"],
+        security: { signingSecret: "dynamic-secret" },
+      });
+
+      const savedEndpoint = mockDi.storage.save.mock.calls[0][2];
+      expect(savedEndpoint.security).toBeUndefined();
+      expect(JSON.stringify(savedEndpoint)).not.toContain("dynamic-secret");
     });
 
     it("should remove an endpoint via removeEndpoint()", async () => {

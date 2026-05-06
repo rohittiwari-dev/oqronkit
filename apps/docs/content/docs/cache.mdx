@@ -1,0 +1,132 @@
+---
+title: Cache
+description: Stampede-protected hierarchical memory tiers
+icon: HardDrive
+---
+
+# Cache
+
+The Cache module provides a multi-tier caching system with built-in stampede protection, automatic invalidation, and configurable TTLs. It prevents the "thundering herd" problem where thousands of requests simultaneously try to recompute an expired cache entry.
+
+> **Roadmap Module** — Cache is part of the v1.x Enterprise release. This page documents the planned API.
+
+## Planned API
+
+### Define a Cache
+
+```ts
+import { cache } from 'oqronkit'
+
+const userCache = cache<User>({
+  name: 'user-profile',
+
+  // Hierarchical tiers — fastest to slowest
+  tiers: [
+    {
+      name: 'memory',
+      adapter: 'memory',
+      maxSize: 1000,       // LRU eviction after 1000 entries
+      ttl: '30s',          // Short-lived L1
+    },
+    {
+      name: 'redis',
+      adapter: 'redis',
+      ttl: '10m',          // Longer-lived L2
+    },
+  ],
+
+  // Stampede protection
+  stampede: {
+    enabled: true,
+    lockTtlMs: 5_000,     // Only one recompute at a time
+    staleWhileRevalidate: true, // Serve stale while recomputing
+  },
+
+  // How to fetch on cache miss
+  resolver: async (key) => {
+    return await db.users.findById(key)
+  },
+})
+```
+
+### Read and Write
+
+```ts
+// Get — checks L1 → L2 → resolver (on miss)
+const user = await userCache.get('user_123')
+
+// Set — writes to all tiers
+await userCache.set('user_123', updatedUser)
+
+// Delete — invalidates across all tiers
+await userCache.del('user_123')
+
+// Get or compute — atomic stampede-protected fetch
+const user = await userCache.getOrSet('user_123', async () => {
+  return await db.users.findById('user_123')
+})
+```
+
+## Stampede Protection
+
+Without stampede protection, when a popular cache key expires:
+```
+1000 requests arrive simultaneously
+→ 1000 cache misses
+→ 1000 identical database queries
+→ Database overwhelmed 💥
+```
+
+With OqronKit's stampede protection:
+```
+1000 requests arrive simultaneously
+→ 1 request acquires the recompute lock
+→ 999 requests wait (or get stale data with staleWhileRevalidate)
+→ Lock owner recomputes and updates cache
+→ All requests get fresh data ✓
+```
+
+## Invalidation Patterns
+
+```ts
+// Pattern-based invalidation
+await userCache.invalidatePattern('user_*')
+
+// Tag-based invalidation
+const productCache = cache({
+  name: 'products',
+  tags: (key, value) => [`tenant:${value.tenantId}`, `category:${value.category}`],
+  resolver: async (key) => db.products.findById(key),
+})
+
+// Invalidate all products for a tenant
+await productCache.invalidateByTag('tenant:acme')
+```
+
+## TTL Strategies
+
+| Strategy | Behavior |
+|----------|----------|
+| **Fixed** | Entry expires after a set duration |
+| **Sliding** | TTL resets on every access |
+| **Stale-While-Revalidate** | Serve stale data immediately, recompute in background |
+| **Write-Through** | Writes go to cache AND origin simultaneously |
+
+## Metrics
+
+```ts
+const stats = await userCache.getStats()
+// {
+//   hits: 45_000,
+//   misses: 1_200,
+//   hitRate: 0.974,
+//   stampedePrevented: 342,
+//   avgLatencyMs: { memory: 0.1, redis: 2.3, resolver: 45 },
+//   evictions: 890,
+// }
+```
+
+## Next Steps
+
+- [Rate Limiter](/docs/rate-limiter) — Protect your APIs with distributed rate limiting
+- [Adapters](/docs/adapters) — Configure Redis and PostgreSQL backends

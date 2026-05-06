@@ -100,7 +100,7 @@ export async function initEngine(config: OqronConfig): Promise<void> {
       _redisClientOwned = false;
     }
 
-    const redisPrefix = `${config.project}:${config.environment ?? "development"}`;
+    const redisPrefix = "oqron";
     broker = new RedisBroker(_redisClient, redisPrefix);
     lock = new RedisLock(_redisClient, redisPrefix);
   } else if (mode === "db") {
@@ -146,7 +146,7 @@ export async function initEngine(config: OqronConfig): Promise<void> {
       _redisClientOwned = false;
     }
 
-    const prefix = `${config.project}:${config.environment ?? "development"}`;
+    const prefix = "oqron";
     storage = new RedisStore(_redisClient, prefix);
     broker = new RedisBroker(_redisClient, prefix);
     lock = new RedisLock(_redisClient, prefix);

@@ -86,4 +86,22 @@ describe("cron() factory", () => {
       }),
     ).toThrow(/positive interval/);
   });
+
+  it("throws when `every` contains invalid field values", () => {
+    expect(() =>
+      cron({
+        name: "negative-mixed",
+        every: { minutes: 1, seconds: -30 },
+        handler: async () => { /* noop */ }
+      }),
+    ).toThrow(/finite non-negative/);
+
+    expect(() =>
+      cron({
+        name: "nan-every",
+        every: { seconds: Number.NaN },
+        handler: async () => { /* noop */ }
+      }),
+    ).toThrow(/finite non-negative/);
+  });
 });

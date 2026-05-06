@@ -121,8 +121,11 @@ describe("OqronManager — cancelJob() with active jobs", () => {
     await Storage.save("jobs", job.id, job);
 
     await mgr.cancelJob("j-waiting");
-    const result = await Storage.get("jobs", "j-waiting");
-    expect(result).toBeNull();
+    const result = await Storage.get<OqronJob>("jobs", "j-waiting");
+    // Tombstone: job still exists with cancelled status for audit trail
+    expect(result).toBeDefined();
+    expect(result!.status).toBe("cancelled");
+    expect(result!.error).toBe("Cancelled via manager");
   });
 
   it("delegates to engine.cancelActiveJob for active jobs", async () => {
@@ -138,6 +141,8 @@ describe("OqronManager — cancelJob() with active jobs", () => {
       init: async () => {},
       start: async () => {},
       stop: async () => {},
+      enable: async () => {},
+      disable: async () => {},
       cancelActiveJob: vi.fn().mockResolvedValue(true),
     };
     OqronRegistry.getInstance().register(mockMod);
@@ -163,6 +168,8 @@ describe("OqronManager — cancelJob() with active jobs", () => {
       init: async () => {},
       start: async () => {},
       stop: async () => {},
+      enable: async () => {},
+      disable: async () => {},
       cancelActiveJob: vi.fn().mockResolvedValue(false),
     };
     OqronRegistry.getInstance().register(mockMod);
@@ -173,8 +180,10 @@ describe("OqronManager — cancelJob() with active jobs", () => {
     await mgr.cancelJob("j-orphan");
 
     expect(mockMod.cancelActiveJob).toHaveBeenCalledWith("j-orphan");
-    const result = await Storage.get("jobs", "j-orphan");
-    expect(result).toBeNull(); // Deleted via fallback
+    const result = await Storage.get<OqronJob>("jobs", "j-orphan");
+    // Tombstone: job still exists with cancelled status for audit trail
+    expect(result).toBeDefined();
+    expect(result!.status).toBe("cancelled");
   });
 
   it("cancelJob on nonexistent job doesn't throw", async () => {

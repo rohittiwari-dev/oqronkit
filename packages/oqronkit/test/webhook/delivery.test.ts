@@ -83,6 +83,27 @@ describe("Webhook Delivery Utility", () => {
       expect(result.headers["x-ratelimit-remaining"]).toBe("99");
     });
 
+    it("omits request body for GET delivery", async () => {
+      globalThis.fetch = vi
+        .fn()
+        .mockResolvedValue(mockFetchResponse(200, "OK"));
+
+      await deliverWebhook(
+        "http://example.com/webhook",
+        "GET",
+        {},
+        JSON.stringify({ should: "not-send" }),
+        5000,
+      );
+
+      expect(globalThis.fetch).toHaveBeenCalledWith(
+        "http://example.com/webhook",
+        expect.not.objectContaining({
+          body: expect.anything(),
+        }),
+      );
+    });
+
     it("should truncate response bodies exceeding maxBodyBytes", async () => {
       const largeBody = "x".repeat(200);
       globalThis.fetch = vi

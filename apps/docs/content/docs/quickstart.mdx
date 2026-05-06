@@ -1,0 +1,120 @@
+---
+title: Quick Start
+description: Build your first crash-safe background job in 2 minutes
+---
+
+# Quick Start
+
+This guide walks you through the three most common OqronKit patterns — a simple task queue, a distributed worker, and a cron schedule.
+
+## 1. Bootstrap OqronKit
+
+Before using any module, initialize OqronKit with the modules you need:
+
+```ts title="index.ts"
+import { OqronKit, cronModule, scheduleModule, queueModule, workerModule } from 'oqronkit'
+
+await OqronKit.init({
+  config: {
+    modules: [cronModule, scheduleModule, queueModule, workerModule],
+    logger: { prettify: true },
+  },
+})
+```
+
+OqronKit auto-discovers trigger files from `src/jobs/`, `src/triggers/`, `jobs/`, or `triggers/`. Place your queue/worker/cron definitions there and they'll be loaded automatically.
+
+## 2. Simple Task Queue
+
+The fastest way to get started. Publisher and consumer live in the same process.
+
+```ts title="jobs/email-queue.ts"
+import { queue } from 'oqronkit'
+
+const emailQueue = queue<{ to: string; body: string }>({
+  name: 'send-email',
+  handler: async (ctx) => {
+    console.log('Sending email to:', ctx.data.to)
+    await sendEmail(ctx.data.to, ctx.data.body)
+    return { sent: true }
+  },
+})
+
+// Enqueue a job
+await emailQueue.add({
+  to: 'user@example.com',
+  body: 'Welcome to OqronKit!',
+})
+```
+
+## 3. Distributed Worker
+
+For production — separate your API servers (senders) from your worker servers (processors).
+
+```ts title="jobs/billing.ts"
+import { queue, worker } from 'oqronkit'
+
+// Publisher-only queue (no handler) — lives on API nodes
+export const billingQueue = queue<{ userId: string; amount: number }>({
+  name: 'billing',
+})
+
+// Consumer-only worker — lives on worker nodes
+export const billingWorker = worker<{ userId: string; amount: number }>({
+  topic: 'billing',
+  handler: async (ctx) => {
+    await chargeBilling(ctx.data.userId, ctx.data.amount)
+    return { charged: true }
+  },
+})
+```
+
+```ts title="api-server.ts"
+// Push a job from your API route
+import { billingQueue } from './jobs/billing.js'
+
+app.post('/api/charge', async (req, res) => {
+  await billingQueue.add({ userId: req.body.userId, amount: 99 })
+  res.json({ status: 'queued' })
+})
+```
+
+## 4. Cron Schedule
+
+Run background jobs on a schedule.
+
+```ts title="jobs/crons.ts"
+import { cron } from 'oqronkit'
+
+const cleanup = cron({
+  name: 'daily-cleanup',
+  expression: '0 0 * * *', // Every day at midnight
+  timezone: 'America/New_York',
+  handler: async (ctx) => {
+    const deleted = await db.deleteOldRecords()
+    ctx.log('info', `Cleaned up ${deleted} records`)
+  },
+})
+```
+
+## 5. Express Integration
+
+Mount the OqronKit monitoring routes to your Express app:
+
+```ts
+import express from 'express'
+import { OqronKit } from 'oqronkit'
+
+const app = express()
+app.use('/api/oqron', OqronKit.expressRouter())
+app.listen(4000)
+```
+
+## What's Next?
+
+<Cards>
+  <Card title="Architecture" href="/docs/architecture" description="Understand the core design principles" />
+  <Card title="Task Queue" href="/docs/task-queue" description="Full task queue API reference" />
+  <Card title="Distributed Worker" href="/docs/distributed-worker" description="Crash-safe distributed processing" />
+  <Card title="Scheduler" href="/docs/scheduler" description="Cron, RRule, and dynamic schedules" />
+</Cards>

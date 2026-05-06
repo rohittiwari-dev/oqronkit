@@ -24,6 +24,25 @@ export interface WebhookEndpoint {
   retries?: WebhookRetryConfig;
   /** Optional disable flag (managed via DB at runtime too) */
   enabled?: boolean;
+
+  // ── Outbound Rate Limiting ──────────────────────────────────────────
+
+  /**
+   * Simple outbound rate limit. Engine auto-creates a sliding-window limiter.
+   * @example { max: 100, window: "1m" } — 100 deliveries per minute
+   */
+  rateLimit?: {
+    /** Maximum deliveries allowed per window. */
+    max: number;
+    /** Window duration string (e.g. '1m', '1h', '30s'). */
+    window: string;
+  };
+
+  /**
+   * Advanced: provide a pre-configured IRateLimiter instance.
+   * Takes precedence over `rateLimit` if both are set.
+   */
+  rateLimiter?: import("../ratelimit/types.js").IRateLimiter;
 }
 
 /** Endpoints can be a static array or a function that resolves them dynamically */
@@ -68,6 +87,8 @@ export interface WebhookDeliveryResult {
   headers: Record<string, string>;
   body: string | null;
   durationMs: number;
+  /** Parsed Retry-After delay in ms (from 429/503 responses) */
+  retryAfterMs?: number;
 }
 
 export interface WebhookDeliveryPayload<T = any> {
@@ -79,7 +100,6 @@ export interface WebhookDeliveryPayload<T = any> {
   headers: Record<string, string>;
   body: T;
   transformedBody?: any;
-  security?: WebhookSecurity;
   idempotencyKey: string;
   timestamp: number;
 }
@@ -87,6 +107,9 @@ export interface WebhookDeliveryPayload<T = any> {
 export interface WebhookConfig<T = any> {
   /** Unique name for this webhook dispatcher */
   name: string;
+
+  /** Config version for migration tracking. @default 0 */
+  version?: number;
 
   /** Endpoint definitions */
   endpoints: WebhookEndpointsInput;

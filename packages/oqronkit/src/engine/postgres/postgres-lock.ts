@@ -1,4 +1,5 @@
 import type { ILockAdapter } from "../types/engine.js";
+import { assertValidIdentifier, quoteIdentifier } from "./identifiers.js";
 
 /**
  * PostgreSQL distributed lock adapter using advisory locks and a locks table.
@@ -20,7 +21,8 @@ export class PostgresLock implements ILockAdapter {
   private initialized = false;
 
   constructor(connectionString: string, tablePrefix = "oqron", poolSize = 10) {
-    this.tableName = `${tablePrefix}_locks`;
+    const safePrefix = assertValidIdentifier(tablePrefix, "tablePrefix");
+    this.tableName = quoteIdentifier(`${safePrefix}_locks`, "lock table name");
     this._initPool(connectionString, poolSize);
   }
 

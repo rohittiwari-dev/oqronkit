@@ -1,4 +1,5 @@
 import type { BrokerStrategy, IBrokerEngine } from "../types/engine.js";
+import { assertValidIdentifier, quoteIdentifier } from "./identifiers.js";
 
 /**
  * PostgreSQL Broker using FOR UPDATE SKIP LOCKED for atomic job claiming.
@@ -18,10 +19,19 @@ import type { BrokerStrategy, IBrokerEngine } from "../types/engine.js";
 export class PostgresBroker implements IBrokerEngine {
   private pool: any;
   private tableName: string;
+  private claimIndexName: string;
   private initialized = false;
 
   constructor(connectionString: string, tablePrefix = "oqron", poolSize = 10) {
-    this.tableName = `${tablePrefix}_queue`;
+    const safePrefix = assertValidIdentifier(tablePrefix, "tablePrefix");
+    this.tableName = quoteIdentifier(
+      `${safePrefix}_queue`,
+      "broker table name",
+    );
+    this.claimIndexName = quoteIdentifier(
+      `idx_${safePrefix}_queue_claim`,
+      "broker index name",
+    );
     this._initPool(connectionString, poolSize);
   }
 
@@ -52,7 +62,7 @@ export class PostgresBroker implements IBrokerEngine {
 
     // Index for efficient claim queries
     await this.pool.query(`
-      CREATE INDEX IF NOT EXISTS idx_${this.tableName}_claim
+      CREATE INDEX IF NOT EXISTS ${this.claimIndexName}
       ON ${this.tableName} (broker_name, run_at)
       WHERE locked_by IS NULL
     `);
@@ -95,6 +105,8 @@ export class PostgresBroker implements IBrokerEngine {
     strategy: BrokerStrategy = "fifo",
   ): Promise<string[]> {
     await this.ensureTable();
+    if (await this.isPaused(brokerName)) return [];
+
     const lockUntil = new Date(Date.now() + lockTtlMs).toISOString();
     const now = new Date().toISOString();
 
@@ -117,6 +129,7 @@ export class PostgresBroker implements IBrokerEngine {
       `WITH candidates AS (
         SELECT id FROM ${this.tableName}
         WHERE broker_name = $1
+          AND id <> '__paused__'
           AND run_at <= $2::timestamptz
           AND (locked_by IS NULL OR locked_until < $2::timestamptz)
         ORDER BY ${orderBy}
@@ -138,16 +151,29 @@ export class PostgresBroker implements IBrokerEngine {
     id: string,
     consumerId: string,
     lockTtlMs: number,
+    brokerName?: string,
   ): Promise<void> {
     await this.ensureTable();
     const lockUntil = new Date(Date.now() + lockTtlMs).toISOString();
 
-    const result = await this.pool.query(
-      `UPDATE ${this.tableName}
-       SET locked_until = $1::timestamptz
-       WHERE id = $2 AND locked_by = $3`,
-      [lockUntil, id, consumerId],
-    );
+    const result = brokerName
+      ? await this.pool.query(
+          `UPDATE ${this.tableName}
+           SET locked_until = $1::timestamptz
+           WHERE broker_name = $2 AND id = $3 AND locked_by = $4`,
+          [lockUntil, brokerName, id, consumerId],
+        )
+      : await this.pool.query(
+          `UPDATE ${this.tableName}
+           SET locked_until = $1::timestamptz
+           WHERE id = $2
+             AND locked_by = $3
+             AND (
+               SELECT COUNT(*) FROM ${this.tableName}
+               WHERE id = $2 AND locked_by = $3
+             ) = 1`,
+          [lockUntil, id, consumerId],
+        );
 
     if (result.rowCount === 0) {
       throw new Error(`Lock lost or stolen for entity ${id}`);
@@ -162,7 +188,12 @@ export class PostgresBroker implements IBrokerEngine {
     );
   }
 
-  async nack(brokerName: string, id: string, delayMs?: number): Promise<void> {
+  async nack(
+    brokerName: string,
+    id: string,
+    delayMs?: number,
+    priority?: number,
+  ): Promise<void> {
     await this.ensureTable();
     const runAt =
       delayMs && delayMs > 0
@@ -171,9 +202,10 @@ export class PostgresBroker implements IBrokerEngine {
 
     await this.pool.query(
       `UPDATE ${this.tableName}
-       SET locked_by = NULL, locked_until = NULL, run_at = $1::timestamptz
+       SET locked_by = NULL, locked_until = NULL, run_at = $1::timestamptz,
+           priority = COALESCE($4, priority)
        WHERE broker_name = $2 AND id = $3`,
-      [runAt, brokerName, id],
+      [runAt, brokerName, id, priority],
     );
   }
 
@@ -194,6 +226,56 @@ export class PostgresBroker implements IBrokerEngine {
       `DELETE FROM ${this.tableName} WHERE broker_name = $1 AND id = '__paused__'`,
       [brokerName],
     );
+  }
+
+  private async isPaused(brokerName: string): Promise<boolean> {
+    const result = await this.pool.query(
+      `SELECT 1 FROM ${this.tableName}
+       WHERE broker_name = $1 AND id = '__paused__'
+       LIMIT 1`,
+      [brokerName],
+    );
+    return result.rows.length > 0;
+  }
+
+  /**
+   * Blocking claim for PostgreSQL.
+   * Since Postgres lacks a native blocking queue primitive (like Redis BLPOP),
+   * this simulates it with an optimized poll loop with sleep intervals.
+   */
+  async claimBlocking(
+    brokerName: string,
+    consumerId: string,
+    lockTtlMs: number,
+    timeoutMs: number,
+    strategy: BrokerStrategy = "fifo",
+  ): Promise<string | null> {
+    const start = Date.now();
+    const pollIntervalMs = 500; // 500ms sleep between checks
+
+    while (Date.now() - start < timeoutMs) {
+      const claimed = await this.claim(
+        brokerName,
+        consumerId,
+        1,
+        lockTtlMs,
+        strategy,
+      );
+      if (claimed.length > 0) return claimed[0];
+
+      // Sleep before next check
+      await new Promise((r) => setTimeout(r, pollIntervalMs));
+    }
+
+    // One final attempt before giving up
+    const finalClaim = await this.claim(
+      brokerName,
+      consumerId,
+      1,
+      lockTtlMs,
+      strategy,
+    );
+    return finalClaim.length > 0 ? finalClaim[0] : null;
   }
 
   async close(): Promise<void> {

@@ -9,6 +9,7 @@ import type {
 } from "../engine/index.js";
 import type { DisabledBehavior } from "../engine/types/config.types.js";
 import { cronParser } from "./cron-compat.js";
+import { everyToIntervalMs } from "./every-utils.js";
 
 import { _registerCron } from "./registry.js";
 
@@ -21,6 +22,7 @@ export type DefineCronOptions = CronScheduleConfig & {
   name: string;
   timezone?: string;
   missedFire?: MissedFirePolicy;
+  maxMissedRuns?: number;
   overlap?: OverlapPolicy;
   guaranteedWorker?: boolean;
   heartbeatMs?: number;
@@ -42,21 +44,17 @@ export type DefineCronOptions = CronScheduleConfig & {
    * @default "hold"
    */
   disabledBehavior?: DisabledBehavior;
+  /** Schema version — bump to trigger config migration while preserving operational state. */
+  version?: number;
+  /** Execution priority. Lower = fires first when multiple crons are due simultaneously. @default 0 */
+  priority?: number;
+  /** Random jitter (ms) added to nextRunAt to prevent thundering herd. @default 0 */
+  jitterMs?: number;
+  /** Optional rate limiter. If check() returns { allowed: false }, fire is skipped. */
+  rateLimiter?: { check(ctx: any): Promise<{ allowed: boolean }> };
 };
 
 // ── Helpers ─────────────────────────────────────────────────────────────────────
-
-function everyToIntervalMs(every: EveryConfig): number {
-  let ms = 0;
-  if (every.seconds) ms += every.seconds * 1_000;
-  if (every.minutes) ms += every.minutes * 60_000;
-  if (every.hours) ms += every.hours * 3_600_000;
-  if (ms <= 0)
-    throw new Error(
-      "[OqronKit] `every` config must resolve to a positive interval",
-    );
-  return ms;
-}
 
 // ── Factory ─────────────────────────────────────────────────────────────────────
 
@@ -99,6 +97,7 @@ export const cron = (options: DefineCronOptions): CronDefinition => {
     intervalMs,
     timezone: options.timezone,
     missedFire: options.missedFire ?? "skip",
+    maxMissedRuns: options.maxMissedRuns,
     overlap: options.overlap ?? "skip",
     guaranteedWorker: options.guaranteedWorker ?? false,
     heartbeatMs: options.heartbeatMs,
@@ -113,6 +112,10 @@ export const cron = (options: DefineCronOptions): CronDefinition => {
     maxConcurrent: options.maxConcurrent,
     status: options.status,
     disabledBehavior: options.disabledBehavior,
+    version: options.version,
+    priority: options.priority,
+    jitterMs: options.jitterMs,
+    rateLimiter: options.rateLimiter,
   };
 
   // Auto-register: no need for manual array wiring

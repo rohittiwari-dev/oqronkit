@@ -1,0 +1,90 @@
+---
+title: Changelog
+description: Release notes and version history for OqronKit
+icon: History
+---
+
+# Changelog
+
+All notable changes to OqronKit are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and [Semantic Versioning](https://semver.org/).
+
+---
+
+## v0.0.2 — 2026-05-06
+
+**Hardening release** — 19 crash-safety, consistency, and correctness fixes across Queue, Worker, Webhook, Scheduler, and Manager engines.
+
+### Execution Ownership
+
+| Fix | Impact |
+|-----|--------|
+| Container `claimBlocking` forwarding | Prevents CPU-burning polling when broker supports blocking claims |
+| Stall handler cleanup | Zombie jobs no longer consume permanent concurrency slots |
+| Worker stall filter | Jobs with failed lock renewals are now properly recovered |
+| Batch cancellation check | Cancelled batch jobs can no longer race to "completed" status |
+
+### Stuck Job Prevention
+
+| Fix | Impact |
+|-----|--------|
+| Webhook held-job release | `resumeDispatcher()` now releases `"hold"` jobs accumulated while paused |
+| Queue resume dependency check | Held jobs with unmet `dependsOn` deps route to `"waiting-children"`, not `"waiting"` |
+| Manager loop safety cap | Held-job release loop capped at 2000 jobs to prevent infinite loops |
+| Retry/rerun priority passthrough | `retryJob()` and `rerunJob()` preserve `opts.priority` through to the broker |
+
+### Correctness & Consistency
+
+| Fix | Impact |
+|-----|--------|
+| Retry `runAt` timestamp | Delayed retries now set `job.runAt` — visible in dashboards and reconciliation |
+| Default priority persistence | Queue-level `config.priority` is persisted on `job.opts.priority` at creation time |
+| Cancel writes tombstone | `cancelJob()` writes a `"cancelled"` status instead of deleting — full audit trail |
+| Schedule `run-all` missed fire | `missedFire: "run-all"` now enumerates **all** missed occurrences, not just one |
+| Cron type stamp | Prevents namespace corruption in multi-module manager lookups |
+
+### Hardening & Polish
+
+- **`logger: false`** now correctly disables all logging (was inverted)
+- **`stop()` timeout** no longer leaks — handle is `.unref()`'d and cleared
+- **Signal handler binding** — `SIGINT`/`SIGTERM` handlers now bind correctly
+- **Webhook cancel aborts HTTP** — cancellation immediately aborts in-flight delivery requests
+- **MemoryStore falsey values** — `get()` correctly returns `0`, `false`, `""` instead of `null`
+- **MemoryBroker `extendLock`** — O(1) direct lookup instead of O(n) scan
+- **Redis `claimBlocking` pause re-check** — items returned during pause are pushed back
+- **UI auth validation** — partial auth config (only username or only password) is now rejected
+- **Webhook resend** — clears `runAt` and `opts.delay` for immediate re-dispatch
+
+### Test Suite
+
+- **741 tests passing** across 83 test files
+- Updated cancel tests to assert tombstone pattern
+- Updated webhook tests for new abort signal parameter
+- Fixed mock `IOqronModule` implementations with `enable`/`disable` stubs
+
+---
+
+## v0.0.1 — 2026-03-30
+
+### Initial Release
+
+OqronKit launches with 12 enterprise modules for background computation:
+
+- **Task Queue** — Unified monolithic queue
+- **Distributed Worker** — Decoupled publisher/consumer architecture
+- **Scheduler** — Cron expressions, intervals, recurring schedules, and RRule support
+- **Rate Limiter** — Sliding-window and token-bucket algorithms
+- **Webhook** — Fan-out dispatch with HMAC signing and circuit breakers
+- **Batch** — Accumulator buffering with `maxSize` / `maxWaitMs`
+- **Workflow (DAG)** — Complex dependency grids with `dependsOn`
+- **Saga** — Distributed transactions with compensation chains
+- **Pipeline** — Streaming ETL with backpressure
+- **PubSub** — Durable topics and fan-out consumer groups
+- **Cache** — Stampede-protected hierarchical memory tiers
+- **Ingest** — Event-driven step functions (`step.run`, `step.sleep`, `step.invoke`)
+
+**Infrastructure:**
+- Adapter-driven architecture (Memory, Redis, Postgres)
+- Crash-safe execution via heartbeat locks and stall detection
+- Built-in Admin UI dashboard with basic auth
+- Graceful shutdown with drain timeout
+- AbortController-based job cancellation

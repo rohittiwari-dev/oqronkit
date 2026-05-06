@@ -1,14 +1,17 @@
 /**
  * ═══════════════════════════════════════════════════════════════════════════════
- *  OqronKit — Task Queue Examples
+ *  OqronKit — Task Queue Examples (Monolithic)
  *  Real-world production examples showcasing the queue() monolithic API.
  * ═══════════════════════════════════════════════════════════════════════════════
  *
- *  queue vs. Queue/Worker:
- *  • queue()   → Monolithic — publisher and consumer live in the SAME process.
- *                     Best for single-server apps, background jobs, API-triggered tasks.
- *  • Queue/Worker  → Distributed — publisher and consumer live in SEPARATE processes.
- *                     Best for microservices, horizontal scaling, dedicated worker pods.
+ *  queue() with a Handler vs. Decoupled Publisher/Worker:
+ *
+ *  • Monolithic `queue({ handler })` → Both publication AND consumption
+ *      happen inside the identical process. Excellent for monolithic MVPs,
+ *      background workers inside simple Express apps, and fast prototypes.
+ *
+ *  • Distributed: Check out `distributed-workers.ts` to see how you split
+ *      publication (ingress API) and execution (heavy workers) apart.
  *
  *  Features demonstrated:
  *  ✓ Typed input/output generics
