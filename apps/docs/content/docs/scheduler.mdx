@@ -221,6 +221,18 @@ await onboardingEmail.schedule({
 | `condition` | `(ctx) => boolean` | Conditional execution (schedule only) |
 | `maxConcurrent` | `number` | Max parallel runs |
 
+### Missed Fire Policies
+
+When a scheduled fire is missed (e.g. server was down during the scheduled time), the `missedFire` option controls recovery:
+
+| Policy | Behavior |
+|--------|----------|
+| `'skip'` | Ignore missed fires entirely |
+| `'run-once'` | Fire once for the most recent missed occurrence |
+| `'run-all'` | Fire once for **each** missed occurrence (capped by `maxMissedRuns`, default: 100) |
+
+> **v0.0.2:** `missedFire: "run-all"` now correctly enumerates all missed occurrences using `MissedFireHandler`. In v0.0.1, it only fired once regardless of how many ticks were missed.
+
 ## Next Steps
 
 - [Rate Limiter](/docs/rate-limiter) — Protect schedules with rate limits

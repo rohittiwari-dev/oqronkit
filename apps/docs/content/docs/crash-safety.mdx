@@ -127,6 +127,8 @@ When `SIGINT` or `SIGTERM` is received, OqronKit:
 await OqronKit.stop()
 ```
 
+> **v0.0.2:** The shutdown timeout handle is now properly `.unref()`'d and cleaned up, preventing Node.js from hanging after stop. Signal handlers bind correctly to `OqronKit.stop()` — a `this`-binding issue in v0.0.1 has been resolved.
+
 ## AbortController Support
 
 Active jobs can be cancelled mid-execution:
@@ -148,6 +150,18 @@ handler: async (ctx) => {
     ctx.progress((i / chunks.length) * 100)
   }
 }
+```
+
+> **v0.0.2:** Webhook HTTP delivery now receives the abort signal. Calling `cancelJob()` on an active webhook delivery immediately aborts the in-flight HTTP request — no more waiting for the full timeout.
+
+### Cancel Behavior
+
+`cancelJob()` writes a `"cancelled"` tombstone to storage instead of deleting the job record. This preserves the full audit trail (timeline, error, `finishedAt`). The retention system handles eventual cleanup.
+
+```ts
+await mgr.cancelJob('job-id')
+// Job still exists with status: "cancelled"
+// Visible in dashboard and queryable via getJob()
 ```
 
 ## Idempotency

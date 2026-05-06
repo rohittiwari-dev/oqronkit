@@ -21,6 +21,7 @@
     "ingest",
     "---Infrastructure---",
     "adapters",
-    "crash-safety"
+    "crash-safety",
+    "changelog"
   ]
 }

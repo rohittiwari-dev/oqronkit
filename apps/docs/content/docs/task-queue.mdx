@@ -87,6 +87,8 @@ await videoQueue.add({ url: 'https://...' })
 | `priority` | `number` | `0` | Default job priority |
 | `disabledBehavior` | `'hold' \| 'reject' \| 'skip'` | `'hold'` | Action when queue is disabled |
 
+> **v0.0.2:** The queue-level `priority` is now persisted on `job.opts.priority` at creation time. This ensures retries, stall recovery, and rerun operations preserve the original priority through the full job lifecycle.
+
 ## Retry & Dead Letter Queue
 
 ```ts
@@ -127,6 +129,8 @@ export const pdfQueue = queue<PdfInput, PdfOutput>({
   },
 })
 ```
+
+> **v0.0.2:** When a job is delayed for retry, `job.runAt` is now set to the scheduled retry time. This makes retry schedules visible in the dashboard, queryable via `getJob()`, and correctly handled by the reconciliation engine.
 
 ## Handler Context (`ctx`)
 

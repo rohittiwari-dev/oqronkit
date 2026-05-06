@@ -43,6 +43,34 @@ await OqronKit.init({
 })
 ```
 
+### Logger Configuration
+
+```ts
+// Pretty logging for development
+logger: { prettify: true }
+
+// Disable logging entirely
+logger: false
+
+// Custom log level
+logger: { level: 'warn' }
+```
+
+### Admin UI Authentication
+
+If you enable the built-in dashboard, configure auth with **both** username and password:
+
+```ts
+ui: {
+  auth: {
+    username: process.env.ADMIN_USER,
+    password: process.env.ADMIN_PASS,
+  }
+}
+```
+
+> Partial auth (only username or only password) is rejected at startup via Zod validation.
+
 ## Module Selection
 
 Only register the modules your application needs:

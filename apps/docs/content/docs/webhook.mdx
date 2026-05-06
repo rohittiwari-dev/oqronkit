@@ -90,6 +90,10 @@ await resumeWebhook('webhook-id')
 await resendWebhook('delivery-id')
 ```
 
+> **v0.0.2 improvements:**
+> - **Abort signal support** — Cancelling an active webhook job via `cancelJob()` now immediately aborts the in-flight HTTP request, rather than waiting for the full timeout.
+> - **Resend clears delay** — `resendWebhook()` now clears `runAt` and `opts.delay` on the cloned job, ensuring immediate re-dispatch instead of inheriting the original schedule.
+
 ## Signature Verification
 
 ```ts
