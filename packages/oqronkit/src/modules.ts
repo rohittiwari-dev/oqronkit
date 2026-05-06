@@ -13,7 +13,8 @@ export type OqronModuleName =
   | "queue"
   | "worker"
   | "webhook"
-  | "ratelimit";
+  | "ratelimit"
+  | "batch";
 
 // ── Per-Module Config Interfaces (user-facing, all optional) ────────────────
 
@@ -305,7 +306,8 @@ export type OqronModuleDef =
   | QueueModuleDef
   | WorkerModuleDef
   | WebhookModuleDef
-  | RateLimitModuleDef;
+  | RateLimitModuleDef
+  | BatchModuleDef;
 
 // ── Flexible Input Type ─────────────────────────────────────────────────────
 // Users can pass any of these forms inside the `modules` array:
@@ -379,6 +381,7 @@ const STRING_TO_DEF: Record<OqronModuleName, () => OqronModuleDef> = {
   worker: () => ({ module: "worker" }),
   webhook: () => ({ module: "webhook" }),
   ratelimit: () => ({ module: "ratelimit" }),
+  batch: () => ({ module: "batch" }),
 };
 
 export interface RateLimitModuleConfig {
@@ -408,6 +411,46 @@ export function rateLimitModule(
   config?: RateLimitModuleConfig,
 ): RateLimitModuleDef {
   return { module: "ratelimit", ...config };
+}
+
+// ── Batch Module Config ─────────────────────────────────────────────────────
+
+export interface BatchModuleConfig {
+  /** Buffer check frequency in ms. @default 1000 */
+  tickIntervalMs?: number;
+  /** Default max parallel batch jobs. @default 1 */
+  concurrency?: number;
+  /** Heartbeat renewal interval in ms. @default 5000 */
+  heartbeatMs?: number;
+  /** Lock TTL for crash recovery in ms. @default 30000 */
+  lockTtlMs?: number;
+  /** Only leader flushes in cluster. @default true */
+  leaderElection?: boolean;
+  /** Graceful shutdown drain timeout in ms. @default 25000 */
+  shutdownTimeout?: number;
+  /** Behavior when a disabled batch receives items */
+  disabledBehavior?: DisabledBehavior;
+  /** Max held jobs when disabled */
+  maxHeldJobs?: number;
+  /** Lag monitor thresholds */
+  lagMonitor?: { maxLagMs?: number; sampleIntervalMs?: number };
+  /** Default auto-remove completed batch jobs */
+  removeOnComplete?: RemoveOnConfig;
+  /** Default auto-remove failed batch jobs */
+  removeOnFail?: RemoveOnConfig;
+}
+
+export type BatchModuleDef = { module: "batch" } & BatchModuleConfig;
+
+/**
+ * Create a Batch module configuration.
+ *
+ * @example
+ * modules: [batchModule()]
+ * modules: [batchModule({ tickIntervalMs: 500, leaderElection: true })]
+ */
+export function batchModule(config?: BatchModuleConfig): BatchModuleDef {
+  return { module: "batch", ...config };
 }
 
 export function workerModule(config?: WorkerModuleConfig): WorkerModuleDef {

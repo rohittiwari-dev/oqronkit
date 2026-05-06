@@ -1,5 +1,6 @@
 import { z } from "zod";
 import type {
+  BatchModuleDef,
   CronModuleDef,
   OqronModuleDef,
   QueueModuleDef,
@@ -179,6 +180,8 @@ export function applyModuleDefaults(def: OqronModuleDef): OqronModuleDef {
       return applyWebhookDefaults(def as WebhookModuleDef);
     case "ratelimit":
       return applyRateLimitDefaults(def as RateLimitModuleDef);
+    case "batch":
+      return applyBatchDefaults(def as BatchModuleDef);
     default:
       return def;
   }
@@ -257,6 +260,28 @@ function applyRateLimitDefaults(def: RateLimitModuleDef): RateLimitModuleDef {
     ...DEFAULT_RATELIMIT,
     ...def,
     module: "ratelimit",
+  };
+}
+
+// ── Batch Defaults ──────────────────────────────────────────────────────────
+
+const DEFAULT_BATCH: Required<Omit<BatchModuleDef, "module" | "lagMonitor" | "disabledBehavior" | "maxHeldJobs" | "removeOnComplete" | "removeOnFail">> & {
+  module: "batch";
+} = {
+  module: "batch",
+  tickIntervalMs: 1_000,
+  concurrency: 1,
+  heartbeatMs: 5_000,
+  lockTtlMs: 30_000,
+  leaderElection: true,
+  shutdownTimeout: 25_000,
+};
+
+function applyBatchDefaults(def: BatchModuleDef): BatchModuleDef {
+  return {
+    ...DEFAULT_BATCH,
+    ...def,
+    module: "batch",
   };
 }
 

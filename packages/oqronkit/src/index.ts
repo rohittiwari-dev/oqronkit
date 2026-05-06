@@ -12,6 +12,7 @@ import {
   type ValidatedConfig,
 } from "./engine/index.js";
 import {
+  type BatchModuleDef,
   type CronModuleDef,
   getModuleConfig,
   type QueueModuleDef,
@@ -101,6 +102,9 @@ export {
   type QueueMetrics,
 } from "./manager/oqron-manager.js";
 export {
+  type BatchModuleConfig,
+  type BatchModuleDef,
+  batchModule,
   type CronModuleConfig,
   type CronModuleDef,
   cronModule,
@@ -125,6 +129,15 @@ export {
   webhookModule,
   workerModule,
 } from "./modules.js";
+// ── Batch Module ────────────────────────────────────────────────────────────
+export { batch } from "./batch/define-batch.js";
+export { applyGlobalTags as applyGlobalBatchTags } from "./batch/registry.js";
+export type {
+  BatchConfig,
+  BatchJobContext,
+  BatchPayload,
+  IBatch,
+} from "./batch/types.js";
 export { queue } from "./queue/define-queue.js";
 export {
   type QueueMetricEntry,
@@ -393,6 +406,13 @@ export const OqronKit = {
       );
       const rlModule = new RateLimitModule(_config, _logger!, ratelimitConf);
       OqronRegistry.getInstance().register(rlModule);
+    }
+
+    const batchConf = getModuleConfig<BatchModuleDef>(_config.modules, "batch");
+    if (batchConf) {
+      const { BatchEngine } = await import("./batch/batch-engine.js");
+      const engine = new BatchEngine(_config, _logger!, batchConf);
+      OqronRegistry.getInstance().register(engine);
     }
 
     const registry = OqronRegistry.getInstance();
