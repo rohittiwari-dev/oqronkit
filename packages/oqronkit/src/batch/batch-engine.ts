@@ -381,6 +381,9 @@ export class BatchEngine implements IOqronModule {
     // Create the batch job
     await this.createBatchJob(def, groupKey, items);
 
+    // Record the flush in the throttle gate
+    if (gate) gate.record(1);
+
     // Clear the buffer
     await this.di.storage.delete("batch_buffers", storageKey);
   }

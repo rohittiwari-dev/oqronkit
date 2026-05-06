@@ -418,6 +418,98 @@ app.post('/api/orders', async (req, res) => {
 
 ---
 
+## Batch: Analytics Event Flushing
+
+Buffer individual events and bulk-insert on flush:
+
+```ts title="triggers/analytics-batch.ts"
+import { batch } from 'oqronkit'
+
+interface AnalyticsEvent {
+  event: string
+  userId: string
+  properties: Record<string, unknown>
+  timestamp: number
+}
+
+export const analyticsBatch = batch<AnalyticsEvent>({
+  name: 'analytics-flush',
+  maxSize: 500,           // Flush every 500 events
+  maxWaitMs: 10_000,      // Or every 10 seconds
+
+  handler: async (ctx) => {
+    ctx.log('info', `Flushing ${ctx.batchSize} analytics events`)
+    ctx.progress(10, 'Preparing insert')
+
+    await db.analyticsEvents.insertMany(ctx.batch)
+
+    ctx.progress(100, 'Inserted')
+    return { flushed: ctx.batchSize }
+  },
+})
+
+// Usage in API routes:
+app.post('/api/track', async (req, res) => {
+  await analyticsBatch.add({
+    event: req.body.event,
+    userId: req.user.id,
+    properties: req.body.properties,
+    timestamp: Date.now(),
+  })
+  res.json({ ok: true }) // Returns instantly — item is buffered
+})
+```
+
+---
+
+## Batch: Multi-Tenant Log Aggregation
+
+Use `groupBy` to isolate buffers per tenant:
+
+```ts title="triggers/log-batch.ts"
+import { batch } from 'oqronkit'
+
+interface LogEntry {
+  tenantId: string
+  level: 'info' | 'warn' | 'error'
+  message: string
+  meta?: Record<string, unknown>
+}
+
+export const logBatch = batch<LogEntry>({
+  name: 'tenant-logs',
+  maxSize: 200,
+  maxWaitMs: 5_000,
+
+  // Each tenant gets its own buffer → separate flush per tenant
+  groupBy: (item) => item.tenantId,
+
+  // Retry + DLQ for critical log delivery
+  retries: { max: 3, strategy: 'exponential', baseDelay: 2_000 },
+  deadLetter: {
+    enabled: true,
+    onDead: async (job) => {
+      await alertOps(`Tenant ${job.data.groupKey} log flush permanently failed`)
+    },
+  },
+
+  handler: async (ctx) => {
+    // ctx.groupKey = "acme" or "globex"
+    // ctx.batch = only logs for this tenant
+    await TenantLogStore.bulkInsert(ctx.groupKey!, ctx.batch)
+    return { tenant: ctx.groupKey, flushed: ctx.batchSize }
+  },
+})
+
+// All logs go to the same batch — groupBy separates them
+await logBatch.add({ tenantId: 'acme', level: 'info', message: 'User login' })
+await logBatch.add({ tenantId: 'globex', level: 'error', message: 'DB timeout' })
+await logBatch.add({ tenantId: 'acme', level: 'warn', message: 'Slow query' })
+// acme buffer: 2 items, globex buffer: 1 item
+```
+
+---
+
 ## Rate Limiting: Cron with External API
 
 ```ts title="triggers/inventory-sync.ts"
