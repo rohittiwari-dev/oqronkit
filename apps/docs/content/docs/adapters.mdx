@@ -1,63 +1,269 @@
 ---
 title: Adapters
-description: Storage, Broker, and Lock adapter configuration
+description: Storage, Broker, and Lock adapter architecture — built-in and custom
 icon: Database
 ---
 
 # Adapters
 
-OqronKit's adapter system provides swappable persistence backends. The same job definitions work identically across in-memory, Redis, and PostgreSQL — zero code changes needed.
+OqronKit's adapter system provides **swappable persistence backends**. The same job definitions work identically across in-memory, Redis, and PostgreSQL — zero code changes required. Need RabbitMQ for your broker? DynamoDB for storage? Implement the interface, plug it in.
 
 ## Three Adapter Interfaces
 
-| Interface | Responsibility | Methods |
-|-----------|---------------|---------|
-| `IStorageEngine` | Job records, schedules, history | `save`, `get`, `list`, `delete`, `count` |
-| `IBrokerEngine` | Job signaling, queue transport | `publish`, `claim`, `ack`, `nack`, `pause`, `resume` |
-| `ILockAdapter` | Distributed locking | `acquire`, `release`, `renew`, `isLocked` |
+Every OqronKit deployment requires exactly three adapters:
 
-## In-Memory (Development)
+| Interface | Responsibility | Core Methods |
+|-----------|---------------|-------------|
+| `IStorageEngine` | Job records, schedules, history, buffers | `save`, `get`, `list`, `delete`, `count`, `prune` |
+| `IBrokerEngine` | Job signaling, queue transport, claim/ack | `publish`, `claim`, `ack`, `nack`, `pause`, `resume` |
+| `ILockAdapter` | Distributed mutual exclusion, leader election | `acquire`, `release`, `renew`, `isOwner` |
+
+## Storage Modes
+
+Use the `mode` config to select which adapter combination to use:
+
+| Mode | Storage | Broker | Lock | Requires |
+|------|---------|--------|------|----------|
+| `"default"` | Memory | Memory | Memory | Nothing |
+| `"redis"` | Redis | Redis | Redis | `redis` config |
+| `"db"` | PostgreSQL | PostgreSQL | PostgreSQL | `postgres` config |
+| `"hybrid-db"` | PostgreSQL | Redis | Redis | Both configs |
+| `"custom"` | Your choice | Your choice | Your choice | `adapters` config |
+
+### In-Memory (Development)
 
 Zero-dependency. Ships built-in. Perfect for local development and testing.
 
 ```ts
 await OqronKit.init({
   config: {
-    modules: [queueModule, cronModule],
-    // In-memory is the default — no adapter config needed
+    // mode: 'default' is implicit — no adapter config needed
+    modules: [queueModule(), cronModule()],
   },
 })
 ```
 
-## Redis (Production)
+### Redis (Production)
 
-High-throughput adapter for distributed deployments using Redis Sorted Sets for the broker and Redlock for distributed locking.
+High-throughput adapter using Redis Sorted Sets for the broker and Redlock-style distributed locking.
 
-## PostgreSQL (Production)
+```ts
+await OqronKit.init({
+  config: {
+    mode: 'redis',
+    redis: 'redis://localhost:6379',
+    modules: [queueModule(), cronModule()],
+  },
+})
+```
 
-ACID-compliant adapter using JSONB+GIN indexes for storage and PostgreSQL Advisory Locks.
+### PostgreSQL (Production)
+
+ACID-compliant adapter using JSONB + GIN indexes for storage and PostgreSQL Advisory Locks.
+
+```ts
+await OqronKit.init({
+  config: {
+    mode: 'db',
+    postgres: {
+      connectionString: 'postgresql://user:pass@localhost:5432/mydb',
+      tablePrefix: 'oqron',  // optional, default: "oqron"
+      poolSize: 10,           // optional, default: 10
+    },
+    modules: [queueModule(), cronModule()],
+  },
+})
+```
+
+### Hybrid (PG + Redis)
+
+PostgreSQL for durable storage, Redis for fast broker + lock. Best of both worlds.
+
+```ts
+await OqronKit.init({
+  config: {
+    mode: 'hybrid-db',
+    postgres: { connectionString: 'postgresql://...' },
+    redis: 'redis://localhost:6379',
+    modules: [queueModule(), cronModule()],
+  },
+})
+```
 
 ## Custom Adapters
 
-Implement the adapter interfaces to plug in any backend:
+Use `mode: "custom"` to plug in your own adapter implementations.
+
+### Using Adapter Factory Functions
+
+OqronKit provides factory functions to create individual adapters. Mix built-in adapters with your own:
 
 ```ts
-import { OqronContainer } from 'oqronkit'
+import {
+  OqronKit,
+  createStorageAdapter,
+  createBrokerAdapter,
+  createLockAdapter,
+} from 'oqronkit'
 
-const container = new OqronContainer(
-  myCustomStorage,  // IStorageEngine
-  myCustomBroker,   // IBrokerEngine
-  myCustomLock,     // ILockAdapter
-)
+// Create individual adapters — mix and match freely
+const storage = await createStorageAdapter({
+  type: 'postgres',
+  postgres: { connectionString: 'postgresql://...' },
+})
+
+const lock = await createLockAdapter({
+  type: 'redis',
+  redis: 'redis://localhost:6379',
+})
+
+await OqronKit.init({
+  config: {
+    mode: 'custom',
+    adapters: {
+      storage,                        // PostgreSQL
+      broker: new MyRabbitBroker(),    // Your custom RabbitMQ adapter
+      lock,                           // Redis
+    },
+    modules: [queueModule(), cronModule()],
+  },
+})
 ```
 
-## Global Singleton vs Multi-Instance
+### Using createAdapters (All at Once)
+
+Create all three adapters from a single config:
 
 ```ts
-// Global singleton (default):
-await OqronKit.init({ config: { /* ... */ } })
-const di = OqronContainer.get()
+import { OqronKit, createAdapters } from 'oqronkit'
 
-// Multi-instance (advanced — isolated adapters):
-const container = new OqronContainer(myStore, myBroker, myLock)
+const adapters = await createAdapters({
+  mode: 'redis',
+  redis: 'redis://localhost:6379',
+})
+
+await OqronKit.init({
+  config: {
+    mode: 'custom',
+    adapters,
+    modules: [queueModule(), cronModule()],
+  },
+})
+
+// Later, on shutdown:
+await adapters.close()
+```
+
+### Implementing a Custom Adapter
+
+Implement the interface and pass it directly:
+
+```ts
+import type { IBrokerEngine, BrokerStrategy } from 'oqronkit'
+
+class RabbitMQBroker implements IBrokerEngine {
+  async publish(queue: string, jobId: string, delay?: number): Promise<void> {
+    // Publish to RabbitMQ exchange
+    await this.channel.sendToQueue(queue, Buffer.from(jobId), {
+      headers: delay ? { 'x-delay': delay } : undefined,
+    })
+  }
+
+  async claim(
+    queue: string,
+    consumerId: string,
+    limit: number,
+    lockTtlMs: number,
+    strategy?: BrokerStrategy,
+  ): Promise<string[]> {
+    // Consume from RabbitMQ queue
+    const messages = await this.channel.get(queue, { noAck: false })
+    // ... return job IDs
+  }
+
+  async ack(queue: string, jobId: string): Promise<void> {
+    // Acknowledge message
+  }
+
+  async nack(queue: string, jobId: string, delay?: number): Promise<void> {
+    // Reject + requeue with delay
+  }
+
+  async pause(queue: string): Promise<void> { /* ... */ }
+  async resume(queue: string): Promise<void> { /* ... */ }
+  async extendLock(
+    jobId: string,
+    consumerId: string,
+    ttlMs: number,
+    queue?: string,
+  ): Promise<boolean> { /* ... */ }
+}
+```
+
+## Adapter Factory Reference
+
+### `createStorageAdapter(options)`
+
+| Option | Type | Values |
+|--------|------|--------|
+| `type` | `string` | `"memory"`, `"postgres"`, `"redis"` |
+| `postgres` | `PostgresAdapterConfig` | Required when `type: "postgres"` |
+| `redis` | `RedisLike` | Required when `type: "redis"` |
+
+### `createBrokerAdapter(options)`
+
+| Option | Type | Values |
+|--------|------|--------|
+| `type` | `string` | `"memory"`, `"postgres"`, `"redis"` |
+| `postgres` | `PostgresAdapterConfig` | Required when `type: "postgres"` |
+| `redis` | `RedisLike` | Required when `type: "redis"` |
+
+### `createLockAdapter(options)`
+
+| Option | Type | Values |
+|--------|------|--------|
+| `type` | `string` | `"memory"`, `"postgres"`, `"redis"` |
+| `postgres` | `PostgresAdapterConfig` | Required when `type: "postgres"` |
+| `redis` | `RedisLike` | Required when `type: "redis"` |
+
+### `createAdapters(options)`
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `mode` | `string` | `"default"`, `"redis"`, `"db"`, `"hybrid-db"`, `"custom"` |
+| Returns | `OqronAdapters` | `{ storage, broker, lock, close() }` |
+
+## Environment Isolation
+
+All adapters are automatically wrapped with **namespace isolation** based on `project` and `environment`:
+
+```
+oqron:{project}:{environment}:{namespace}:{id}
+```
+
+This means:
+- A `"production"` worker **never** touches `"development"` data
+- Multiple projects on the same Redis/Postgres instance **never** collide
+- You don't need separate databases per environment
+
+```ts
+// Project A, production
+await OqronKit.init({
+  config: {
+    mode: 'redis',
+    redis: 'redis://shared-redis:6379',
+    project: 'billing',
+    environment: 'production',
+  },
+})
+
+// Project B, staging — same Redis, fully isolated
+await OqronKit.init({
+  config: {
+    mode: 'redis',
+    redis: 'redis://shared-redis:6379',
+    project: 'notifications',
+    environment: 'staging',
+  },
+})
 ```

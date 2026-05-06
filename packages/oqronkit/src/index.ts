@@ -36,6 +36,22 @@ function removeSignalHandlers(): void {
 }
 
 export type {
+  BrokerAdapterOptions,
+  CreateAdaptersOptions,
+  LockAdapterOptions,
+  OqronAdapters,
+  PostgresAdapterConfig,
+  RedisAdapterConfig,
+  StorageAdapterOptions,
+} from "./engine/adapter-factory.js";
+// ── Adapter Factories ───────────────────────────────────────────────────────
+export {
+  createAdapters,
+  createBrokerAdapter,
+  createLockAdapter,
+  createStorageAdapter,
+} from "./engine/adapter-factory.js";
+export type {
   ClusteringConfig,
   CronDefinition,
   CronHooks,
@@ -57,15 +73,26 @@ export type {
   ScheduleHooks,
   ScheduleRecurring,
 } from "./engine/index.js";
+
 // ── Re-exports: single source of truth for ALL user-facing APIs ─────────────
 export {
   createLogger,
-  DependencyResolver,
   defineConfig,
-  OqronContainer,
   OqronEventBus,
 } from "./engine/index.js";
 export { ShardedLeaderElection } from "./engine/lock/index.js";
+export type { OqronStorageMode } from "./engine/types/config.types.js";
+// ── Adapter Interfaces (for custom adapter implementations) ──────────────────
+export type {
+  BrokerStrategy,
+  IBrokerEngine,
+  ICloseable,
+  ILockAdapter,
+  IStorageEngine,
+  ListOptions,
+  WhereCondition,
+  WhereOp,
+} from "./engine/types/engine.js";
 export {
   type JobHistoryResult,
   type ModuleInfo,

@@ -267,7 +267,9 @@ export const OqronConfigSchema = z.object({
   environment: z.string().default("development"),
 
   // Storage mode
-  mode: z.enum(["default", "db", "redis", "hybrid-db"]).default("default"),
+  mode: z
+    .enum(["default", "db", "redis", "hybrid-db", "custom"])
+    .default("default"),
 
   // Infrastructure
   redis: z.any().optional(),
@@ -383,4 +385,10 @@ export type ValidatedConfig = Omit<
 > & {
   /** Normalized and default-merged module definitions */
   modules: OqronModuleDef[];
+  /** Custom adapter implementations (passthrough — not Zod-validated) */
+  adapters?: {
+    storage: import("../types/engine.js").IStorageEngine;
+    broker: import("../types/engine.js").IBrokerEngine;
+    lock: import("../types/engine.js").ILockAdapter;
+  };
 };

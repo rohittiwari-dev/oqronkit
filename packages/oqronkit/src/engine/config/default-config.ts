@@ -29,6 +29,7 @@ export function reconfigureConfig(config: OqronConfig): ValidatedConfig {
     mode: validated.mode ?? "default",
 
     redis: validated.redis,
+    adapters: config.adapters,
 
     modules,
 
