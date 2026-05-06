@@ -264,7 +264,7 @@ export const OqronKit = {
     _config = reconfigureConfig(opts?.config ?? (await loadConfig(cwd)));
 
     const loggerConfig =
-      _config.logger === false ? { enabled: true } : _config.logger;
+      _config.logger === false ? { enabled: false } : _config.logger;
 
     _logger = createLogger(loggerConfig, { module: "oqronkit" });
 
@@ -279,7 +279,7 @@ export const OqronKit = {
       for (const signal of _config.shutdown.signals) {
         const handler = () => {
           _logger?.info(`${signal} received — initiating graceful shutdown…`);
-          void this.stop().then(() => process.exit(0));
+          void OqronKit.stop().then(() => process.exit(0));
         };
         process.on(signal as NodeJS.Signals, handler);
         _signalHandlers.push({ signal, handler });
@@ -397,14 +397,17 @@ export const OqronKit = {
         .filter((m) => m.enabled)
         .map((m) => m.stop()),
     );
-    const timeoutPromise = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error("Timeout")), timeoutMs),
-    );
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    const timeoutPromise = new Promise((_, reject) => {
+      timeoutHandle = setTimeout(() => reject(new Error("Timeout")), timeoutMs);
+      timeoutHandle.unref();
+    });
     try {
       await Promise.race([stopPromise, timeoutPromise]);
     } catch (err) {
       log.error("Error during stop", { error: String(err) });
     } finally {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
       TelemetryManager.getInstance().stop();
       await stopEngine().catch((err) =>
         log.error("Error stopping engine", { error: String(err) }),

@@ -29,7 +29,7 @@ export class MemoryStore implements IStorageEngine {
   async get<T>(namespace: string, id: string): Promise<T | null> {
     const map = this.getNamespaceMap(namespace);
     const data = map.get(id);
-    return data ? this.clone(data) : null;
+    return data !== undefined ? this.clone(data) : null;
   }
 
   async list<T>(

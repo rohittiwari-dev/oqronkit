@@ -250,7 +250,40 @@ export class ScheduleEngine extends BaseSchedulerEngine<ScheduleDefinition> {
             }
           }
 
-          void this.fire(def, now);
+          if (policy === "run-all") {
+            // Enumerate all missed occurrences using the shared MissedFireHandler
+            const { MissedFireHandler } = await import(
+              "./missed-fire.handler.js"
+            );
+            const mfh = new MissedFireHandler(this.logger);
+            const mfResult = await mfh.checkMissed(
+              {
+                name: def.name,
+                expression: record.expression,
+                intervalMs: record.intervalMs,
+                timezone: def.timezone,
+                missedFire: def.missedFire,
+                maxMissedRuns: def.maxMissedRuns,
+              },
+              record.lastRunAt ? new Date(record.lastRunAt) : null,
+              now,
+            );
+            if (mfResult.missed) {
+              const max = Math.min(
+                mfResult.missedDates.length,
+                def.maxMissedRuns ?? 100,
+              );
+              for (let i = 0; i < max; i++) {
+                void this.fire(def, mfResult.missedDates[i]);
+              }
+            } else {
+              // MissedFireHandler didn't detect missed dates — fire once as fallback
+              void this.fire(def, now);
+            }
+          } else {
+            // "run-once": fire the latest occurrence only
+            void this.fire(def, now);
+          }
           const nextRun = this.computeNextRun(def, now);
           if (nextRun) {
             await this.di.storage.save(this.storageNamespace, def.name, {

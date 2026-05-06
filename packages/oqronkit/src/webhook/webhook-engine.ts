@@ -594,6 +594,8 @@ export class WebhookEngine implements IOqronModule {
         payload.headers,
         bodyStr,
         dispatcher.timeout ?? 30000,
+        undefined,
+        abortController.signal,
       );
 
       if (abortController.signal.aborted) {
@@ -890,9 +892,9 @@ export class WebhookEngine implements IOqronModule {
     this.logger.info("WebhookEngine stopped.");
   }
 
-  // ── Dynamic CRUD (G1, G2, G4) ─────────────────────────────────────────────
+  // ── Dynamic CRUD Management ───────────────────────────────────────────────
 
-  /** G1: Trigger an immediate poll cycle for a specific dispatcher */
+  /** Trigger an immediate poll cycle for a specific dispatcher */
   async triggerManual(name: string): Promise<boolean> {
     const dispatchers = getRegisteredWebhooks();
     const d = dispatchers.find((x) => x.name === name);
@@ -901,7 +903,7 @@ export class WebhookEngine implements IOqronModule {
     return true;
   }
 
-  /** G2: Cancel an active job using its AbortController */
+  /** Cancel an active job using its AbortController */
   async cancelActiveJob(jobId: string): Promise<boolean> {
     const ac = this.abortControllers.get(jobId);
     if (!ac) return false;
@@ -965,11 +967,39 @@ export class WebhookEngine implements IOqronModule {
       enabled: true,
     });
     await this.di.broker.resume(name);
+
+    // Release held webhook jobs — mirrors queue engine pattern
+    let batchCount = 0;
+    while (batchCount < 20) {
+      batchCount++;
+      const batch = await this.di.storage.list<OqronJob>(
+        "jobs",
+        {
+          queueName: name,
+          status: "paused",
+          pausedReason: "disabled-hold",
+        },
+        { limit: 100 },
+      );
+      if (batch.length === 0) break;
+      for (const held of batch) {
+        held.status = "waiting";
+        held.pausedReason = undefined;
+        await this.di.storage.save("jobs", held.id, held);
+        await this.di.broker.publish(
+          name,
+          held.id,
+          undefined,
+          held.opts?.priority,
+        );
+      }
+    }
+
     OqronEventBus.emit("webhook:resumed", name);
     this.logger.info(`Webhook dispatcher "${name}" resumed`);
   }
 
-  /** G4: Register a new dispatcher at runtime and start polling */
+  /** Register a new dispatcher at runtime and start polling */
   async registerDispatcher(config: WebhookConfig): Promise<void> {
     const { registerWebhook } = await import("./registry.js");
     registerWebhook(config);
@@ -986,7 +1016,7 @@ export class WebhookEngine implements IOqronModule {
     );
   }
 
-  /** G4: Deregister a dispatcher and stop its polling */
+  /** Deregister a dispatcher and stop its polling */
   async deregisterDispatcher(name: string): Promise<boolean> {
     const stopFn = this.consumersByQueue.get(name);
     if (stopFn) {
@@ -1013,6 +1043,7 @@ export class WebhookEngine implements IOqronModule {
     const clone: OqronJob = {
       ...original,
       id: newId,
+      runAt: undefined,
       status: "waiting",
       attemptMade: 0,
       error: undefined,
@@ -1042,6 +1073,7 @@ export class WebhookEngine implements IOqronModule {
       ],
       logs: [],
       steps: undefined,
+      opts: { ...original.opts, delay: undefined },
     };
 
     await this.di.storage.save("jobs", newId, clone);

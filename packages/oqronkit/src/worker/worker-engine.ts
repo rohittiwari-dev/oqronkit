@@ -155,13 +155,13 @@ export class WorkerEngine implements IOqronModule {
     this.stallDetector.start(
       () => {
         const active: Array<{ key: string; ownerId: string }> = [];
-        for (const [jobId, hb] of this.heartbeats.entries()) {
-          if (hb.isActive) {
-            active.push({
-              key: `worker:job:${jobId}`,
-              ownerId: this.workerIdStr,
-            });
-          }
+        for (const [jobId] of this.heartbeats.entries()) {
+          // Include all tracked heartbeats — even inactive ones whose lock
+          // renewal failed — so the stall detector can trigger recovery.
+          active.push({
+            key: `worker:job:${jobId}`,
+            ownerId: this.workerIdStr,
+          });
         }
         return active;
       },
@@ -699,6 +699,19 @@ export class WorkerEngine implements IOqronModule {
     job.stalledCount = stalledCount;
     job.attemptMade = (job.attemptMade ?? 0) + 1;
     await this.di.storage.save("jobs", jobId, job);
+
+    // Abort the stuck handler and release concurrency slot
+    const ac = this.abortControllers.get(jobId);
+    if (ac) {
+      ac.abort();
+      this.abortControllers.delete(jobId);
+    }
+    this.activeJobs.delete(jobId);
+    for (const jobs of this.activeJobsByTopic.values()) {
+      jobs.delete(jobId);
+    }
+    this.heartbeats.get(jobId)?.stop();
+    this.heartbeats.delete(jobId);
 
     this.logger.info("Re-queueing stalled worker job", { jobId });
     OqronEventBus.emit("job:stalled", w.topic, jobId);

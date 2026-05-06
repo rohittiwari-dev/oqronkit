@@ -11,9 +11,21 @@ export async function deliverWebhook(
   bodyStr: string,
   timeoutMs: number = 30000,
   maxBodyBytes: number = 65536, // 64KB max response body capture
+  externalSignal?: AbortSignal,
 ): Promise<WebhookDeliveryResult> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+  // Link external cancellation signal (e.g. from job abort)
+  if (externalSignal) {
+    if (externalSignal.aborted) {
+      controller.abort();
+    } else {
+      externalSignal.addEventListener("abort", () => controller.abort(), {
+        once: true,
+      });
+    }
+  }
 
   const start = performance.now();
 

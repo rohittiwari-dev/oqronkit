@@ -90,6 +90,8 @@ describe("Server Handlers", () => {
         init: async () => {},
         start: async () => {},
         stop: async () => {},
+        enable: async () => {},
+        disable: async () => {},
         triggerManual: async (id: string) => id === "my-schedule",
       });
 
@@ -232,8 +234,9 @@ describe("Server Handlers", () => {
       const res = await dispatch(req("DELETE", "/admin/jobs/lookup-1"));
       expect(res.status).toBe(200);
 
-      const job = await Storage.get("jobs", "lookup-1");
-      expect(job).toBeNull();
+      const job = await Storage.get<any>("jobs", "lookup-1");
+      expect(job).toBeDefined();
+      expect(job.status).toBe("cancelled");
     });
   });
 

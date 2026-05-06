@@ -246,6 +246,7 @@ export class CronEngine extends BaseSchedulerEngine<CronDefinition> {
         ...(existing || {}),
         ...def,
         version: codeVersion,
+        type: this.moduleType,
         nextRunAt: shouldRecompute ? null : existing?.nextRunAt,
         lastRunAt: existing?.lastRunAt,
         paused: existing?.paused ?? def.status === "paused",

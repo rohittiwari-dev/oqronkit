@@ -180,7 +180,9 @@ export class OqronManager {
         await Storage.save(actualNs, name, def);
 
         // Release held jobs on resume — mirror queue's releaseHeldJobs pattern
-        while (true) {
+        let batchCount = 0;
+        while (batchCount < 20) {
+          batchCount++;
           const batch = await Storage.list<any>(
             "jobs",
             {
@@ -478,7 +480,12 @@ export class OqronManager {
       ...job,
       retryReason: `Retried as ${retryId}`,
     });
-    await Broker.publish(retryJob.queueName, retryId, retryJob.opts.delay);
+    await Broker.publish(
+      retryJob.queueName,
+      retryId,
+      retryJob.opts.delay,
+      retryJob.opts?.priority,
+    );
 
     OqronEventBus.emit("job:retried", jobId, retryId);
     return retryId;
@@ -530,7 +537,12 @@ export class OqronManager {
     };
 
     await Storage.save("jobs", rerunId, rerunJob);
-    await Broker.publish(rerunJob.queueName, rerunId, rerunJob.opts.delay);
+    await Broker.publish(
+      rerunJob.queueName,
+      rerunId,
+      rerunJob.opts.delay,
+      rerunJob.opts?.priority,
+    );
     return rerunId;
   }
 
@@ -548,8 +560,29 @@ export class OqronManager {
       }
     }
 
-    // For non-active jobs or if no engine claimed it, just delete from storage
-    await Storage.delete("jobs", jobId);
+    // Clean broker state before writing tombstone
+    if (job?.queueName) {
+      try {
+        await Broker.ack(job.queueName, jobId);
+      } catch {
+        // Best effort: broker may have already acked
+      }
+    }
+
+    // Write cancelled tombstone — retention system handles cleanup
+    if (job) {
+      job.status = "cancelled";
+      job.finishedAt = new Date();
+      job.error = "Cancelled via manager";
+      job.timeline ??= [];
+      job.timeline.push({
+        ts: new Date(),
+        from: job.status,
+        to: "cancelled" as const,
+        reason: "Manager cancel",
+      });
+      await Storage.save("jobs", jobId, job);
+    }
   }
 
   // ── Job Queries ────────────────────────────────────────────────────────────

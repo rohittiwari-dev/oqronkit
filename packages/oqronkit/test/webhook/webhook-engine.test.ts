@@ -137,6 +137,8 @@ describe("WebhookEngine", () => {
       expect.objectContaining({ "content-type": "application/json" }),
       expect.any(String),
       30000,
+      undefined,
+      expect.any(AbortSignal),
     );
 
     // Job marked completed in storage
@@ -394,6 +396,8 @@ describe("WebhookEngine", () => {
       expect.objectContaining({ "X-Sig": "t=123,v1=abc123" }),
       expect.any(String),
       expect.any(Number),
+      undefined,
+      expect.any(AbortSignal),
     );
   });
 

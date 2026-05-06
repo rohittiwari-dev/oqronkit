@@ -8,6 +8,7 @@ import { StallDetector } from "../engine/lock/stall-detector.js";
 import type { OqronConfig } from "../engine/types/config.types.js";
 import type { BrokerStrategy } from "../engine/types/engine.js";
 import type { OqronJob } from "../engine/types/job.types.js";
+import { DependencyResolver } from "../engine/utils/dependency-resolver.js";
 import {
   executeBatch,
   executeJob,
@@ -148,6 +149,17 @@ export class QueueEngine implements IOqronModule {
         this.logger.warn(
           `Stall detected for Queue job ${jobId} — nacking back to broker`,
         );
+        // Abort the stuck handler to prevent late side effects
+        const ac = this.abortControllers.get(jobId);
+        if (ac) {
+          ac.abort();
+          this.abortControllers.delete(jobId);
+        }
+        // Release concurrency slot immediately
+        this.activeJobs.delete(jobId);
+        for (const jobs of this.activeJobsByQueue.values()) {
+          jobs.delete(jobId);
+        }
         this.heartbeats.get(jobId)?.stop();
         this.heartbeats.delete(jobId);
         // Find the queue name for nack by scanning per-queue tracking maps
@@ -471,15 +483,34 @@ export class QueueEngine implements IOqronModule {
       );
       if (batch.length === 0) break;
       for (const held of batch) {
-        held.status = "waiting";
         held.pausedReason = undefined;
-        await this.di.storage.save("jobs", held.id, held);
-        await this.di.broker.publish(
-          name,
-          held.id,
-          undefined,
-          held.opts?.priority,
-        );
+        // Check if held job has unsatisfied dependencies before promoting
+        const hasDeps = (held.opts?.dependsOn?.length ?? 0) > 0;
+        if (hasDeps) {
+          const ready = await DependencyResolver.canProceed(
+            this.di.storage,
+            held.opts!.dependsOn!,
+          );
+          held.status = ready ? "waiting" : "waiting-children";
+          await this.di.storage.save("jobs", held.id, held);
+          if (ready) {
+            await this.di.broker.publish(
+              name,
+              held.id,
+              undefined,
+              held.opts?.priority,
+            );
+          }
+        } else {
+          held.status = "waiting";
+          await this.di.storage.save("jobs", held.id, held);
+          await this.di.broker.publish(
+            name,
+            held.id,
+            undefined,
+            held.opts?.priority,
+          );
+        }
       }
     }
     OqronEventBus.emit("queue:resumed", name);

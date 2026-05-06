@@ -407,6 +407,14 @@ export class RedisBroker implements IBrokerEngine {
 
     const id = result[1]; // BLPOP returns [key, value]
 
+    // Re-check pause state — queue could have been paused during blocking wait
+    const stillPaused = await this.redis.get(this.getPausedKey(brokerName));
+    if (stillPaused) {
+      // Push the item back and return null
+      await this.redis[strategy === "lifo" ? "rpush" : "lpush"](qkey, id);
+      return null;
+    }
+
     // Atomically set the lock
     const lockKey = this.getLockKey(brokerName, id);
     const locked = await this.redis.set(

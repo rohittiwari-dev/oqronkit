@@ -3,6 +3,20 @@ import type { ICronContext } from "../engine/context/cron-context.interface.js";
 import type { CronDefinition, Logger } from "../engine/index.js";
 import { cronParser } from "./cron-compat.js";
 
+/**
+ * Narrow subset of CronDefinition fields used by MissedFireHandler.
+ * Both CronDefinition and ScheduleDefinition satisfy this contract.
+ */
+type MissedFireDef = Pick<
+  CronDefinition,
+  | "name"
+  | "expression"
+  | "intervalMs"
+  | "timezone"
+  | "missedFire"
+  | "maxMissedRuns"
+  | "hooks"
+>;
 export interface MissedFireResult {
   missed: boolean;
   /** The specific dates that were missed. For "run-all", contains all occurrences. */
@@ -48,7 +62,7 @@ export class MissedFireHandler {
   constructor(private readonly logger: Logger) {}
 
   async checkMissed(
-    def: CronDefinition,
+    def: MissedFireDef,
     lastRunAt: Date | null,
     now: Date,
   ): Promise<MissedFireResult> {

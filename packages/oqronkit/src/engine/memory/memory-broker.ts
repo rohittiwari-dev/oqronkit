@@ -177,7 +177,26 @@ export class MemoryBroker implements IBrokerEngine {
     id: string,
     consumerId: string,
     lockTtlMs: number,
+    brokerName?: string,
   ): Promise<void> {
+    const now = Date.now();
+
+    // Direct lookup when brokerName is provided — O(1) vs O(n) scan
+    if (brokerName) {
+      const key = this.lockKey(brokerName, id);
+      const lock = this.activeLocks.get(key);
+      if (!lock || lock.consumerId !== consumerId) {
+        throw new Error(`Lock lost or stolen for entity ${id}`);
+      }
+      if (lock.expiresAt < now) {
+        this.activeLocks.delete(key);
+        throw new Error(`Lock lost or stolen for entity ${id}`);
+      }
+      lock.expiresAt = now + lockTtlMs;
+      return;
+    }
+
+    // Fallback: scan all locks for backward compatibility
     let matchingKey: string | undefined;
     let lock: LockEntry | undefined;
     for (const [key, candidate] of this.activeLocks.entries()) {
@@ -191,7 +210,6 @@ export class MemoryBroker implements IBrokerEngine {
       matchingKey = key;
       lock = candidate;
     }
-    const now = Date.now();
 
     // Explicit expiration check: if lock naturally expired, delete it and reject extension
     if (matchingKey && lock && lock.expiresAt < now) {

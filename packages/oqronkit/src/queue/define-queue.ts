@@ -133,7 +133,10 @@ export function queue<T = any, R = any>(
       pausedReason:
         !isInstanceEnabled && behavior === "hold" ? "disabled-hold" : undefined,
       data,
-      opts: opts ?? {},
+      opts: {
+        ...(opts ?? {}),
+        priority: opts?.priority ?? config.priority,
+      },
       attemptMade: 0,
       progressPercent: 0,
       tags: config.tags ?? [],

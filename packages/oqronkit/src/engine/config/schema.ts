@@ -347,7 +347,16 @@ export const OqronConfigSchema = z.object({
           username: z.string().optional(),
           password: z.string().optional(),
         })
-        .optional(),
+        .optional()
+        .refine(
+          (auth) =>
+            !auth ||
+            (!auth.username && !auth.password) ||
+            (!!auth.username && !!auth.password),
+          {
+            message: "ui.auth requires both username and password, or neither",
+          },
+        ),
       retention: z
         .object({
           runs: z.string().default("30d"),

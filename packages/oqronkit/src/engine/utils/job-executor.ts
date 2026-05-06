@@ -42,7 +42,7 @@ export interface JobHandlerConfig {
     strategy?: "fixed" | "exponential" | "custom";
     baseDelay?: number;
     maxDelay?: number;
-    /** F7: Custom backoff function. Only used when strategy is "custom". */
+    /** Custom backoff function. Only used when strategy is "custom". */
     backoffFn?: (attempt: number, baseDelay: number) => number;
   };
   /** Pre-execution rate limiter */
@@ -57,13 +57,13 @@ export interface JobHandlerConfig {
     beforeRun?: (ctx: QueueJobContext) => Promise<void> | void;
     onSuccess?: (job: OqronJob, result: any) => Promise<void> | void;
     onFail?: (job: OqronJob, error: Error) => Promise<void> | void;
-    /** DX3: Alias for onSuccess */
+    /** Alias for onSuccess */
     afterRun?: (job: OqronJob, result: any) => Promise<void> | void;
-    /** DX3: Alias for onFail */
+    /** Alias for onFail */
     onError?: (job: OqronJob, error: Error) => Promise<void> | void;
   };
   /**
-   * F6: Pre-execution condition gate.
+   * Pre-execution condition gate.
    * If condition returns false, the job is nacked with a delay.
    */
   condition?: (ctx: QueueJobContext) => Promise<boolean> | boolean;
@@ -413,7 +413,7 @@ export async function executeJob(
       await hc.hooks.beforeRun(jobCtx);
     }
 
-    // ── F6: Pre-execution condition gate ─────────────────────────────────
+    // ── Pre-execution condition gate ─────────────────────────────────────
     if (hc.condition) {
       const allowed = await Promise.resolve(hc.condition(jobCtx)).catch(
         () => true,
@@ -502,6 +502,7 @@ export async function executeJob(
 
       // Mark as delayed in storage so dashboards see the correct state
       job.status = "delayed";
+      job.runAt = new Date(Date.now() + delay);
       job.error = error;
 
       // Stop heartbeat before nack
@@ -1043,6 +1044,15 @@ export async function executeBatch(
       // Ensure we don't retry it
       job.attemptMade = maxRetries + 1;
     } else if (result.status === "fulfilled") {
+      // Cancellation finality: check if job was cancelled mid-execution
+      const { abortController: batchAc } = allContexts[i];
+      if (batchAc.signal.aborted) {
+        const fresh = await di.storage.get<OqronJob>("jobs", job.id);
+        if (fresh?.status === "cancelled") {
+          await di.broker.ack(hc.name, job.id);
+          continue;
+        }
+      }
       finalStatus = "completed";
       job.returnValue = result.value;
       job.progressPercent = 100;
@@ -1065,6 +1075,7 @@ export async function executeBatch(
         const backoffOpts = { type: retryStrategy, delay: baseDelay };
         const delay = calculateBackoff(backoffOpts, job.attemptMade, maxDelay);
         job.status = "delayed";
+        job.runAt = new Date(Date.now() + delay);
 
         OqronEventBus.emit(
           "job:retried",

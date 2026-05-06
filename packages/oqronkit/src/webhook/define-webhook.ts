@@ -144,7 +144,9 @@ export function webhook<T = any>(
       status: initialStatus,
       pausedReason,
       data: payload,
-      opts: opts ?? {},
+      opts: {
+        ...(opts ?? {}),
+      },
       attemptMade: 0,
       progressPercent: 0,
       tags: [],
@@ -472,7 +474,7 @@ export async function resumeWebhook(name: string): Promise<void> {
   OqronEventBus.emit("webhook:resumed", name);
 }
 
-/** G10: Resend a failed or dead-letter webhook delivery. Returns new job ID. */
+/** Resend a failed or dead-letter webhook delivery. Returns new job ID. */
 export async function resendWebhook(jobId: string): Promise<string | null> {
   const { OqronRegistry } = await import("../engine/registry.js");
   const registry = OqronRegistry.getInstance();
