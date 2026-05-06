@@ -404,7 +404,7 @@ export interface RateLimitStats {
     }
   >;
 
-  // ── Adaptive Tracking (G1) ────────────────────────────────────────────
+  // ── Adaptive Tracking ────────────────────────────────────────────────
   /** Rolling usage-% samples per tier (last N windows). Only populated when adaptive=true. */
   usageSamples?: Record<string, number[]>;
   /** Timestamp of last suggestion emission per tier. Prevents spam. */

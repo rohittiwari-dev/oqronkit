@@ -1,7 +1,7 @@
 import type { QueueConfig } from "./types.js";
 
 /**
- * R1: Symbol-guarded globalThis registry.
+ * Symbol-guarded globalThis registry.
  *
  * In monorepo setups with multiple bundler instances or duplicate `node_modules`
  * copies, module-scope arrays get duplicated — one per copy — meaning definitions
@@ -51,7 +51,7 @@ export function deregisterQueue(name: string): boolean {
 }
 
 /**
- * R2: Merge workspace-level tags into every registered queue config.
+ * Merge workspace-level tags into every registered queue config.
  * Matches the cron/schedule `registry-factory.ts` `applyGlobalTags` pattern.
  * Deduplicates via Set to prevent tag accumulation on HMR reloads.
  */

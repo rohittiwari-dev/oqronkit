@@ -67,7 +67,7 @@ export class QueueEngine implements IOqronModule {
     const qs = getRegisteredQueues();
     this.logger.info(`Initialized QueueEngine covering ${qs.length} endpoints`);
 
-    // Version-based config migration (§10.2 parity with schedule-engine)
+    // Version-based config migration for queue instances
     for (const q of qs) {
       const codeVersion = q.version ?? 0;
       const existing = await this.di.storage.get<any>(
@@ -183,7 +183,7 @@ export class QueueEngine implements IOqronModule {
                   });
                 }
 
-                // E4: Check maxStalledCount — fail permanently if exceeded
+                // Check maxStalledCount — fail permanently if exceeded
                 const maxStalled =
                   this.queueConfig?.maxStalledCount ??
                   (typeof this.queueConfig?.crossNodeStallScanner === "object"
@@ -224,7 +224,7 @@ export class QueueEngine implements IOqronModule {
       },
     );
 
-    // Start cross-node stall scanner (F9) — recovers orphaned jobs from crashed nodes
+    // Start cross-node stall scanner — recovers orphaned jobs from crashed nodes
     const scannerConfig = this.queueConfig?.crossNodeStallScanner;
     if (scannerConfig) {
       const scannerOpts =
@@ -268,7 +268,7 @@ export class QueueEngine implements IOqronModule {
       this.lagMonitor.start();
     }
 
-    // Start storage-broker reconciliation engine (Phase 4)
+    // Start storage-broker reconciliation engine
     const reconConfig = this.queueConfig?.reconciliation;
     if (reconConfig) {
       const reconOpts = typeof reconConfig === "object" ? reconConfig : {};
@@ -326,13 +326,13 @@ export class QueueEngine implements IOqronModule {
       this.heartbeats.delete(jobId);
     }
 
-    // Clean up per-queue and global active job tracking (B5)
+    // Clean up per-queue and global active job tracking
     this.activeJobs.delete(jobId);
     for (const jobs of this.activeJobsByQueue.values()) {
       jobs.delete(jobId);
     }
 
-    // E3: Mark job as cancelled (not "failed") for explicit cancellation
+    // Mark job as cancelled for explicit user-initiated cancellation
     const job = await this.di.storage.get<OqronJob>("jobs", jobId);
     if (job) {
       job.status = "cancelled";
@@ -375,7 +375,7 @@ export class QueueEngine implements IOqronModule {
     }
     this.abortControllers.clear();
 
-    // Bug #3: Drain FIRST — heartbeats must stay alive to prevent re-claims during drain
+    // Drain active jobs first — heartbeats must stay alive to prevent re-claims during drain
     const allActive = Array.from(this.activeJobs.values());
     if (allActive.length > 0) {
       this.logger.info(
@@ -398,7 +398,7 @@ export class QueueEngine implements IOqronModule {
     this.heartbeats.clear();
   }
 
-  // ── Phase 4: Dynamic CRUD Management Methods ────────────────────────────
+  // ── Dynamic CRUD Management Methods ────────────────────────────────────
 
   /**
    * Dynamically register a new queue at runtime.
@@ -435,7 +435,7 @@ export class QueueEngine implements IOqronModule {
    */
   async pauseQueue(name: string): Promise<void> {
     this.pausedQueues.add(name);
-    // E5: Read-modify-write to preserve existing metadata (version, createdAt, etc.)
+    // Read-modify-write to preserve existing metadata (version, createdAt, etc.)
     const existing = await this.di.storage.get<any>("queue_instances", name);
     await this.di.storage.save("queue_instances", name, {
       ...(existing || {}),
@@ -450,13 +450,13 @@ export class QueueEngine implements IOqronModule {
    */
   async resumeQueue(name: string): Promise<void> {
     this.pausedQueues.delete(name);
-    // E5: Read-modify-write to preserve existing metadata (version, createdAt, etc.)
+    // Read-modify-write to preserve existing metadata (version, createdAt, etc.)
     const existing = await this.di.storage.get<any>("queue_instances", name);
     await this.di.storage.save("queue_instances", name, {
       ...(existing || {}),
       enabled: true,
     });
-    // E6: Safety cap to prevent infinite loop in edge cases
+    // Safety cap to prevent unbounded loop in edge cases
     let batchCount = 0;
     while (batchCount < 20) {
       batchCount++;
@@ -539,7 +539,7 @@ export class QueueEngine implements IOqronModule {
       q.heartbeatMs ??
       this.queueConfig?.heartbeatMs ??
       5000;
-    // F10: Add random jitter to prevent thundering herd on multi-worker startup
+    // Add random jitter to prevent thundering herd on multi-worker startup
     const jitter = q.jitterMs ? Math.round(Math.random() * q.jitterMs) : 0;
     const pollIntervalMs = basePollMs + jitter;
     const t = setInterval(() => {
@@ -570,15 +570,15 @@ export class QueueEngine implements IOqronModule {
       const freeSlots = concurrency - activeForQueue;
       if (freeSlots <= 0) return;
 
-      // 1. Claim IDs from Broker with ordering strategy
+      // Claim IDs from Broker with ordering strategy
       const strategy: BrokerStrategy =
         q.strategy ?? this.queueConfig?.strategy ?? "fifo";
 
-      // v2: Compute claim limit — respect batchSize for batch mode
+      // Compute claim limit — respect batchSize for batch mode
       const batchSize = q.batchSize ?? 10;
       const limit = q.processBatch ? Math.min(freeSlots, batchSize) : freeSlots;
 
-      // v2: Use blocking claims when available
+      // Use blocking claims when available for lower latency
       let jobIds: string[] = [];
       const blockingTimeoutMs =
         q.blockingTimeoutMs ??
@@ -621,7 +621,7 @@ export class QueueEngine implements IOqronModule {
 
       if (jobIds.length === 0) return;
 
-      // 2. Fetch job data & validate
+      // Fetch job data & validate
       const validJobs: OqronJob[] = [];
       for (const id of jobIds) {
         const raw = await this.di.storage.get("jobs", id);
@@ -658,12 +658,12 @@ export class QueueEngine implements IOqronModule {
       const activeSet = this.activeJobsByQueue.get(q.name)!;
       validJobs.forEach((j) => activeSet.add(j.id));
 
-      // Phase 5: Emit claimed metrics
+      // Emit claimed metrics for telemetry
       validJobs.forEach((j) =>
         OqronEventBus.emit("queue:job:claimed", q.name, j.id),
       );
 
-      // v2: Branch to batch or single execution
+      // Branch to batch or single execution path
       const startTs = Date.now();
 
       if (q.processBatch && validJobs.length > 0) {
@@ -779,7 +779,7 @@ export class QueueEngine implements IOqronModule {
   }
 
   /**
-   * v2: Delegates batch of jobs to the shared executeBatch().
+   * Delegates batch of jobs to the shared executeBatch().
    */
   private async delegateExecuteBatch(
     jobs: OqronJob[],

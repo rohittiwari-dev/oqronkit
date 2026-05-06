@@ -57,7 +57,7 @@ export async function deliverWebhook(
       }
     }
 
-    // G6: Parse Retry-After header (429/503) — supports seconds and HTTP-date
+    // Parse Retry-After header (429/503) — supports seconds and HTTP-date
     let retryAfterMs: number | undefined;
     const retryAfterRaw = response.headers.get("retry-after");
     if (retryAfterRaw && (response.status === 429 || response.status === 503)) {

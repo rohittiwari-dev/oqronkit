@@ -179,7 +179,7 @@ export class OqronManager {
         def.paused = false;
         await Storage.save(actualNs, name, def);
 
-        // Bug #11: Release held jobs on resume — mirror queue's releaseHeldJobs pattern
+        // Release held jobs on resume — mirror queue's releaseHeldJobs pattern
         while (true) {
           const batch = await Storage.list<any>(
             "jobs",
@@ -655,7 +655,7 @@ export class OqronManager {
     return chain;
   }
 
-  // ── G12: Webhook Management ─────────────────────────────────────────────────
+  // ── Webhook Management ────────────────────────────────────────────────────────────
 
   /** Get the WebhookEngine from the registry (if available) */
   private getWebhookEngine(): any | null {

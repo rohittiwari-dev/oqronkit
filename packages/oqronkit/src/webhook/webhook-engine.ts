@@ -130,7 +130,7 @@ export class WebhookEngine implements IOqronModule {
 
     const dispatchers = getRegisteredWebhooks();
 
-    // G7: Initialize circuit breaker (memory default, shared if storage available)
+    // Initialize circuit breaker (memory default, shared if storage available)
     const cbConfig = {
       failureThreshold: 5,
       resetTimeoutMs: 30_000,
@@ -202,7 +202,7 @@ export class WebhookEngine implements IOqronModule {
       },
     );
 
-    // Start cross-node stall scanner (B2) — recovers orphaned jobs from crashed nodes
+    // Start cross-node stall scanner — recovers orphaned jobs from crashed nodes
     const scannerConfig = this.webhookConfig?.crossNodeStallScanner;
     if (scannerConfig) {
       const scannerOpts =
@@ -225,7 +225,7 @@ export class WebhookEngine implements IOqronModule {
       });
     }
 
-    // Start event-loop lag monitor (B3)
+    // Start event-loop lag monitor
     const lagConfig = this.webhookConfig?.lagMonitor;
     if (lagConfig) {
       this.lagMonitor = new LagMonitor(
@@ -236,7 +236,7 @@ export class WebhookEngine implements IOqronModule {
       this.lagMonitor.start();
     }
 
-    // Start storage-broker reconciliation engine (B4)
+    // Start storage-broker reconciliation engine
     const reconConfig = this.webhookConfig?.reconciliation;
     if (reconConfig) {
       const reconOpts = typeof reconConfig === "object" ? reconConfig : {};
@@ -294,7 +294,7 @@ export class WebhookEngine implements IOqronModule {
   private startPolling(dispatcher: WebhookConfig) {
     const queueName = dispatcher.name;
     const basePollMs = this.webhookConfig?.heartbeatMs ?? 5000;
-    // G3: Add random jitter to prevent thundering herd on multi-node startup
+    // Add random jitter to prevent thundering herd on multi-node startup
     const jitter = Math.round(Math.random() * 500);
     const pollIntervalMs = basePollMs + jitter;
 
@@ -324,11 +324,11 @@ export class WebhookEngine implements IOqronModule {
 
   private async poll(dispatcher: WebhookConfig): Promise<void> {
     if (!this.running || !this.enabled) return;
-    // B7: Skip polling for paused dispatchers
+    // Skip polling for paused dispatchers
     if (this.pausedDispatchers.has(dispatcher.name)) return;
-    // B6: Reentrant guard — prevent concurrent poll for same dispatcher
+    // Reentrant guard — prevent concurrent poll for same dispatcher
     if (this.isPolling.has(dispatcher.name)) return;
-    // B3: Circuit breaker — skip polling if event loop is stalled
+    // Circuit breaker — skip polling if event loop is stalled
     if (this.lagMonitor?.isCircuitTripped) return;
 
     this.isPolling.add(dispatcher.name);
@@ -392,7 +392,7 @@ export class WebhookEngine implements IOqronModule {
       this.workerIdStr,
       ttlMs,
       hbMs,
-      // Bug #1: Also extend broker claim lock on each heartbeat tick
+      /** Extend broker claim lock on each heartbeat tick */
       async () => {
         try {
           await this.di.broker.extendLock(
@@ -405,7 +405,7 @@ export class WebhookEngine implements IOqronModule {
           // Broker extendLock failure is non-fatal
         }
       },
-      // Bug #24: Abort webhook handler when lock is lost
+      /** Abort webhook handler when lock ownership is lost */
       () => {
         const ac = this.abortControllers.get(jobId);
         if (ac && !ac.signal.aborted) {
@@ -462,7 +462,7 @@ export class WebhookEngine implements IOqronModule {
       return;
     }
 
-    // B15: Isolate by project (L3 safety net — L1 container prefix is primary)
+    // Isolate by project (container prefix is primary, this is a safety net)
     if (
       job.project &&
       this.config.project &&
@@ -477,7 +477,7 @@ export class WebhookEngine implements IOqronModule {
       return;
     }
 
-    // B16: Progress tracking helper (opt-in, default true)
+    // Progress tracking helper (opt-in, default true)
     const updateProgress = async (percent: number) => {
       if (!trackProgress) return;
       job.progressPercent = percent;
@@ -536,7 +536,7 @@ export class WebhookEngine implements IOqronModule {
         }
       }
 
-      // G11: Send idempotency key header
+      // Send idempotency key header
       if (payload.idempotencyKey) {
         payload.headers["Idempotency-Key"] = payload.idempotencyKey;
       }
@@ -545,7 +545,7 @@ export class WebhookEngine implements IOqronModule {
 
       const endpointKey = `${dispatcher.name}:${payload.endpointName}`;
 
-      // G8: Outbound rate limiting per endpoint
+      // Outbound rate limiting per endpoint
       const limiter = this.resolveOutboundLimiter(
         dispatcher,
         payload.endpointName,
@@ -569,7 +569,7 @@ export class WebhookEngine implements IOqronModule {
         }
       }
 
-      // G7: Check circuit breaker before sending
+      // Check circuit breaker before sending
       if (
         this.circuitBreaker &&
         (await this.circuitBreaker.isOpen(endpointKey))
@@ -602,7 +602,7 @@ export class WebhookEngine implements IOqronModule {
 
       await updateProgress(70); // Response received
 
-      // G9: Store full delivery attempt trace in job logs
+      // Store full delivery attempt trace in job logs
       job.logs ??= [];
       job.logs.push({
         ts: new Date(),
@@ -753,7 +753,7 @@ export class WebhookEngine implements IOqronModule {
         retryConfig?.maxDelay,
       );
 
-      // G6: Respect Retry-After header if present (capped at maxDelay)
+      // Respect Retry-After header if present (capped at maxDelay)
       const retryAfterMs = (error as any)?.retryAfterMs as number | undefined;
       const maxDelay = retryConfig?.maxDelay ?? 300_000;
       const backoffMs = retryAfterMs
@@ -833,7 +833,7 @@ export class WebhookEngine implements IOqronModule {
   async stop(): Promise<void> {
     this.running = false;
 
-    // B5: Full infrastructure cleanup (parity with Queue/Worker)
+    // Full infrastructure cleanup (parallel with Queue/Worker pattern)
     this.stallDetector?.stop();
     this.stallDetector = null;
 
@@ -846,7 +846,7 @@ export class WebhookEngine implements IOqronModule {
     this.reconciler?.stop();
     this.reconciler = null;
 
-    // G8: Cleanup outbound rate limiters
+    // Cleanup outbound rate limiters
     this.outboundLimiters.clear();
 
     for (const consumerStop of this.consumersByQueue.values()) {
@@ -866,7 +866,7 @@ export class WebhookEngine implements IOqronModule {
     }
     this.abortControllers.clear();
 
-    // Bug #14: Drain FIRST — heartbeats must stay alive to prevent re-claims during drain
+    // Drain active jobs first — heartbeats must stay alive to prevent re-claims during drain
     const allActive = Array.from(this.activeJobs.values());
     if (allActive.length > 0) {
       const timeout = this.webhookConfig?.shutdownTimeout ?? 25000;
@@ -941,10 +941,10 @@ export class WebhookEngine implements IOqronModule {
     return true;
   }
 
-  /** G4 / B7: Pause a specific dispatcher — stops claiming new jobs */
+  /** Pause a specific dispatcher — stops claiming new jobs. */
   async pauseDispatcher(name: string): Promise<void> {
     this.pausedDispatchers.add(name);
-    // Bug #21: Merge with existing record to preserve metadata
+    // Merge with existing record to preserve metadata
     const existing = await this.di.storage.get<any>("webhook_instances", name);
     await this.di.storage.save("webhook_instances", name, {
       ...(existing || {}),
@@ -955,10 +955,10 @@ export class WebhookEngine implements IOqronModule {
     this.logger.info(`Webhook dispatcher "${name}" paused`);
   }
 
-  /** G4 / B7: Resume a paused dispatcher */
+  /** Resume a paused dispatcher. */
   async resumeDispatcher(name: string): Promise<void> {
     this.pausedDispatchers.delete(name);
-    // Bug #21: Merge with existing record to preserve metadata
+    // Merge with existing record to preserve metadata
     const existing = await this.di.storage.get<any>("webhook_instances", name);
     await this.di.storage.save("webhook_instances", name, {
       ...(existing || {}),
@@ -1001,7 +1001,7 @@ export class WebhookEngine implements IOqronModule {
     return true;
   }
 
-  // ── G10: Resend API ─────────────────────────────────────────────────────────
+  // ── Resend API ─────────────────────────────────────────────────────────────
 
   /** Clone a failed/DLQ webhook job and re-enqueue for delivery. */
   async resendJob(jobId: string): Promise<string | null> {
@@ -1061,7 +1061,7 @@ export class WebhookEngine implements IOqronModule {
     return newId;
   }
 
-  // ── G8: Outbound Rate Limiter Helper ────────────────────────────────────────
+  // ── Outbound Rate Limiter Helper ────────────────────────────────────────────
 
   /** Resolve the outbound rate limiter for an endpoint (lazy-create or user-provided) */
   private async resolveEndpointConfig(

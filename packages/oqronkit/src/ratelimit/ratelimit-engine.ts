@@ -77,7 +77,7 @@ interface WarningFired {
   windowId: number;
 }
 
-// ── Circuit Breaker Record (G2) ─────────────────────────────────────────────
+// ── Circuit Breaker Record ─────────────────────────────────────────────────
 
 interface CircuitRecord {
   /** Number of consecutive windows at >= 95% utilization */
@@ -418,7 +418,7 @@ export class RateLimitEngine<TContext = any> implements IRateLimiter<TContext> {
     storage: IStorageEngine,
     peekOnly: boolean,
   ): Promise<RateLimitResult> {
-    // ── Step 1: Global skip ──────────────────────────────────────────────
+    // ── Global skip ──────────────────────────────────────────────
     if (this.config.skip) {
       const shouldSkip = await this.config.skip(ctx);
       if (shouldSkip) {
@@ -426,7 +426,7 @@ export class RateLimitEngine<TContext = any> implements IRateLimiter<TContext> {
       }
     }
 
-    // ── Step 2: Evaluate each tier ───────────────────────────────────────
+    // ── Evaluate each tier ───────────────────────────────────────
     const breakdown: TierBreakdown[] = [];
     let blockingTier: {
       name: string;
@@ -437,7 +437,7 @@ export class RateLimitEngine<TContext = any> implements IRateLimiter<TContext> {
       banned: boolean;
     } | null = null;
 
-    // Phase 1: Peek all tiers to check if any block (atomicity rule)
+    // Peek all tiers to check if any block (atomicity rule)
     const tierEvals: Array<{
       tierName: string;
       key: string;
@@ -559,7 +559,7 @@ export class RateLimitEngine<TContext = any> implements IRateLimiter<TContext> {
       );
       let effectiveMax = overrideRec?.max ?? tier.max;
 
-      // Circuit breaker: inflate max during burst mode (G2)
+      // Circuit breaker: inflate max during burst mode
       if (this.config.circuitBreaker) {
         effectiveMax = await this._resolveCircuitMax(
           storage,
@@ -619,7 +619,7 @@ export class RateLimitEngine<TContext = any> implements IRateLimiter<TContext> {
       });
     }
 
-    // ── Step 3: Decision ────────────────────────────────────────────────
+    // ── Decision ────────────────────────────────────────────────
 
     if (blockingTier) {
       // BLOCKED — handle penalty escalation, hooks, dry-run
@@ -1180,7 +1180,7 @@ export class RateLimitEngine<TContext = any> implements IRateLimiter<TContext> {
     }
   }
 
-  // ── Circuit Breaker (G2) ──────────────────────────────────────────────────
+  // ── Circuit Breaker ──────────────────────────────────────────────────────
 
   /**
    * Resolve the effective max for a tier+key, applying circuit breaker burst
@@ -1396,12 +1396,12 @@ export class RateLimitEngine<TContext = any> implements IRateLimiter<TContext> {
       }
     }
 
-    // ── Adaptive Threshold Suggestions (G1) ──────────────────────────────
+    // ── Adaptive Threshold Suggestions ──────────────────────────────────
     if (this.config.adaptive && result.breakdown) {
       this._trackAdaptive(stats, result);
     }
 
-    // ── Circuit Breaker Tracking (G2) ─────────────────────────────────────
+    // ── Circuit Breaker Tracking ─────────────────────────────────────────
     if (this.config.circuitBreaker && result.breakdown) {
       for (const tb of result.breakdown) {
         if (tb.skipped || tb.max === 0) continue;

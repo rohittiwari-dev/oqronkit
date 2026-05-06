@@ -446,7 +446,7 @@ export abstract class BaseSchedulerEngine<TDef extends BaseDefinition>
     return true;
   }
 
-  // ── Metrics (G6) ─────────────────────────────────────────────────────────
+  // ── Metrics ─────────────────────────────────────────────────────────────
 
   protected readonly metrics = new SchedulerMetrics();
 
@@ -460,7 +460,7 @@ export abstract class BaseSchedulerEngine<TDef extends BaseDefinition>
     return this.metrics.getMetricsForSchedule(name);
   }
 
-  // ── Dynamic CRUD (G1) ───────────────────────────────────────────────────
+  // ── Dynamic CRUD ───────────────────────────────────────────────────────
 
   /**
    * Create or update a schedule definition at runtime.
@@ -986,7 +986,7 @@ export abstract class BaseSchedulerEngine<TDef extends BaseDefinition>
         def.lockTtlMs ?? DEFAULT_LOCK_TTL_MS,
         def.heartbeatMs ?? DEFAULT_HEARTBEAT_MS,
         undefined, // onHeartbeat — scheduler doesn't use broker claims
-        // Bug #24: Abort scheduler handler when lock is lost
+        // Abort scheduler handler when lock ownership is lost
         () => {
           const entry = this.activeJobs.get(runId);
           if (entry?.abort && !entry.abort.signal.aborted) {
@@ -1278,7 +1278,7 @@ export abstract class BaseSchedulerEngine<TDef extends BaseDefinition>
       );
     }
 
-    // F2+ Enrich schedule record with aggregate counters and last-run info
+    // Enrich schedule record with aggregate counters and last-run info
     try {
       const schedRecord = await this.di.storage.get<any>(
         this.storageNamespace,

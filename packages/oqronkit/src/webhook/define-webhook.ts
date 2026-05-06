@@ -65,7 +65,7 @@ export function webhook<T = any>(
       dispatcherName: config.name,
       url,
       method: endpoint.method || config.method || "POST",
-      // B10: Default Content-Type — user headers override via spread order
+      // Default Content-Type — user headers override via spread order
       headers: {
         "Content-Type": "application/json",
         ...headersBase,
@@ -161,7 +161,7 @@ export function webhook<T = any>(
       runAt: opts?.delay ? new Date(Date.now() + opts.delay) : undefined,
     };
 
-    // 1. Storage
+    // Persist to storage
     await di.storage.save("jobs", jobId, job);
 
     // Handle pruning for held jobs
@@ -191,7 +191,7 @@ export function webhook<T = any>(
       }
     }
 
-    // 2. Register dependencies
+    // Register dependencies
     if (hasDeps) {
       await DependencyResolver.registerDependencies(
         di.storage,
@@ -200,7 +200,7 @@ export function webhook<T = any>(
         di.lock,
       );
 
-      // Bug #10: Check if all parents are already completed — promote immediately
+      // Check if all parents are already completed — promote immediately
       const ready = await DependencyResolver.canProceed(
         di.storage,
         opts!.dependsOn!,
@@ -211,7 +211,7 @@ export function webhook<T = any>(
         await di.broker.publish(config.name, jobId, undefined, opts?.priority);
       }
     } else if (job.status !== "paused") {
-      // 3. Transport
+      // Publish to transport
       await di.broker.publish(
         config.name, // Route to the dispatcher group
         jobId,
@@ -373,7 +373,7 @@ export function webhook<T = any>(
   return dispatcher;
 }
 
-// ── Dynamic CRUD Functions (B14) ─────────────────────────────────────────────
+// ── Dynamic CRUD Functions ───────────────────────────────────────────────────
 
 /** Create a new webhook dispatcher at runtime */
 export async function createWebhook<T = any>(
@@ -448,7 +448,7 @@ export async function resumeWebhook(name: string): Promise<void> {
     await di.broker.resume(name);
   }
 
-  // Bug #20: Release held jobs on resume
+  // Release held jobs on resume
   while (true) {
     const batch = await di.storage.list<OqronJob>(
       "jobs",

@@ -223,7 +223,7 @@ export async function executeJob(
       workerId,
       lockTtlMs,
       heartbeatMs,
-      // Bug #1: Also extend broker claim lock on each heartbeat tick
+      /** Extend broker claim lock on each heartbeat tick */
       async () => {
         try {
           await di.broker.extendLock(job.id, workerId, lockTtlMs, hc.name);
@@ -231,7 +231,7 @@ export async function executeJob(
           // Broker extendLock failure is non-fatal — ILockAdapter is authoritative
         }
       },
-      // Bug #24: Abort handler when lock is lost to prevent duplicate execution
+      /** Abort handler when lock ownership is lost to prevent duplicate execution */
       () => {
         const ac = ctx.abortControllers.get(job.id);
         if (ac && !ac.signal.aborted) {
@@ -260,10 +260,10 @@ export async function executeJob(
   // Compute max attempts for context
   const maxAttempts = effectiveMaxRetries + 1;
 
-  // C1: Capture start time for duration getter
+  // Capture start time for the live duration getter
   const executionStartTime = Date.now();
 
-  // C2: Build hybrid function+object log API
+  // Build hybrid function+object log API for handler context
   const logFn = (level: "info" | "warn" | "error", msg: string) => {
     const method = logger[level] || logger.info;
     method.call(logger, `[${ctx.lockPrefix}:${hc.name}] ${msg}`, {
@@ -274,7 +274,7 @@ export async function executeJob(
     // Best effort async save for logs without blocking execution
     di.storage.save("jobs", job.id, job).catch(() => {});
   };
-  // Attach object-style methods (C2)
+  // Attach object-style convenience methods
   logFn.info = (msg: string) => logFn("info", msg);
   logFn.warn = (msg: string) => logFn("warn", msg);
   logFn.error = (msg: string) => logFn("error", msg);
@@ -292,7 +292,7 @@ export async function executeJob(
     attempt: (job.attemptMade ?? 0) + 1,
     maxAttempts,
     createdAt: job.createdAt ? new Date(job.createdAt) : new Date(),
-    // C1: Live elapsed time getter
+    /** Live elapsed time since handler execution started (ms). */
     get duration() {
       return Date.now() - executionStartTime;
     },
@@ -313,9 +313,9 @@ export async function executeJob(
     discard: () => {
       internalDiscarded = true;
     },
-    // C3: Return current progress value from job record
+    /** Returns the current progress percentage from the job record. */
     getProgress: () => job.progressPercent ?? 0,
-    // v2: Dynamic child spawning
+    /** Dynamically spawn a child job from within the handler. */
     spawnChild: async <C = any>(
       queueName: string,
       data: C,
@@ -456,7 +456,7 @@ export async function executeJob(
         result = await executePromise;
       }
     } finally {
-      // E1: Always clear timeout — even if handler throws — to prevent timer leak
+      // Always clear timeout — even if handler throws — to prevent timer leak
       if (timeoutHandle) clearTimeout(timeoutHandle);
     }
 
@@ -487,7 +487,7 @@ export async function executeJob(
       const backoffOpts = job.opts?.backoff ?? {
         type: retryStrategy,
         delay: baseDelay,
-        // F7: Pass through custom backoff function if strategy is "custom"
+        // Pass through custom backoff function when strategy is "custom"
         backoffFn: hc.retries?.backoffFn,
       };
       const delay = calculateBackoff(backoffOpts, job.attemptMade, maxDelay);
@@ -541,7 +541,7 @@ export async function executeJob(
     ctx.heartbeats.delete(job.id);
   }
 
-  // ── E2: Cancellation finality — re-read from storage if aborted ─────
+  // ── Cancellation finality — re-read from storage if aborted ────────
   if (abortController.signal.aborted) {
     const fresh = await di.storage.get<OqronJob>("jobs", job.id);
     if (fresh?.status === "cancelled") {
@@ -570,7 +570,7 @@ export async function executeJob(
     job.durationMs = finishedAt.getTime() - new Date(job.startedAt).getTime();
   }
 
-  // JE2: Compute latency (time from queued to started)
+  // Compute wait latency (time from queued to started)
   if (job.queuedAt && job.startedAt) {
     job.latencyMs =
       new Date(job.startedAt).getTime() - new Date(job.queuedAt).getTime();
@@ -603,7 +603,7 @@ export async function executeJob(
           logger.error("onSuccess hook failed", { err: String(e) }),
         );
     }
-    // DX3: afterRun alias
+    // afterRun — alias for onSuccess
     if (hc.hooks?.afterRun) {
       void Promise.resolve()
         .then(() => hc.hooks!.afterRun!(job as OqronJob, result))
@@ -618,7 +618,7 @@ export async function executeJob(
         .then(() => hc.hooks!.onFail!(job as OqronJob, errorObject))
         .catch((e) => logger.error("onFail hook failed", { err: String(e) }));
     }
-    // DX3: onError alias
+    // onError — alias for onFail
     if (hc.hooks?.onError) {
       void Promise.resolve()
         .then(() => hc.hooks!.onError!(job as OqronJob, errorObject))
@@ -654,7 +654,7 @@ export async function executeJob(
   });
 }
 
-// ── JE1: Timeline entry helper with cap ─────────────────────────────────────
+// ── Timeline entry helper with cap ──────────────────────────────────────────
 
 function pushTimeline(
   job: OqronJob,
@@ -671,7 +671,7 @@ function pushTimeline(
   }
 }
 
-// ── v2: Batch Execution ──────────────────────────────────────────────────────
+// ── Batch Execution ─────────────────────────────────────────────────────────
 
 /**
  * Shared context builder — extracted for reuse in both single and batch execution.
@@ -697,7 +697,7 @@ function buildJobContext(
   const maxAttempts = effectiveMaxRetries + 1;
   const executionStartTime = Date.now();
 
-  // C2: Build hybrid function+object log API
+  // Build hybrid function+object log API for handler context
   const logFn = (level: "info" | "warn" | "error", msg: string) => {
     const method = logger[level] || logger.info;
     method.call(logger, `[batch:${hc.name}] ${msg}`, { jobId: job.id });
@@ -813,7 +813,7 @@ export async function executeBatch(
   // ── Heartbeat: one lock for the entire batch ──────────────────────────
   const batchId = jobs[0].id; // Use first job ID as batch lock key
   let heartbeat: HeartbeatWorker | null = null;
-  // Bug #24: Collect batch abort controllers so onLockLost can abort them all
+  // Collect batch abort controllers so onLockLost can abort them all
   const batchAbortControllers: AbortController[] = [];
   if (useGuaranteed) {
     const lockKey = `${ctx.lockPrefix}:batch:${batchId}`;
@@ -824,7 +824,7 @@ export async function executeBatch(
       workerId,
       lockTtlMs,
       heartbeatMs,
-      // Bug #1: Also extend broker claim locks for all jobs in batch
+      /** Extend broker claim locks for all jobs in the batch */
       async () => {
         for (const job of jobs) {
           try {
@@ -834,7 +834,7 @@ export async function executeBatch(
           }
         }
       },
-      // Bug #24: Abort all batch handlers when batch lock is lost
+      /** Abort all batch handlers when the batch lock is lost */
       () => {
         logger.warn(
           `Batch lock lost for ${batchId} — aborting all batch handlers`,
@@ -876,7 +876,7 @@ export async function executeBatch(
     job.moduleName = job.moduleName ?? hc.name;
     const previousState = capturePreExecutionState(job);
     const { jobCtx, abortController, getDiscarded } = buildJobContext(job, ctx);
-    // Bug #24: Track batch abort controllers for lock-lost abort
+    // Track abort controller for batch-wide lock-lost abort
     batchAbortControllers.push(abortController);
 
     const oldStatus = previousState.status;

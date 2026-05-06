@@ -25,7 +25,7 @@ export interface WebhookEndpoint {
   /** Optional disable flag (managed via DB at runtime too) */
   enabled?: boolean;
 
-  // ── G8: Outbound Rate Limiting ──────────────────────────────────────────
+  // ── Outbound Rate Limiting ──────────────────────────────────────────
 
   /**
    * Simple outbound rate limit. Engine auto-creates a sliding-window limiter.

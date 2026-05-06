@@ -528,7 +528,7 @@ export async function handleAdminRateLimiters(
   return { status: 200, body: { ok: true, limiter: rec, stats } };
 }
 
-// ── Webhook Handlers (G12) ────────────────────────────────────────────────
+// ── Webhook Handlers ─────────────────────────────────────────────────────
 
 export async function handleAdminWebhooks(
   req: MonitorRequest,
@@ -798,7 +798,7 @@ export async function dispatch(req: MonitorRequest): Promise<MonitorResponse> {
     return handleAdminRateLimiters(req);
   }
 
-  // ── Webhook Routes (G12) ──────────────────────────────────────────────────
+  // ── Webhook Routes ──────────────────────────────────────────────────────
 
   // GET  /admin/webhooks — list all dispatchers
   if (method === "GET" && path === "/admin/webhooks") {

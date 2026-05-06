@@ -63,7 +63,7 @@ export class WorkerEngine implements IOqronModule {
     this.logger.info(`Initialized WorkerEngine covering ${ws.length} topics`);
     this.warnForSharedConsumerTopics(ws);
 
-    // Version-based config migration (§10.2 parity with schedule-engine)
+    // Version-based config migration for worker instances
     for (const w of ws) {
       const codeVersion = w.version ?? 0;
       const existing = await this.di.storage.get<any>(
@@ -171,7 +171,7 @@ export class WorkerEngine implements IOqronModule {
       },
     );
 
-    // Start cross-node stall scanner (F9) — recovers orphaned jobs from crashed nodes
+    // Start cross-node stall scanner — recovers orphaned jobs from crashed nodes
     const scannerConfig = this.workerModuleConfig?.crossNodeStallScanner;
     if (scannerConfig) {
       const scannerOpts =
@@ -214,7 +214,7 @@ export class WorkerEngine implements IOqronModule {
       this.lagMonitor.start();
     }
 
-    // Start storage-broker reconciliation engine (Phase 4)
+    // Start storage-broker reconciliation engine
     const reconConfig = this.workerModuleConfig?.reconciliation;
     if (reconConfig) {
       const reconOpts = typeof reconConfig === "object" ? reconConfig : {};
@@ -278,7 +278,7 @@ export class WorkerEngine implements IOqronModule {
       jobs.delete(jobId);
     }
 
-    // E3: Mark job as cancelled (not "failed") for explicit cancellation
+    // Mark job as cancelled for explicit user-initiated cancellation
     const job = await this.di.storage.get<OqronJob>("jobs", jobId);
     if (job) {
       job.status = "cancelled";
@@ -320,7 +320,7 @@ export class WorkerEngine implements IOqronModule {
     }
     this.abortControllers.clear();
 
-    // Bug #3: Drain FIRST — heartbeats must stay alive to prevent re-claims during drain
+    // Drain active jobs first — heartbeats must stay alive to prevent re-claims during drain
     const allActive = Array.from(this.activeJobs.values());
     if (allActive.length > 0) {
       const timeout = this.workerModuleConfig.shutdownTimeout ?? 25_000;
@@ -340,7 +340,7 @@ export class WorkerEngine implements IOqronModule {
     this.heartbeats.clear();
   }
 
-  // ── Phase 4: Dynamic CRUD Management Methods ────────────────────────────
+  // ── Dynamic CRUD Management Methods ────────────────────────────────────
 
   /**
    * Dynamically register a new worker at runtime.
@@ -441,13 +441,13 @@ export class WorkerEngine implements IOqronModule {
   }
 
   private startPolling(w: WorkerConfig) {
-    // W4: Use pollIntervalMs if set, fall back to heartbeatMs
+    // Use pollIntervalMs if set, fall back to heartbeatMs
     const basePollMs =
       w.pollIntervalMs ??
       w.heartbeatMs ??
       this.workerModuleConfig.heartbeatMs ??
       5000;
-    // F10: Add random jitter to prevent thundering herd on multi-worker startup
+    // Add random jitter to prevent thundering herd on multi-worker startup
     const jitter = w.jitterMs ? Math.round(Math.random() * w.jitterMs) : 0;
     const pollIntervalMs = basePollMs + jitter;
     const t = setInterval(() => {
@@ -461,7 +461,7 @@ export class WorkerEngine implements IOqronModule {
     t.unref();
     this.timers.push(t);
     this.topicTimers.set(w.topic, t);
-    // B4: Immediate first poll so jobs don't wait up to pollIntervalMs
+    // Immediate first poll so jobs don't wait a full poll interval
     setTimeout(() => this.poll(w), 0);
   }
 
@@ -491,11 +491,11 @@ export class WorkerEngine implements IOqronModule {
       const lockTtlMs =
         w.lockTtlMs ?? this.workerModuleConfig.lockTtlMs ?? 30_000;
 
-      // v2: Compute claim limit — respect batchSize for batch mode
+      // Compute claim limit — respect batchSize for batch mode
       const batchSize = w.batchSize ?? 10;
       const limit = w.processBatch ? Math.min(freeSlots, batchSize) : freeSlots;
 
-      // v2: Use blocking claims when available
+      // Use blocking claims when available for lower latency
       let claimedIds: string[] = [];
       const blockingTimeoutMs =
         w.blockingTimeoutMs ??
@@ -539,7 +539,7 @@ export class WorkerEngine implements IOqronModule {
 
       if (!claimedIds.length) return;
 
-      // 2. Fetch job data & validate
+      // Fetch job data & validate
       const validJobs: OqronJob[] = [];
       for (const id of claimedIds) {
         const raw = await this.di.storage.get<OqronJob>("jobs", id);
@@ -576,12 +576,12 @@ export class WorkerEngine implements IOqronModule {
       const activeSet = this.activeJobsByTopic.get(w.topic)!;
       validJobs.forEach((j) => activeSet.add(j.id));
 
-      // Phase 5: Emit claimed metrics
+      // Emit claimed metrics for telemetry
       validJobs.forEach((j) =>
         OqronEventBus.emit("worker:job:claimed", w.topic, j.id),
       );
 
-      // v2: Branch to batch or single execution
+      // Branch to batch or single execution path
       const startTs = Date.now();
 
       if (w.processBatch && validJobs.length > 0) {
@@ -670,7 +670,7 @@ export class WorkerEngine implements IOqronModule {
 
     if (!this.enabled) return;
 
-    // W3: Match by moduleName first, fall back to queueName if moduleName is missing
+    // Match by moduleName first, fall back to queueName if moduleName is missing
     const w = getRegisteredWorkers().find(
       (cw) => cw.topic === job.moduleName || cw.topic === job.queueName,
     );
@@ -769,7 +769,7 @@ export class WorkerEngine implements IOqronModule {
   }
 
   /**
-   * v2: Delegates batch of jobs to the shared executeBatch().
+   * Delegates batch of jobs to the shared executeBatch().
    */
   private async delegateExecuteBatch(
     jobs: OqronJob[],

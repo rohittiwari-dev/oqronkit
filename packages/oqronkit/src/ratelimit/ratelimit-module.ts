@@ -11,11 +11,11 @@ import type { RateLimitInstanceRecord, RateLimitStats } from "./types.js";
  * RateLimitModule — The single owner of the rate-limit management plane.
  *
  * Responsibilities:
- * 1. Persist all registered limiter instances to storage on init()
- * 2. Load enabled/disabled state from storage for each instance
- * 3. Run background GC for expired algorithm state, bans, violations, warnings
- * 4. Prune old block/ban audit events beyond retention window
- * 5. Flush batched stats (when statsFlushIntervalMs > 0)
+ * - Persist all registered limiter instances to storage on init()
+ * - Load enabled/disabled state from storage for each instance
+ * - Run background GC for expired algorithm state, bans, violations, warnings
+ * - Prune old block/ban audit events beyond retention window
+ * - Flush batched stats (when statsFlushIntervalMs > 0)
  */
 export class RateLimitModule implements IOqronModule {
   readonly name = "ratelimit";
@@ -156,7 +156,7 @@ export class RateLimitModule implements IOqronModule {
       const storage = container.storage;
       const now = Date.now();
 
-      // 1. GC: prune expired algorithm state
+      // GC: prune expired algorithm state
       const algoNamespaces = [
         "ratelimit:sliding",
         "ratelimit:bucket",
@@ -166,7 +166,7 @@ export class RateLimitModule implements IOqronModule {
         await storage.prune(ns, now);
       }
 
-      // 2. GC: prune expired bans, violations, warnings
+      // GC: prune expired bans, violations, warnings
       const gcNamespaces = [
         "ratelimit:bans",
         "ratelimit:violations",
@@ -177,7 +177,7 @@ export class RateLimitModule implements IOqronModule {
         await storage.prune(ns, now);
       }
 
-      // 3. Prune old block events beyond retention window
+      // Prune old block events beyond retention window
       const eventCutoff = now - this._eventRetentionMs;
       await storage.prune("ratelimit_events", eventCutoff);
     } catch (err) {

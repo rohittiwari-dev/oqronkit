@@ -64,7 +64,7 @@ export interface WorkerConfig<T = any, R = any> {
   pollIntervalMs?: number;
 
   /**
-   * F10: Random jitter added to poll intervals to prevent thundering herd
+   * Random jitter added to poll intervals to prevent thundering herd
    * when multiple workers start simultaneously.
    * Final interval = pollIntervalMs + Math.random() * jitterMs.
    * @default 0
@@ -78,7 +78,7 @@ export interface WorkerConfig<T = any, R = any> {
   priority?: number;
 
   /**
-   * F6: Pre-execution condition gate.
+   * Pre-execution condition gate.
    * If the condition returns false, the job is nacked with a delay (re-queued).
    * Runs after `beforeRun` hook. Useful for circuit-breaker patterns.
    */
@@ -94,7 +94,7 @@ export interface WorkerConfig<T = any, R = any> {
     strategy?: "fixed" | "exponential" | "custom";
     baseDelay?: number;
     maxDelay?: number;
-    /** F7: Custom backoff function. Only used when strategy is "custom". */
+    /** Custom backoff function. Only used when strategy is "custom". */
     backoffFn?: (attempt: number, baseDelay: number) => number;
   };
 
@@ -117,12 +117,12 @@ export interface WorkerConfig<T = any, R = any> {
     /** Called when the handler rejects */
     onFail?: (job: OqronJob<T, R>, error: Error) => Promise<void> | void;
     /**
-     * DX3: Alias for onSuccess — called after handler completes successfully.
+     * Alias for onSuccess — called after handler completes successfully.
      * If both `afterRun` and `onSuccess` are set, both are invoked.
      */
     afterRun?: (job: OqronJob<T, R>, result: R) => Promise<void> | void;
     /**
-     * DX3: Alias for onFail — called after handler rejects.
+     * Alias for onFail — called after handler rejects.
      * If both `onError` and `onFail` are set, both are invoked.
      */
     onError?: (job: OqronJob<T, R>, error: Error) => Promise<void> | void;

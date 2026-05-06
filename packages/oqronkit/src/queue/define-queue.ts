@@ -150,10 +150,10 @@ export function queue<T = any, R = any>(
       runAt: opts?.delay ? new Date(Date.now() + opts.delay) : undefined,
     };
 
-    // 1. Storage
+    // Persist to storage
     await di.storage.save("jobs", jobId, job);
 
-    // 1.5 Handle pruning for held jobs (DQ1: count-based check instead of O(N) list)
+    // Handle pruning for held jobs (count-based check instead of O(N) list)
     if (!isInstanceEnabled && behavior === "hold") {
       const maxHeld = moduleConfig?.maxHeldJobs ?? 100;
       const heldJobs = await di.storage.list<any>(
@@ -178,7 +178,7 @@ export function queue<T = any, R = any>(
       }
     }
 
-    // 2. Register dependencies (add childId to parent jobs)
+    // Register dependencies (add childId to parent jobs)
     if (hasDeps) {
       await DependencyResolver.registerDependencies(
         di.storage,
@@ -187,7 +187,7 @@ export function queue<T = any, R = any>(
         di.lock,
       );
 
-      // Bug #10: Check if all parents are already completed — promote immediately
+      // Check if all parents are already completed — promote immediately
       const ready = await DependencyResolver.canProceed(
         di.storage,
         opts!.dependsOn!,
@@ -204,7 +204,7 @@ export function queue<T = any, R = any>(
         );
       }
     } else if (job.status !== "paused") {
-      // 3. Transport — apply default priority from config if not specified per-job
+      // Publish to transport — apply default priority from config if not specified per-job
       const effectivePriority = opts?.priority ?? config.priority;
       await di.broker.publish(
         config.name,
@@ -292,7 +292,7 @@ export function queue<T = any, R = any>(
 
     drain: async () => {
       const di = OqronContainer.get();
-      // 1. Pause to stop new claims
+      // Pause to stop new claims
       const engine = getLiveQueueEngine();
       if (engine && typeof engine.pauseQueue === "function") {
         await engine.pauseQueue(config.name);
@@ -303,7 +303,7 @@ export function queue<T = any, R = any>(
       }
       await di.broker.pause(config.name);
 
-      // 2. Poll until no active jobs remain (or timeout after 30s)
+      // Poll until no active jobs remain (or timeout after 30s)
       const drainTimeout = 30_000;
       const pollInterval = 250;
       const deadline = Date.now() + drainTimeout;

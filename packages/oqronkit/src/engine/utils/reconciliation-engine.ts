@@ -8,7 +8,7 @@ import type {
 import type { OqronJob } from "../types/job.types.js";
 
 /**
- * Phase 4: Storage-Broker Reconciliation Engine
+ * Storage-Broker Reconciliation Engine
  *
  * **Problem:** OqronKit decouples the Storage adapter (e.g. Postgres) from the
  * Broker adapter (e.g. Redis). During a retry, the engine saves `"delayed"` to
@@ -148,13 +148,13 @@ export class ReconciliationEngine {
       const now = Date.now();
       let totalRepublished = 0;
 
-      // ── 1. Reconcile stale "waiting" jobs ────────────────────────────────
+      // ── Reconcile stale "waiting" jobs ───────────────────────────────────
       totalRepublished += await this.reconcileWaiting(now, batchSize);
 
-      // ── 2. Reconcile expired "delayed" jobs ──────────────────────────────
+      // ── Reconcile expired "delayed" jobs ─────────────────────────────────
       totalRepublished += await this.reconcileDelayed(now, batchSize);
 
-      // ── 3. Reconcile lingering "stalled" jobs ────────────────────────────
+      // ── Reconcile lingering "stalled" jobs ───────────────────────────────
       totalRepublished += await this.reconcileStalled(batchSize);
 
       // ── Update stats ─────────────────────────────────────────────────────

@@ -55,9 +55,9 @@ export interface ScheduleModuleFactoryConfig extends SchedulerFactoryConfig {
 
 /**
  * Unified factory that encapsulates the boilerplate of:
- *   1. Draining the pending registry
- *   2. Merging global tags
- *   3. Constructing the engine
+ *   - Draining the pending registry
+ *   - Merging global tags
+ *   - Constructing the engine
  *
  * @example
  * ```ts
