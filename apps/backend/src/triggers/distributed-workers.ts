@@ -46,8 +46,8 @@ export const videoEncodeQueue = queue<VideoMetadata, string>({
  * Controller Example:
  * API hit happens, we quickly buffer it into the backend.
  */
-export async function handleUserUpload(userId: string, tempFilePath: string) {
-  const dbId = `vid_` + Date.now().toString(36);
+export async function handleUserUpload(_userId: string, tempFilePath: string) {
+  const dbId = `vid_${Date.now().toString(36)}`;
 
   // Fast dispatch to Redis/DB broker. Instantly frees up the API request.
   const job = await videoEncodeQueue.add(

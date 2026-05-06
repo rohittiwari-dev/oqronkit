@@ -30,7 +30,7 @@ const LINKS = [
     links: [
       {
         label: "GitHub",
-        href: "https://github.com/rohittiwari-dev/choronoforge",
+        href: "https://github.com/rohittiwari-dev/oqronkit",
         external: true,
       },
       {
@@ -74,7 +74,7 @@ export function Footer() {
 
             <div className="flex gap-3 items-center">
               <Link
-                href="https://github.com/rohittiwari-dev/choronoforge"
+                href="https://github.com/rohittiwari-dev/oqronkit"
                 target="_blank"
                 className="flex h-8 w-8 items-center justify-center rounded-lg border border-fd-border text-fd-muted-foreground transition-colors hover:text-fd-foreground hover:bg-fd-accent"
                 aria-label="GitHub"

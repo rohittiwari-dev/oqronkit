@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 520 120" width="100%" height="100%">
+  <defs>
+    <linearGradient id="oqron-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#E11D48" />
+      <stop offset="50%" stop-color="#F97316" />
+      <stop offset="100%" stop-color="#EAB308" />
+    </linearGradient>
+    <style>
+      .main-text { fill: #0F172A; }
+      .sub-text { fill: #64748B; }
+      @media (prefers-color-scheme: dark) {
+        .main-text { fill: #F1F5F9; }
+        .sub-text { fill: #94A3B8; }
+      }
+    </style>
+  </defs>
+
+  <g transform="translate(20, 10)">
+    <path d="M50 0 L93.3 25 L93.3 75 L50 100 L6.7 75 L6.7 25 Z" fill="url(#oqron-grad)" opacity="0.12" />
+    <path d="M50 10 A 40 40 0 1 0 90 50" fill="none" stroke="url(#oqron-grad)" stroke-width="8" stroke-linecap="round" />
+    <circle cx="90" cy="50" r="8" fill="#E11D48" />
+    <circle cx="50" cy="10" r="8" fill="#F97316" />
+    <path d="M55 22 L32 55 L48 55 L42 82 L72 45 L52 45 Z" fill="url(#oqron-grad)" />
+  </g>
+
+  <g transform="translate(140, 68)">
+    <text x="0" y="0" font-family="-apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, sans-serif" font-size="46" font-weight="800" class="main-text">
+      Oqron<tspan fill="#E11D48">Kit</tspan>
+    </text>
+    <text x="4" y="28" font-family="-apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, sans-serif" font-size="13" font-weight="600" class="sub-text" letter-spacing="2.5">
+      CRASH-SAFE BACKGROUND ENGINE
+    </text>
+  </g>
+</svg>

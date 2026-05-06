@@ -3,7 +3,7 @@ import Image from "next/image";
 
 export const gitConfig = {
   user: "rohittiwari-dev",
-  repo: "choronoforge",
+  repo: "oqronkit",
   branch: "main",
 };
 
@@ -42,6 +42,6 @@ export function baseOptions(): BaseLayoutProps {
         active: "nested-url",
       },
     ],
-    githubUrl: "https://github.com/rohittiwari-dev/choronoforge",
+    githubUrl: "https://github.com/rohittiwari-dev/oqronkit",
   };
 }

@@ -67,7 +67,7 @@ export function LandingHeader() {
           {/* Right: Actions */}
           <div className="flex items-center gap-3 ml-auto">
             <Link
-              href="https://github.com/rohittiwari-dev/choronoforge"
+              href="https://github.com/rohittiwari-dev/oqronkit"
               target="_blank"
               className="hidden sm:flex h-9 w-9 items-center justify-center rounded-full border border-fd-border/50 text-fd-muted-foreground transition-colors hover:bg-fd-accent/50 hover:text-fd-foreground"
               aria-label="GitHub"
