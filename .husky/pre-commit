@@ -1,4 +1,2 @@
-bun run check
-bun run format
-git add .
-cd packages/oqronkit && bun vitest run
+bun lint-staged
+bun run test
