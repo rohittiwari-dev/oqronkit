@@ -21,6 +21,16 @@ export interface WorkerConfig<T = any, R = any> {
   concurrency?: number;
 
   /**
+   * Module-level throughput throttle — caps how many jobs are dispatched
+   * per time window, regardless of concurrency.
+   *
+   * Unlike `concurrency` (parallel limit), throttle controls the *rate*
+   * of dispatch. This is per-process. For distributed rate limiting,
+   * compose with `rateLimiter`.
+   */
+  throttle?: { max: number; duration: number };
+
+  /**
    * If true, uses crash-safe heartbeat locks to ensure at-least-once execution.
    * Defaults to true.
    */

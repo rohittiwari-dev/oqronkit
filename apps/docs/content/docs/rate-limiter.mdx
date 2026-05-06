@@ -89,6 +89,32 @@ const inventorySync = cron({
 rateLimit.destroy('api-requests') // Removes from global registry
 ```
 
+## `rateLimiter` vs `throttle`
+
+OqronKit provides two complementary mechanisms for controlling throughput:
+
+| | `rateLimiter` | `throttle` |
+|---|---|---|
+| **Scope** | Distributed (shared across cluster) | Per-process |
+| **Where it runs** | Per-job, inside the executor (post-claim) | Per-poll, in the engine (pre-claim) |
+| **On limit hit** | Nacks job back to broker with delay | Doesn't claim at all |
+| **Overhead** | One broker round-trip per gated job | Zero — fewer claims |
+| **Best for** | External API quotas, shared cluster budgets | Local throughput pacing, email delivery |
+| **Config** | `rateLimiter: limiterInstance` | `throttle: { max, duration }` |
+
+**Use together** for maximum control:
+
+```ts
+const emailQueue = queue({
+  name: 'email-sender',
+  concurrency: 5,
+  throttle: { max: 20, duration: 2_000 },   // Per-node: 20/2s
+  rateLimiter: sesLimiter,                    // Cluster-wide: 50/s across all nodes
+
+  handler: async (ctx) => { await sendEmail(ctx.data) },
+})
+```
+
 ## Next Steps
 
 - [Webhook](/docs/webhook) — Event-driven webhook dispatch

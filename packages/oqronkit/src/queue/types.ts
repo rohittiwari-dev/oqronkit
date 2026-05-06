@@ -97,6 +97,19 @@ export interface QueueConfig<T = any, R = any> {
   /** Parallel execution limit. Overrides global config. */
   concurrency?: number;
 
+  /**
+   * Module-level throughput throttle — caps how many jobs are dispatched
+   * per time window, regardless of concurrency.
+   *
+   * Unlike `concurrency` (parallel limit), throttle controls the *rate*
+   * of dispatch. Example: `concurrency: 5, throttle: { max: 20, duration: 2000 }`
+   * means up to 5 jobs run simultaneously, but no more than 20 are started
+   * in any 2-second window.
+   *
+   * This is per-process. For distributed rate limiting, compose with `rateLimiter`.
+   */
+  throttle?: { max: number; duration: number };
+
   /** Job ordering strategy. Overrides global config. @default "fifo" */
   strategy?: BrokerStrategy;
 

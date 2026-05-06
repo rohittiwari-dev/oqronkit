@@ -123,6 +123,14 @@ export interface WebhookConfig<T = any> {
   /** Parallel delivery limit. @default 10 */
   concurrency?: number;
 
+  /**
+   * Module-level throughput throttle — caps how many deliveries are dispatched
+   * per time window, regardless of concurrency.
+   *
+   * This is per-process. For distributed rate limiting, compose with `rateLimiter`.
+   */
+  throttle?: { max: number; duration: number };
+
   /** Global security config */
   security?: WebhookSecurityInput;
 

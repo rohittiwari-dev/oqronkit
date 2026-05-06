@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { ThrottleGate } from "../engine/utils/throttle-gate.js";
 import type { IOqronModule, Logger } from "../engine/index.js";
 import { OqronContainer, OqronEventBus } from "../engine/index.js";
 import { LagMonitor } from "../engine/lag-monitor.js";
@@ -51,6 +52,8 @@ export class WebhookEngine implements IOqronModule {
   private reconciler: ReconciliationEngine | null = null;
   private circuitBreaker: ICircuitBreaker | null = null;
   private outboundLimiters = new Map<string, IRateLimiter>();
+  /** Per-dispatcher throttle gates — caps dispatch rate per time window */
+  private throttleGates = new Map<string, ThrottleGate>();
 
   private timers: NodeJS.Timeout[] = [];
 
@@ -303,6 +306,11 @@ export class WebhookEngine implements IOqronModule {
       this.activeJobsByDispatcher.set(queueName, new Set());
     }
 
+    // Create throttle gate if configured
+    if (dispatcher.throttle) {
+      this.throttleGates.set(queueName, new ThrottleGate(dispatcher.throttle));
+    }
+
     const t = setInterval(() => {
       this.poll(dispatcher).catch((e) =>
         this.logger.error(`Webhook poller crashed for ${queueName}`, e),
@@ -345,14 +353,27 @@ export class WebhookEngine implements IOqronModule {
 
       if (freeSlots <= 0) return;
 
+      // Throttle gate: cap claim limit by available budget in the current window
+      const gate = this.throttleGates.get(queueName);
+      let claimLimit = freeSlots;
+      if (gate) {
+        claimLimit = Math.min(claimLimit, gate.getAvailable());
+        if (claimLimit <= 0) return;
+      }
+
       // Claim jobs from the broker
       const jobIds = await this.di.broker.claim(
         queueName,
         this.workerIdStr,
-        freeSlots,
+        claimLimit,
         lockTtlMs,
         strategy,
       );
+
+      // Record dispatched count for throttle gate
+      if (jobIds.length > 0) {
+        gate?.record(jobIds.length);
+      }
 
       for (const jobId of jobIds) {
         if (!this.running || !this.enabled) {

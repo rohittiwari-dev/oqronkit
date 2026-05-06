@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { ThrottleGate } from "../engine/utils/throttle-gate.js";
 import type { IOqronModule, Logger } from "../engine/index.js";
 import { OqronContainer, OqronEventBus } from "../engine/index.js";
 import { LagMonitor } from "../engine/lag-monitor.js";
@@ -46,6 +47,8 @@ export class QueueEngine implements IOqronModule {
   private pausedQueues = new Set<string>();
   /** Per-queue timers for cleanup on deregister */
   private queueTimers = new Map<string, NodeJS.Timeout>();
+  /** Per-queue throttle gates — caps dispatch rate per time window */
+  private throttleGates = new Map<string, ThrottleGate>();
   /** Cross-node stall scanner — recovers orphaned jobs from crashed nodes */
   private crossNodeScanner: CrossNodeStallScanner | null = null;
   /** Event-loop lag monitor — pauses job claiming when CPU is stalled */
@@ -565,6 +568,11 @@ export class QueueEngine implements IOqronModule {
       return;
     }
 
+    // Create throttle gate if configured
+    if (q.throttle) {
+      this.throttleGates.set(q.name, new ThrottleGate(q.throttle));
+    }
+
     const basePollMs =
       q.pollIntervalMs ??
       q.heartbeatMs ??
@@ -607,7 +615,14 @@ export class QueueEngine implements IOqronModule {
 
       // Compute claim limit — respect batchSize for batch mode
       const batchSize = q.batchSize ?? 10;
-      const limit = q.processBatch ? Math.min(freeSlots, batchSize) : freeSlots;
+      let limit = q.processBatch ? Math.min(freeSlots, batchSize) : freeSlots;
+
+      // Throttle gate: cap limit by available budget in the current window
+      const gate = this.throttleGates.get(q.name);
+      if (gate) {
+        limit = Math.min(limit, gate.getAvailable());
+        if (limit <= 0) return;
+      }
 
       // Use blocking claims when available for lower latency
       let jobIds: string[] = [];
@@ -651,6 +666,9 @@ export class QueueEngine implements IOqronModule {
       }
 
       if (jobIds.length === 0) return;
+
+      // Record dispatched count for throttle gate
+      gate?.record(jobIds.length);
 
       // Fetch job data & validate
       const validJobs: OqronJob[] = [];

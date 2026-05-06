@@ -89,6 +89,33 @@ await videoQueue.add({ url: 'https://...' })
 
 > **v0.0.2:** The queue-level `priority` is now persisted on `job.opts.priority` at creation time. This ensures retries, stall recovery, and rerun operations preserve the original priority through the full job lifecycle.
 
+## Throttle
+
+Use `throttle` to cap the **dispatch rate** — how many jobs are started per time window. Unlike `concurrency` (which limits parallelism), throttle controls throughput.
+
+```ts
+// Send at most 20 emails per 2 seconds, with 5 running in parallel
+const emailQueue = queue<{ to: string; subject: string; body: string }>({
+  name: 'email-sender',
+  concurrency: 5,
+  throttle: { max: 20, duration: 2_000 },
+
+  handler: async (ctx) => {
+    await sendEmail(ctx.data)
+    return { sent: true }
+  },
+})
+```
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `throttle.max` | `number` | Maximum dispatches allowed per window |
+| `throttle.duration` | `number` | Window duration in milliseconds |
+
+> **How it works:** The throttle gate runs *before* `Broker.claim()` — it reduces the claim limit so no jobs are fetched and then returned. Zero wasted broker round-trips.
+
+> **Per-process vs distributed:** `throttle` is per-process. For cluster-wide rate limiting, compose with `rateLimiter` — both can be used together.
+
 ## Retry & Dead Letter Queue
 
 ```ts
