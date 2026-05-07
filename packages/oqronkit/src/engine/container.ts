@@ -10,11 +10,27 @@ const makeIsolatedStorage = (
   prefix: string,
 ): IStorageEngine => ({
   save: (ns, id, data) => base.save(`${prefix}:${ns}`, id, data),
+  saveIfAbsent: base.saveIfAbsent
+    ? (ns, id, data) => base.saveIfAbsent!(`${prefix}:${ns}`, id, data)
+    : undefined,
   get: (ns, id) => base.get(`${prefix}:${ns}`, id),
   list: (ns, filter, opts) => base.list(`${prefix}:${ns}`, filter, opts),
   delete: (ns, id) => base.delete(`${prefix}:${ns}`, id),
+  bulkSave: base.bulkSave
+    ? (ns, records) => base.bulkSave!(`${prefix}:${ns}`, records)
+    : undefined,
+  bulkDelete: base.bulkDelete
+    ? (ns, ids) => base.bulkDelete!(`${prefix}:${ns}`, ids)
+    : undefined,
   prune: (ns, before) => base.prune(`${prefix}:${ns}`, before),
   count: (ns, filter) => base.count(`${prefix}:${ns}`, filter),
+  increment: base.increment
+    ? (ns, id, field, by) => base.increment!(`${prefix}:${ns}`, id, field, by)
+    : undefined,
+  compareAndSet: base.compareAndSet
+    ? (ns, id, expected, patch) =>
+        base.compareAndSet!(`${prefix}:${ns}`, id, expected, patch)
+    : undefined,
 });
 
 const makeIsolatedBroker = (
@@ -28,9 +44,15 @@ const makeIsolatedBroker = (
       if (delay !== undefined) return base.publish(scopedNs, id, delay);
       return base.publish(scopedNs, id);
     },
+    publishBatch: base.publishBatch
+      ? (ns, ids) => base.publishBatch!(`${prefix}:${ns}`, ids)
+      : undefined,
     claim: (ns, cid, limit, ttl, strat) =>
       base.claim(`${prefix}:${ns}`, cid, limit, ttl, strat),
     ack: (ns, id) => base.ack(`${prefix}:${ns}`, id),
+    remove: base.remove
+      ? (ns, id) => base.remove!(`${prefix}:${ns}`, id)
+      : undefined,
     nack: (ns, id, delay, prio) => {
       const scopedNs = `${prefix}:${ns}`;
       if (prio !== undefined) return base.nack(scopedNs, id, delay, prio);
@@ -41,6 +63,10 @@ const makeIsolatedBroker = (
       base.extendLock(id, cid, ttl, ns ? `${prefix}:${ns}` : undefined),
     pause: (ns) => base.pause(`${prefix}:${ns}`),
     resume: (ns) => base.resume(`${prefix}:${ns}`),
+    isPaused: base.isPaused
+      ? (ns) => base.isPaused!(`${prefix}:${ns}`)
+      : undefined,
+    size: base.size ? (ns) => base.size!(`${prefix}:${ns}`) : undefined,
   };
   // Forward optional claimBlocking when the base broker supports it
   if (base.claimBlocking) {

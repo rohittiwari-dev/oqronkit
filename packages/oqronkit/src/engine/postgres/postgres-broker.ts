@@ -92,6 +92,36 @@ export class PostgresBroker implements IBrokerEngine {
     );
   }
 
+  async publishBatch(
+    brokerName: string,
+    ids: Array<{ id: string; delayMs?: number; priority?: number }>,
+  ): Promise<void> {
+    await this.ensureTable();
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      for (const item of ids) {
+        const runAt =
+          item.delayMs && item.delayMs > 0
+            ? new Date(Date.now() + item.delayMs).toISOString()
+            : new Date().toISOString();
+        await client.query(
+          `INSERT INTO ${this.tableName} (broker_name, id, priority, run_at)
+           VALUES ($1, $2, $3, $4::timestamptz)
+           ON CONFLICT (broker_name, id) DO UPDATE
+           SET priority = $3, run_at = $4::timestamptz, locked_by = NULL, locked_until = NULL`,
+          [brokerName, item.id, item.priority ?? 0, runAt],
+        );
+      }
+      await client.query("COMMIT");
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
   /**
    * Atomic claim using FOR UPDATE SKIP LOCKED.
    * This is the PostgreSQL equivalent of Redis LPOP+SETNX — it atomically
@@ -189,6 +219,10 @@ export class PostgresBroker implements IBrokerEngine {
     );
   }
 
+  async remove(brokerName: string, id: string): Promise<void> {
+    await this.ack(brokerName, id);
+  }
+
   async nack(
     brokerName: string,
     id: string,
@@ -229,7 +263,8 @@ export class PostgresBroker implements IBrokerEngine {
     );
   }
 
-  private async isPaused(brokerName: string): Promise<boolean> {
+  async isPaused(brokerName: string): Promise<boolean> {
+    await this.ensureTable();
     const result = await this.pool.query(
       `SELECT 1 FROM ${this.tableName}
        WHERE broker_name = $1 AND id = '__paused__'
@@ -237,6 +272,16 @@ export class PostgresBroker implements IBrokerEngine {
       [brokerName],
     );
     return result.rows.length > 0;
+  }
+
+  async size(brokerName: string): Promise<number> {
+    await this.ensureTable();
+    const result = await this.pool.query(
+      `SELECT COUNT(*) AS cnt FROM ${this.tableName}
+       WHERE broker_name = $1 AND id <> '__paused__'`,
+      [brokerName],
+    );
+    return Number(result.rows[0].cnt);
   }
 
   /**

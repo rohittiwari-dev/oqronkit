@@ -49,6 +49,26 @@ export class RedisStore implements IStorageEngine {
     await pipeline.exec();
   }
 
+  async saveIfAbsent<T>(
+    namespace: string,
+    id: string,
+    data: T,
+  ): Promise<boolean> {
+    const key = this.getKey(namespace, id);
+    const indexKey = this.getIndexKey(namespace);
+    const json = JSON.stringify(this.encodeDates(data));
+    const inserted = await this.redis.set(key, json, "NX");
+    if (inserted !== "OK") return false;
+
+    const record = data as Record<string, unknown>;
+    const ts =
+      this.toEpochMs(record.createdAt) ??
+      this.toEpochMs(record.expiresAt) ??
+      Date.now();
+    await this.redis.zadd(indexKey, ts, id);
+    return true;
+  }
+
   async get<T>(namespace: string, id: string): Promise<T | null> {
     const key = this.getKey(namespace, id);
     const raw = await this.redis.get(key);
@@ -115,7 +135,17 @@ export class RedisStore implements IStorageEngine {
       );
     }
 
-    if (needsInMemoryFiltering) {
+    if (opts?.orderBy) {
+      const { field, direction = "asc", type } = opts.orderBy;
+      entities.sort((a: any, b: any) => {
+        const av = this.toComparable(a[field], type);
+        const bv = this.toComparable(b[field], type);
+        const cmp = av < bv ? -1 : av > bv ? 1 : 0;
+        return direction === "asc" ? cmp : -cmp;
+      });
+    }
+
+    if (needsInMemoryFiltering || opts?.orderBy) {
       if (limit !== undefined) {
         return entities.slice(offset, offset + limit);
       }
@@ -140,10 +170,92 @@ export class RedisStore implements IStorageEngine {
     return all.length;
   }
 
+  async increment(
+    namespace: string,
+    id: string,
+    field: string,
+    by = 1,
+  ): Promise<number> {
+    const key = this.getKey(namespace, id);
+    const indexKey = this.getIndexKey(namespace);
+    const value = await this.redis.eval(
+      `
+      local raw = redis.call("get", KEYS[1])
+      local obj = {}
+      if raw then obj = cjson.decode(raw) end
+      local current = tonumber(obj[ARGV[1]] or "0")
+      local next_value = current + tonumber(ARGV[2])
+      obj[ARGV[1]] = next_value
+      redis.call("set", KEYS[1], cjson.encode(obj))
+      redis.call("zadd", KEYS[2], ARGV[3], ARGV[4])
+      return next_value
+      `,
+      2,
+      key,
+      indexKey,
+      field,
+      by,
+      Date.now(),
+      id,
+    );
+    return Number(value);
+  }
+
+  async compareAndSet<T extends Record<string, any>>(
+    namespace: string,
+    id: string,
+    expected: Partial<T>,
+    patch: Partial<T>,
+  ): Promise<boolean> {
+    const key = this.getKey(namespace, id);
+    const updated = await this.redis.eval(
+      `
+      local raw = redis.call("get", KEYS[1])
+      if not raw then return 0 end
+      local obj = cjson.decode(raw)
+      local expected = cjson.decode(ARGV[1])
+      local patch = cjson.decode(ARGV[2])
+      for k, v in pairs(expected) do
+        if cjson.encode(obj[k]) ~= cjson.encode(v) then return 0 end
+      end
+      for k, v in pairs(patch) do
+        obj[k] = v
+      end
+      redis.call("set", KEYS[1], cjson.encode(obj))
+      return 1
+      `,
+      1,
+      key,
+      JSON.stringify(this.encodeDates(expected)),
+      JSON.stringify(this.encodeDates(patch)),
+    );
+    return Number(updated) === 1;
+  }
+
   async delete(namespace: string, id: string): Promise<void> {
     const key = this.getKey(namespace, id);
     const indexKey = this.getIndexKey(namespace);
     await this.redis.multi().del(key).zrem(indexKey, id).exec();
+  }
+
+  async bulkSave<T>(
+    namespace: string,
+    records: Array<{ id: string; data: T }>,
+  ): Promise<void> {
+    for (const record of records) {
+      await this.save(namespace, record.id, record.data);
+    }
+  }
+
+  async bulkDelete(namespace: string, ids: string[]): Promise<void> {
+    if (ids.length === 0) return;
+    const indexKey = this.getIndexKey(namespace);
+    const pipeline = this.redis.multi();
+    for (const id of ids) {
+      pipeline.del(this.getKey(namespace, id));
+    }
+    pipeline.zrem(indexKey, ...ids);
+    await pipeline.exec();
   }
 
   async prune(namespace: string, beforeMs: number): Promise<number> {
@@ -207,6 +319,23 @@ export class RedisStore implements IStorageEngine {
       return Number.isNaN(parsed) ? undefined : parsed;
     }
     return undefined;
+  }
+
+  private toComparable(
+    value: unknown,
+    type?: "number" | "date" | "string",
+  ): number | string {
+    if (type === "number") {
+      const n = Number(value);
+      return Number.isFinite(n) ? n : Number.NEGATIVE_INFINITY;
+    }
+    if (type === "date") {
+      return this.toEpochMs(value) ?? Number.NEGATIVE_INFINITY;
+    }
+    if (typeof value === "number") return value;
+    const time = this.toEpochMs(value);
+    if (time !== undefined) return time;
+    return String(value ?? "");
   }
 
   /**  Evaluates an item against all WhereConditions (AND semantics) */

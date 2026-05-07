@@ -15,7 +15,8 @@ export type OqronModuleName =
   | "webhook"
   | "ratelimit"
   | "batch"
-  | "cache";
+  | "cache"
+  | "pubsub";
 
 // ── Per-Module Config Interfaces (user-facing, all optional) ────────────────
 
@@ -153,6 +154,34 @@ export interface QueueModuleConfig {
       };
 }
 
+export interface PubSubModuleConfig {
+  /** Parallel delivery limit per subscription. @default 1 */
+  concurrency?: number;
+  /** Polling interval for broker claims in ms. @default 100 */
+  pollIntervalMs?: number;
+  /** Broker claim lock TTL in ms. @default 30000 */
+  lockTtlMs?: number;
+  /** Handler acknowledgement timeout in ms. @default 30000 */
+  ackTimeoutMs?: number;
+  /** Default retry configuration for subscriptions */
+  retries?: {
+    max?: number;
+    strategy?: "fixed" | "exponential";
+    baseDelay?: number;
+    maxDelay?: number;
+  };
+  /** Dead letter queue configuration */
+  deadLetter?: { enabled?: boolean };
+  /** Graceful shutdown drain timeout in ms. @default 25000 */
+  shutdownTimeout?: number;
+  /** Leader reconciliation interval. Set 0 to disable. @default 30000 */
+  reconciliationIntervalMs?: number;
+  /** Max delivery records repaired per reconciliation scan. @default 500 */
+  reconciliationBatchSize?: number;
+  /** Leader retention cleanup interval. Set 0 to disable. @default 60000 */
+  retentionIntervalMs?: number;
+}
+
 export interface WebhookModuleConfig {
   /** Maximum number of parallel Webhook jobs across all dispatchers. @default 10 */
   concurrency?: number;
@@ -233,6 +262,7 @@ export type SchedulerModuleDef = {
   module: "scheduler";
 } & SchedulerModuleConfig;
 export type QueueModuleDef = { module: "queue" } & QueueModuleConfig;
+export type PubSubModuleDef = { module: "pubsub" } & PubSubModuleConfig;
 export type WebhookModuleDef = {
   module: "webhook";
 } & WebhookModuleConfig;
@@ -305,6 +335,7 @@ export type OqronModuleDef =
   | CronModuleDef
   | SchedulerModuleDef
   | QueueModuleDef
+  | PubSubModuleDef
   | WorkerModuleDef
   | WebhookModuleDef
   | RateLimitModuleDef
@@ -362,6 +393,10 @@ export function queueModule(config?: QueueModuleConfig): QueueModuleDef {
   return { module: "queue", ...config };
 }
 
+export function pubsubModule(config?: PubSubModuleConfig): PubSubModuleDef {
+  return { module: "pubsub", ...config };
+}
+
 /**
  * Create a Webhook module configuration.
  *
@@ -380,6 +415,7 @@ const STRING_TO_DEF: Record<OqronModuleName, () => OqronModuleDef> = {
   cron: () => ({ module: "cron" }),
   scheduler: () => ({ module: "scheduler" }),
   queue: () => ({ module: "queue" }),
+  pubsub: () => ({ module: "pubsub" }),
   worker: () => ({ module: "worker" }),
   webhook: () => ({ module: "webhook" }),
   ratelimit: () => ({ module: "ratelimit" }),

@@ -189,6 +189,15 @@ export class RedisBroker implements IBrokerEngine {
     }
   }
 
+  async publishBatch(
+    brokerName: string,
+    ids: Array<{ id: string; delayMs?: number; priority?: number }>,
+  ): Promise<void> {
+    for (const item of ids) {
+      await this.publish(brokerName, item.id, item.delayMs, item.priority);
+    }
+  }
+
   async claim(
     brokerName: string,
     consumerId: string,
@@ -298,6 +307,10 @@ export class RedisBroker implements IBrokerEngine {
     await pipeline.exec();
   }
 
+  async remove(brokerName: string, id: string): Promise<void> {
+    await this.ack(brokerName, id);
+  }
+
   async nack(
     brokerName: string,
     id: string,
@@ -335,6 +348,19 @@ export class RedisBroker implements IBrokerEngine {
 
   async resume(brokerName: string): Promise<void> {
     await this.redis.del(this.getPausedKey(brokerName));
+  }
+
+  async isPaused(brokerName: string): Promise<boolean> {
+    return (await this.redis.get(this.getPausedKey(brokerName))) !== null;
+  }
+
+  async size(brokerName: string): Promise<number> {
+    const [fifo, priority, delayed] = await Promise.all([
+      this.redis.llen(this.getQueueKey(brokerName)),
+      this.redis.zcard(this.getPriorityKey(brokerName)),
+      this.redis.zcard(this.getDelayedKey(brokerName)),
+    ]);
+    return fifo + priority + delayed;
   }
 
   /**

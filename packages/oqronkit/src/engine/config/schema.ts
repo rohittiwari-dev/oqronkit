@@ -4,6 +4,7 @@ import type {
   CacheModuleDef,
   CronModuleDef,
   OqronModuleDef,
+  PubSubModuleDef,
   QueueModuleDef,
   RateLimitModuleDef,
   SchedulerModuleDef,
@@ -88,6 +89,25 @@ const DEFAULT_QUEUE: Omit<
   shutdownTimeout: 25000,
   maxStalledCount: 1,
   stalledInterval: 30000,
+};
+
+const DEFAULT_PUBSUB: Required<PubSubModuleDef> = {
+  module: "pubsub",
+  concurrency: 1,
+  pollIntervalMs: 100,
+  lockTtlMs: 30000,
+  ackTimeoutMs: 30000,
+  retries: {
+    max: 3,
+    strategy: "exponential",
+    baseDelay: 1000,
+    maxDelay: 60000,
+  },
+  deadLetter: { enabled: true },
+  shutdownTimeout: 25000,
+  reconciliationIntervalMs: 30000,
+  reconciliationBatchSize: 500,
+  retentionIntervalMs: 60000,
 };
 
 const DEFAULT_WORKER: Omit<
@@ -175,6 +195,8 @@ export function applyModuleDefaults(def: OqronModuleDef): OqronModuleDef {
       return applySchedulerDefaults(def);
     case "queue":
       return applyQueueDefaults(def);
+    case "pubsub":
+      return applyPubSubDefaults(def as PubSubModuleDef);
     case "worker":
       return applyWorkerDefaults(def as WorkerModuleDef);
     case "webhook":
@@ -220,6 +242,16 @@ function applyQueueDefaults(def: QueueModuleDef): QueueModuleDef {
     module: "queue",
     retries: { ...DEFAULT_QUEUE.retries, ...(def.retries ?? {}) },
     deadLetter: { ...DEFAULT_QUEUE.deadLetter, ...(def.deadLetter ?? {}) },
+  };
+}
+
+function applyPubSubDefaults(def: PubSubModuleDef): PubSubModuleDef {
+  return {
+    ...DEFAULT_PUBSUB,
+    ...def,
+    module: "pubsub",
+    retries: { ...DEFAULT_PUBSUB.retries, ...(def.retries ?? {}) },
+    deadLetter: { ...DEFAULT_PUBSUB.deadLetter, ...(def.deadLetter ?? {}) },
   };
 }
 

@@ -84,6 +84,22 @@ export class PostgresStore implements IStorageEngine {
     );
   }
 
+  async saveIfAbsent<T>(
+    namespace: string,
+    id: string,
+    data: T,
+  ): Promise<boolean> {
+    await this.ensureTable();
+    const json = JSON.stringify(this.encodeDates(data));
+    const result = await this.pool.query(
+      `INSERT INTO ${this.tableName} (namespace, id, data, created_at)
+       VALUES ($1, $2, $3::jsonb, NOW())
+       ON CONFLICT (namespace, id) DO NOTHING`,
+      [namespace, id, json],
+    );
+    return result.rowCount > 0;
+  }
+
   async get<T>(namespace: string, id: string): Promise<T | null> {
     await this.ensureTable();
     const result = await this.pool.query(
@@ -144,7 +160,20 @@ export class PostgresStore implements IStorageEngine {
       }
     }
 
-    query += ` ORDER BY created_at DESC`;
+    if (opts?.orderBy) {
+      const fieldIdx = params.length + 1;
+      params.push(opts.orderBy.field);
+      const direction = opts.orderBy.direction === "desc" ? "DESC" : "ASC";
+      if (opts.orderBy.type === "number") {
+        query += ` ORDER BY (data ->> ($${fieldIdx})::text)::numeric ${direction}`;
+      } else if (opts.orderBy.type === "date") {
+        query += ` ORDER BY (data -> ($${fieldIdx})::text ->> '__val')::timestamptz ${direction}`;
+      } else {
+        query += ` ORDER BY data ->> ($${fieldIdx})::text ${direction}`;
+      }
+    } else {
+      query += ` ORDER BY created_at DESC`;
+    }
     if (limit !== undefined) {
       const limitIdx = params.length + 1;
       query += ` LIMIT $${limitIdx}`;
@@ -183,11 +212,89 @@ export class PostgresStore implements IStorageEngine {
     return parseInt(result.rows[0].cnt, 10);
   }
 
+  async increment(
+    namespace: string,
+    id: string,
+    field: string,
+    by = 1,
+  ): Promise<number> {
+    await this.ensureTable();
+    const result = await this.pool.query(
+      `INSERT INTO ${this.tableName} (namespace, id, data, created_at)
+       VALUES ($1, $2, jsonb_build_object($3::text, $4::numeric), NOW())
+       ON CONFLICT (namespace, id)
+       DO UPDATE SET data = jsonb_set(
+         ${this.tableName}.data,
+         ARRAY[$3::text],
+         to_jsonb(COALESCE((${this.tableName}.data ->> $3::text)::numeric, 0) + $4::numeric),
+         true
+       )
+       RETURNING data ->> $3::text AS value`,
+      [namespace, id, field, by],
+    );
+    return Number(result.rows[0].value);
+  }
+
+  async compareAndSet<T extends Record<string, any>>(
+    namespace: string,
+    id: string,
+    expected: Partial<T>,
+    patch: Partial<T>,
+  ): Promise<boolean> {
+    await this.ensureTable();
+    const expectedJson = JSON.stringify(this.encodeDates(expected));
+    const patchJson = JSON.stringify(this.encodeDates(patch));
+    const result = await this.pool.query(
+      `UPDATE ${this.tableName}
+       SET data = data || $4::jsonb
+       WHERE namespace = $1 AND id = $2 AND data @> $3::jsonb`,
+      [namespace, id, expectedJson, patchJson],
+    );
+    return result.rowCount > 0;
+  }
+
   async delete(namespace: string, id: string): Promise<void> {
     await this.ensureTable();
     await this.pool.query(
       `DELETE FROM ${this.tableName} WHERE namespace = $1 AND id = $2`,
       [namespace, id],
+    );
+  }
+
+  async bulkSave<T>(
+    namespace: string,
+    records: Array<{ id: string; data: T }>,
+  ): Promise<void> {
+    await this.ensureTable();
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      for (const record of records) {
+        const json = JSON.stringify(this.encodeDates(record.data));
+        await client.query(
+          `INSERT INTO ${this.tableName} (namespace, id, data, created_at)
+           VALUES ($1, $2, $3::jsonb, NOW())
+           ON CONFLICT (namespace, id)
+           DO UPDATE SET data = $3::jsonb`,
+          [namespace, record.id, json],
+        );
+      }
+      await client.query("COMMIT");
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
+  }
+
+  async bulkDelete(namespace: string, ids: string[]): Promise<void> {
+    if (ids.length === 0) return;
+    await this.ensureTable();
+    await this.pool.query(
+      `DELETE FROM ${this.tableName}
+       WHERE namespace = $1 AND id = ANY($2::text[])`,
+      [namespace, ids],
     );
   }
 

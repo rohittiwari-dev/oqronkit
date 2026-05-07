@@ -96,10 +96,10 @@ const NODES = [
   {
     icon: Radio,
     label: "PubSub",
-    color: "#ea580c",
-    x: 15,
-    y: 65,
-    size: 34,
+    color: "#06b6d4",
+    x: 14,
+    y: 62,
+    size: 50,
     delay: 1.2,
   },
 ] as const;
@@ -116,7 +116,10 @@ const CONNECTIONS = [
   [6, 1],
   [7, 0],
   [7, 5],
+  [8, 0],
+  [8, 1],
   [8, 2],
+  [8, 3],
   [8, 4],
 ] as const;
 
@@ -266,14 +269,14 @@ const PARTICLES = [
 
 /* ─── Live job ticker ─────────────────────────────────────────────────── */
 const TICKER = [
-  "✓ send-email processed in 42ms",
-  "⟳ daily-cleanup scheduled for 00:00",
-  "✓ billing-charge completed",
-  "↻ worker-02 heartbeat renewed",
-  "✓ generate-report processed in 1.2s",
-  "⟳ rate-limit reset for api/v1",
-  "✓ webhook delivered to stripe",
-  "↻ stall scan: 0 stalled, 12 healthy",
+  "pubsub order-events[3] offset 2048 published",
+  "billing-service acked message in 38ms",
+  "analytics-service lag: 0 across 16 partitions",
+  "account-events partition key: acct_42",
+  "dead-letter replay queued for shipping-service",
+  "worker-02 heartbeat renewed",
+  "webhook delivered to stripe",
+  "reconciliation scan: 0 expired leases",
 ];
 
 function LiveTicker() {
@@ -500,7 +503,7 @@ export function Hero() {
           >
             <span className="inline-flex items-center gap-2 rounded-full border border-rose-500/20 bg-rose-500/5 backdrop-blur-sm px-4 py-1.5 text-xs font-semibold text-rose-500 dark:text-rose-400 shadow-sm">
               <span className="flex h-1.5 w-1.5 rounded-full bg-rose-500 animate-pulse" />
-              Introducing OqronKit v1.0
+              Introducing OqronKit
             </span>
           </motion.div>
 
@@ -511,9 +514,9 @@ export function Hero() {
             transition={{ duration: 0.6, delay: 0.1 }}
             className="text-4xl font-extrabold tracking-tight text-fd-foreground sm:text-5xl lg:text-[3.5rem] xl:text-6xl mb-6 leading-[1.08]"
           >
-            The background
+            Background jobs
             <br />
-            engine for{" "}
+            for{" "}
             <span className="relative inline-block">
               <span
                 className="bg-clip-text text-transparent animate-gradient-x bg-[length:200%_auto]"
@@ -545,9 +548,9 @@ export function Hero() {
             transition={{ duration: 0.5, delay: 0.2 }}
             className="text-lg text-fd-muted-foreground mb-8 leading-relaxed"
           >
-            12 enterprise modules. Crash-safe queues, distributed workers,
-            schedulers, rate limiters, webhooks, sagas — adapter-driven, and
-            built for massive horizontal scale.
+            Queues, workers, schedulers, caching, and pub/sub — built on a
+            shared adapter layer so you can start in memory and move to
+            Redis or Postgres when you&apos;re ready.
           </motion.p>
 
           {/* Install command */}
@@ -598,10 +601,10 @@ export function Hero() {
               <ArrowRight className="relative h-4 w-4 transition-transform group-hover:translate-x-0.5" />
             </Link>
             <Link
-              href="/docs"
+              href="/docs/pubsub"
               className="inline-flex h-12 items-center justify-center gap-2 rounded-xl border border-fd-border bg-fd-card/80 backdrop-blur-sm px-7 text-sm font-medium text-fd-foreground transition-all hover:bg-fd-accent hover:text-fd-accent-foreground hover:border-fd-border/80 shadow-sm"
             >
-              Read the Docs
+              Pub/Sub Docs
             </Link>
           </motion.div>
 
@@ -713,7 +716,7 @@ export function Hero() {
               ))}
             </div>
             <span className="text-[11px] font-semibold text-fd-muted-foreground">
-              12 Enterprise Modules
+              Pub/Sub + 11 Modules
             </span>
           </motion.div>
         </motion.div>

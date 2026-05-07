@@ -16,6 +16,7 @@ import {
   type CacheModuleDef,
   type CronModuleDef,
   getModuleConfig,
+  type PubSubModuleDef,
   type QueueModuleDef,
   type RateLimitModuleDef,
   type SchedulerModuleDef,
@@ -142,6 +143,9 @@ export {
   type OqronModuleDef,
   type OqronModuleInput,
   type OqronModuleName,
+  type PubSubModuleConfig,
+  type PubSubModuleDef,
+  pubsubModule,
   type QueueModuleConfig,
   type QueueModuleDef,
   queueModule,
@@ -158,6 +162,23 @@ export {
   webhookModule,
   workerModule,
 } from "./modules.js";
+export { topic } from "./pubsub/define-pubsub.js";
+export type {
+  ITopic,
+  MessageContext,
+  PubSubAckMode,
+  PubSubDeadLetterRecord,
+  PubSubDeliveryRecord,
+  PubSubDeliveryStatus,
+  PubSubGroupRecord,
+  PubSubMessageRecord,
+  PubSubPublishOptions,
+  PubSubStartPosition,
+  SubscriptionConfig,
+  TopicConfig,
+  TopicDistributionConfig,
+  TopicStats,
+} from "./pubsub/types.js";
 export { queue } from "./queue/define-queue.js";
 export {
   type QueueMetricEntry,
@@ -393,6 +414,16 @@ export const OqronKit = {
     if (queueConf) {
       const { QueueEngine } = await import("./queue/queue-engine.js");
       const engine = new QueueEngine(_config, _logger!, queueConf);
+      OqronRegistry.getInstance().register(engine);
+    }
+
+    const pubsubConf = getModuleConfig<PubSubModuleDef>(
+      _config.modules,
+      "pubsub",
+    );
+    if (pubsubConf) {
+      const { PubSubModule } = await import("./pubsub/pubsub-module.js");
+      const engine = new PubSubModule(_config, _logger!, pubsubConf);
       OqronRegistry.getInstance().register(engine);
     }
 

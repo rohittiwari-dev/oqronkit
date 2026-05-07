@@ -98,6 +98,15 @@ export class MemoryBroker implements IBrokerEngine {
     }
   }
 
+  async publishBatch(
+    brokerName: string,
+    ids: Array<{ id: string; delayMs?: number; priority?: number }>,
+  ): Promise<void> {
+    for (const item of ids) {
+      await this.publish(brokerName, item.id, item.delayMs, item.priority);
+    }
+  }
+
   async claim(
     brokerName: string,
     consumerId: string,
@@ -232,6 +241,10 @@ export class MemoryBroker implements IBrokerEngine {
     this.removeQueuedId(brokerName, id);
   }
 
+  async remove(brokerName: string, id: string): Promise<void> {
+    await this.ack(brokerName, id);
+  }
+
   async nack(
     brokerName: string,
     id: string,
@@ -261,6 +274,21 @@ export class MemoryBroker implements IBrokerEngine {
   async resume(brokerName: string): Promise<void> {
     this.paused.delete(brokerName);
     this.events.emit(`broker:ready:${brokerName}`);
+  }
+
+  async isPaused(brokerName: string): Promise<boolean> {
+    return this.paused.has(brokerName);
+  }
+
+  async size(brokerName: string): Promise<number> {
+    return (
+      (this.waitLists.get(brokerName)?.length ?? 0) +
+      (this.priorityLists.get(brokerName)?.length ?? 0) +
+      (this.delayed.get(brokerName)?.length ?? 0) +
+      Array.from(this.activeLocks.keys()).filter((key) =>
+        key.startsWith(`${brokerName}${this.lockSeparator}`),
+      ).length
+    );
   }
 
   /**

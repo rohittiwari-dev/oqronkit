@@ -15,11 +15,22 @@ export interface ListOptions {
   limit?: number;
   /** Number of records to skip (for pagination). Defaults to 0. */
   offset?: number;
+  /** Optional deterministic ordering by a top-level record field. */
+  orderBy?: {
+    field: string;
+    direction?: "asc" | "desc";
+    type?: "number" | "date" | "string";
+  };
   /**
    * Comparison conditions applied AFTER exact-match filter.
    * Fields with null/undefined values are excluded from comparison matches.
    */
   where?: WhereCondition[];
+}
+
+export interface StorageBulkRecord<T = any> {
+  id: string;
+  data: T;
 }
 
 /** Job ordering strategy for broker queues */
@@ -28,6 +39,9 @@ export type BrokerStrategy = "fifo" | "lifo" | "priority";
 export interface IStorageEngine {
   /** Saves a generic entity into a namespace */
   save<T>(namespace: string, id: string, data: T): Promise<void>;
+
+  /** Saves only when the entity does not already exist. Returns true on insert. */
+  saveIfAbsent?<T>(namespace: string, id: string, data: T): Promise<boolean>;
 
   /** Retrieves an entity */
   get<T>(namespace: string, id: string): Promise<T | null>;
@@ -42,11 +56,42 @@ export interface IStorageEngine {
   /** Removes an entity */
   delete(namespace: string, id: string): Promise<void>;
 
+  /** Saves many records. Implementations should prefer one atomic batch. */
+  bulkSave?<T>(
+    namespace: string,
+    records: Array<StorageBulkRecord<T>>,
+  ): Promise<void>;
+
+  /** Deletes many records. Missing records are ignored. */
+  bulkDelete?(namespace: string, ids: string[]): Promise<void>;
+
   /** Atomic bulk cleanup */
   prune(namespace: string, beforeMs: number): Promise<number>;
 
   /** Count total records in a namespace matching an optional filter */
   count(namespace: string, filter?: Record<string, any>): Promise<number>;
+
+  /** Atomically increments a top-level numeric field and returns the new value. */
+  increment?(
+    namespace: string,
+    id: string,
+    field: string,
+    by?: number,
+  ): Promise<number>;
+
+  /** Compare expected top-level fields and merge a patch when they match. */
+  compareAndSet?<T extends Record<string, any>>(
+    namespace: string,
+    id: string,
+    expected: Partial<T>,
+    patch: Partial<T>,
+  ): Promise<boolean>;
+}
+
+export interface BrokerPublishBatchItem {
+  id: string;
+  delayMs?: number;
+  priority?: number;
 }
 
 export interface IBrokerEngine {
@@ -56,6 +101,12 @@ export interface IBrokerEngine {
     id: string,
     delayMs?: number,
     priority?: number,
+  ): Promise<void>;
+
+  /** Pushes many IDs into one named broker. */
+  publishBatch?(
+    brokerName: string,
+    ids: BrokerPublishBatchItem[],
   ): Promise<void>;
 
   /**
@@ -81,6 +132,9 @@ export interface IBrokerEngine {
   /** Pops the entity out of the active broker locking list permanently */
   ack(brokerName: string, id: string): Promise<void>;
 
+  /** Removes an ID from waiting, delayed, priority, and active broker state. */
+  remove?(brokerName: string, id: string): Promise<void>;
+
   /**
    * Negative acknowledgement — re-queue a job back into the broker for retry.
    * Used for crash-safe retries: the job goes back to the waiting list with an
@@ -96,6 +150,8 @@ export interface IBrokerEngine {
   /** Pauses/Resumes all emissions from a specific broker namespace */
   pause(brokerName: string): Promise<void>;
   resume(brokerName: string): Promise<void>;
+  isPaused?(brokerName: string): Promise<boolean>;
+  size?(brokerName: string): Promise<number>;
 
   /**
    * Blocking claim — waits up to `timeoutMs` for a job to become available.

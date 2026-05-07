@@ -152,6 +152,16 @@ export type OqronEventMap = {
   "worker:job:completed": [topic: string, jobId: string, durationMs: number];
   "worker:job:failed": [topic: string, jobId: string, durationMs: number];
 
+  // PubSub lifecycle
+  "pubsub:message:published": [topicName: string, messageId: string];
+  "pubsub:delivery:claimed": [topicName: string, deliveryId: string];
+  "pubsub:delivery:acked": [topicName: string, deliveryId: string];
+  "pubsub:delivery:nacked": [topicName: string, deliveryId: string];
+  "pubsub:delivery:dead": [topicName: string, deliveryId: string];
+  "pubsub:group:paused": [topicName: string, groupName: string];
+  "pubsub:group:resumed": [topicName: string, groupName: string];
+  "pubsub:reconciliation:repaired": [topicName: string, repaired: number];
+
   // ── Webhook Lifecycle (Phase 3 — Hardening) ─────────────────────────────
   "webhook:created": [dispatcherName: string];
   "webhook:updated": [dispatcherName: string];

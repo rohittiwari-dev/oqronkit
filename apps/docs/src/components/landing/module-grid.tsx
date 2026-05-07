@@ -71,7 +71,7 @@ const MODULES = [
     icon: Network,
     href: "/docs/workflow",
     accent: "#fb923c",
-    status: "preview",
+    status: "roadmap",
   },
   {
     name: "Batch",
@@ -89,7 +89,7 @@ const MODULES = [
     icon: Repeat,
     href: "/docs/saga",
     accent: "#db2777",
-    status: "preview",
+    status: "roadmap",
   },
   {
     name: "Pipeline",
@@ -103,11 +103,11 @@ const MODULES = [
   {
     name: "PubSub",
     description:
-      "Durable topics and fan-out consumer groups with at-least-once delivery.",
+      "Partitioned topics, consumer groups, offsets, replay, and dead letters.",
     icon: Radio,
     href: "/docs/pubsub",
-    accent: "#e11d48",
-    status: "roadmap",
+    accent: "#06b6d4",
+    status: "stable",
   },
   {
     name: "Cache",
@@ -133,10 +133,6 @@ const STATUS_LABEL: Record<string, { label: string; cls: string }> = {
   stable: {
     label: "Stable",
     cls: "bg-emerald-500/10 text-emerald-500 border-emerald-500/20",
-  },
-  preview: {
-    label: "Preview",
-    cls: "bg-amber-500/10 text-amber-500 border-amber-500/20",
   },
   roadmap: {
     label: "Roadmap",
