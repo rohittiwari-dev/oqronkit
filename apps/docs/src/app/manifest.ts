@@ -5,7 +5,7 @@ export default function manifest(): MetadataRoute.Manifest {
     name: "OqronKit",
     short_name: "OqronKit",
     description:
-      "Enterprise-grade, crash-safe background job engine for Node.js. 12 modules — queues, workers, schedulers, rate limiters, webhooks, sagas, and more.",
+      "Crash-safe background job engine for Node.js. 12 modules — queues, workers, schedulers, rate limiters, webhooks, sagas, and more",
     start_url: "/",
     display: "browser",
     background_color: "#09090b",

@@ -1,8 +1,8 @@
 # OqronKit Monorepo
 
-Welcome to the **OqronKit** monorepo—the enterprise-grade, zero-config cron and job scheduling framework for Node.js. 
+Welcome to the **OqronKit** monorepo—the reliable, zero-config cron and job scheduling framework for Node.js. 
 
-This repository is powered by [Turborepo](https://turbo.build/) and [Bun](https://bun.sh/) for lightning-fast compilation and workspace management.
+This repository is powered by [Turborepo](https://turbo.build/) and [Bun](https://bun.sh/) for fast compilation and workspace management.
 
 ## 📦 Workspace Structure
 

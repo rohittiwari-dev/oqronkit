@@ -1,7 +1,7 @@
 import { webhook } from "oqronkit";
 
 /**
- * Enterprise Webhook Dispatcher
+ * Webhook Dispatcher
  * Demonstrates Fan-out distribution, HMAC signatures, and Glob matching.
  */
 export const platformWebhooks = webhook({

@@ -7,7 +7,7 @@ import { registerQueue } from "./registry.js";
 import type { IPublisherQueue, IQueue, QueueConfig } from "./types.js";
 
 /**
- * Enterprise Queue Factory.
+ * Queue Factory.
  *
  * **With handler** (monolithic): publisher and consumer live in the same process.
  * **Without handler** (publisher-only): only pushes jobs; a separate `worker()` node consumes them.

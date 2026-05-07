@@ -40,7 +40,16 @@
   "bugs": {
     "url": "https://github.com/rohittiwari-dev/oqronkit/issues"
   },
-  "keywords": [],
+  "keywords": [
+    "oqronkit",
+    "background jobs",
+    "job queue",
+    "cron",
+    "scheduler",
+    "task queue",
+    "orchestrator",
+    "microservices"
+  ],
   "devDependencies": {
     "@biomejs/biome": "^2.4.14",
     "@changesets/cli": "^2.31.0",

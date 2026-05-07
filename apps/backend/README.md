@@ -59,4 +59,4 @@ src/
       └── distributed-workers.ts    # Distributed Queue + Worker
 ```
 
-*Powered by OqronKit v1.0 Enterprise.*
+*Powered by OqronKit v1.0.*

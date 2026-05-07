@@ -1,13 +1,42 @@
 {
   "name": "oqronkit",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "description": "Crash-safe, non-blocking, modular job processing framework for Node.js",
   "main": "dist/index.js",
   "module": "dist/index.mjs",
   "types": "dist/index.d.ts",
   "repository": {
     "type": "git",
-    "url": "https://github.com/rohittiwari-dev/oqronkit"
+    "url": "git+https://github.com/rohittiwari-dev/oqronkit.git"
+  },
+  "keywords": [
+    "background jobs",
+    "job queue",
+    "task queue",
+    "cron",
+    "scheduler",
+    "worker",
+    "rate limiter",
+    "webhook",
+    "saga",
+    "dag",
+    "orchestrator",
+    "redis queue",
+    "postgres queue",
+    "bullmq alternative",
+    "bullmq",
+    "inngest",
+    "celery",
+    "typescript",
+    "microservices",
+    "message queue",
+    "pubsub",
+    "batch processing"
+  ],
+  "author": "Rohit Tiwari <rohit@rohittiwari.me>",
+  "homepage": "https://oqronkit.rohittiwari.me",
+  "bugs": {
+    "url": "https://github.com/rohittiwari-dev/oqronkit/issues"
   },
   "license": "MIT",
   "exports": {

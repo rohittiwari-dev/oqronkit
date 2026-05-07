@@ -7,7 +7,7 @@ const STATS = [
   {
     value: 12,
     suffix: "",
-    label: "Enterprise Modules",
+    label: "Core Modules",
     sub: "Queue · Worker · Scheduler · …",
     accent: "#7c3aed",
     glow: "rgba(124,58,237,0.2)",

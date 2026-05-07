@@ -2,7 +2,7 @@ import { registerWorker } from "./registry.js";
 import type { IWorker, WorkerConfig } from "./types.js";
 
 /**
- * Enterprise Worker Factory (Consumer Only).
+ * Worker Factory (Consumer Only).
  *
  * This function defines a decoupled background worker that listens to a specific
  * topic. It does NOT have the ability to push jobs to the broker (no `.add()` method).
