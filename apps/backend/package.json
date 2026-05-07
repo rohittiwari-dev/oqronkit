@@ -15,7 +15,7 @@
     "fastify": "^4.29.0",
     "hono": "^4.4.13",
     "ioredis": "^5.10.1",
-    "oqronkit": "0.0.3-beta.0"
+    "oqronkit": "workspace:*"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
