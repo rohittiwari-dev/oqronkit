@@ -1,4 +1,10 @@
 import { randomUUID } from "node:crypto";
+import { getCache } from "../cache/registry.js";
+import type {
+  CacheInstanceRecord,
+  CacheSnapshot,
+  CacheStats,
+} from "../cache/types.js";
 import {
   Broker,
   OqronEventBus,
@@ -207,6 +213,9 @@ export class OqronManager {
     if (type === ("ratelimit" as any)) {
       return this.enableRateLimiter(name);
     }
+    if (type === ("cache" as any)) {
+      return this.enableCache(name);
+    }
     return false;
   }
 
@@ -237,6 +246,9 @@ export class OqronManager {
     }
     if (type === ("ratelimit" as any)) {
       return this.disableRateLimiter(name);
+    }
+    if (type === ("cache" as any)) {
+      return this.disableCache(name);
     }
     return false;
   }
@@ -320,6 +332,65 @@ export class OqronManager {
     const limiter = getLimiter(name);
     if (!limiter) return null;
     return limiter.getStatus(adminKey);
+  }
+
+  async listCaches(): Promise<CacheInstanceRecord[]> {
+    return Storage.list<CacheInstanceRecord>("cache_instances");
+  }
+
+  async getCacheStats(name: string): Promise<CacheStats | null> {
+    return Storage.get<CacheStats>("cache_stats", name);
+  }
+
+  async getCacheSnapshot(name: string): Promise<CacheSnapshot | null> {
+    const cache = getCache(name);
+    if (!cache) return null;
+    return cache.snapshot();
+  }
+
+  async clearCache(name: string): Promise<number> {
+    const cache = getCache(name);
+    if (!cache) return 0;
+    return cache.invalidateAll();
+  }
+
+  async invalidateCacheKey(name: string, key: string): Promise<boolean> {
+    const cache = getCache(name);
+    if (!cache) return false;
+    await cache.invalidate(key);
+    return true;
+  }
+
+  async invalidateCachePrefix(name: string, prefix: string): Promise<number> {
+    const cache = getCache(name);
+    if (!cache) return 0;
+    return cache.invalidatePrefix(prefix);
+  }
+
+  async invalidateCacheTags(name: string, tags: string[]): Promise<number> {
+    const cache = getCache(name);
+    if (!cache) return 0;
+    return cache.invalidateTags(tags);
+  }
+
+  async enableCache(name: string): Promise<boolean> {
+    const rec = await Storage.get<CacheInstanceRecord>("cache_instances", name);
+    if (!rec) return false;
+    rec.enabled = true;
+    rec.updatedAt = new Date();
+    await Storage.save("cache_instances", name, rec);
+    OqronEventBus.emit("cache:instance:enabled", name);
+    return true;
+  }
+
+  async disableCache(name: string): Promise<boolean> {
+    const rec = await Storage.get<CacheInstanceRecord>("cache_instances", name);
+    if (!rec) return false;
+    rec.enabled = false;
+    rec.updatedAt = new Date();
+    await Storage.save("cache_instances", name, rec);
+    OqronEventBus.emit("cache:instance:disabled", name);
+    return true;
   }
 
   // ── Queue Administration ───────────────────────────────────────────────────

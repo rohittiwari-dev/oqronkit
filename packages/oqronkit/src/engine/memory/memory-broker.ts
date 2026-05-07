@@ -333,6 +333,24 @@ export class MemoryBroker implements IBrokerEngine {
   }
 
   /** Clean up internal event emitters and maps — prevents listener leaks in tests */
+  async broadcast(channel: string, message: unknown): Promise<void> {
+    this.events.emit(`broadcast:${channel}`, message);
+  }
+
+  async subscribe(
+    channel: string,
+    handler: (message: unknown) => void | Promise<void>,
+  ): Promise<() => void> {
+    const eventName = `broadcast:${channel}`;
+    const listener = (message: unknown) => {
+      void handler(message);
+    };
+    this.events.on(eventName, listener);
+    return () => {
+      this.events.removeListener(eventName, listener);
+    };
+  }
+
   close(): void {
     this.events.removeAllListeners();
     this.waitLists.clear();

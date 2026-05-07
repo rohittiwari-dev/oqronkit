@@ -97,6 +97,29 @@ export type OqronEventMap = {
   ];
   "ratelimit:circuit-closed": [limiterName: string, tier: string, key: string];
 
+  // Cache lifecycle
+  "cache:hit": [
+    cacheName: string,
+    key: string,
+    tier: "L1" | "L2",
+    stale: boolean,
+  ];
+  "cache:miss": [cacheName: string, key: string];
+  "cache:set": [cacheName: string, key: string];
+  "cache:delete": [cacheName: string, key: string];
+  "cache:invalidate": [
+    cacheName: string,
+    payload: { key: string | null; tags: string[] | null; count: number },
+  ];
+  "cache:refresh:start": [cacheName: string, key: string];
+  "cache:refresh:success": [cacheName: string, key: string, latencyMs: number];
+  "cache:refresh:error": [cacheName: string, key: string, error: Error];
+  "cache:stale-served": [cacheName: string, key: string];
+  "cache:circuit-open": [cacheName: string, error: unknown];
+  "cache:circuit-close": [cacheName: string];
+  "cache:instance:enabled": [cacheName: string];
+  "cache:instance:disabled": [cacheName: string];
+
   // ── Queue Lifecycle (Phase 4 — Dynamic CRUD) ──────────────────────────────
   "queue:registered": [queueName: string];
   "queue:deregistered": [queueName: string];

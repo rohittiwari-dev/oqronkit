@@ -528,6 +528,88 @@ export async function handleAdminRateLimiters(
   return { status: 200, body: { ok: true, limiter: rec, stats } };
 }
 
+export async function handleAdminCaches(
+  req: MonitorRequest,
+): Promise<MonitorResponse> {
+  const mgr = getManager();
+  if (!mgr)
+    return {
+      status: 503,
+      body: { ok: false, error: "Manager not initialized" },
+    };
+
+  if (!req.params.name) {
+    const caches = await mgr.listCaches();
+    const withStats = await Promise.all(
+      caches.map(async (rec) => ({
+        ...rec,
+        stats: await mgr.getCacheStats(rec.name),
+      })),
+    );
+    return { status: 200, body: { ok: true, caches: withStats } };
+  }
+
+  const { name } = req.params;
+
+  if (req.method === "POST") {
+    const { action } = req.params;
+    if (action === "enable") {
+      const ok = await mgr.enableCache(name);
+      return { status: ok ? 200 : 404, body: { ok } };
+    }
+    if (action === "disable") {
+      const ok = await mgr.disableCache(name);
+      return { status: ok ? 200 : 404, body: { ok } };
+    }
+    if (action === "clear") {
+      const cleared = await mgr.clearCache(name);
+      return { status: 200, body: { ok: true, cleared } };
+    }
+    if (action === "invalidate-key") {
+      const ok = await mgr.invalidateCacheKey(name, req.params.key);
+      return { status: ok ? 200 : 404, body: { ok } };
+    }
+    if (action === "invalidate-prefix") {
+      const prefix = (req.body as any)?.prefix ?? req.query.prefix;
+      if (typeof prefix !== "string") {
+        return { status: 400, body: { ok: false, error: "Missing prefix" } };
+      }
+      const invalidated = await mgr.invalidateCachePrefix(name, prefix);
+      return { status: 200, body: { ok: true, invalidated } };
+    }
+    if (action === "invalidate-tags") {
+      const tags = (req.body as any)?.tags;
+      if (!Array.isArray(tags)) {
+        return { status: 400, body: { ok: false, error: "Missing tags[]" } };
+      }
+      const invalidated = await mgr.invalidateCacheTags(name, tags);
+      return { status: 200, body: { ok: true, invalidated } };
+    }
+  }
+
+  if (req.params.subResource === "stats") {
+    const stats = await mgr.getCacheStats(name);
+    if (!stats)
+      return { status: 404, body: { ok: false, error: "Cache not found" } };
+    return { status: 200, body: { ok: true, stats } };
+  }
+
+  if (req.params.subResource === "snapshot") {
+    const snapshot = await mgr.getCacheSnapshot(name);
+    if (!snapshot)
+      return { status: 404, body: { ok: false, error: "Cache not found" } };
+    return { status: 200, body: { ok: true, snapshot } };
+  }
+
+  const rec = (await mgr.listCaches()).find((cache) => cache.name === name);
+  if (!rec)
+    return { status: 404, body: { ok: false, error: "Cache not found" } };
+  return {
+    status: 200,
+    body: { ok: true, cache: rec, stats: await mgr.getCacheStats(name) },
+  };
+}
+
 // ── Webhook Handlers ─────────────────────────────────────────────────────
 
 export async function handleAdminWebhooks(
@@ -796,6 +878,69 @@ export async function dispatch(req: MonitorRequest): Promise<MonitorResponse> {
       key: rlKeyDeleteMatch[2],
     };
     return handleAdminRateLimiters(req);
+  }
+
+  if (method === "GET" && path === "/admin/caches") {
+    req.params = { ...req.params };
+    return handleAdminCaches(req);
+  }
+
+  const cacheSubMatch = path.match(
+    /^\/admin\/caches\/([^/]+)\/(stats|snapshot)$/,
+  );
+  if (cacheSubMatch && method === "GET") {
+    req.params = {
+      ...req.params,
+      name: cacheSubMatch[1],
+      subResource: cacheSubMatch[2],
+    };
+    return handleAdminCaches(req);
+  }
+
+  const cacheActionMatch = path.match(
+    /^\/admin\/caches\/([^/]+)\/(enable|disable|clear)$/,
+  );
+  if (cacheActionMatch && method === "POST") {
+    req.params = {
+      ...req.params,
+      name: cacheActionMatch[1],
+      action: cacheActionMatch[2],
+    };
+    return handleAdminCaches(req);
+  }
+
+  const cacheKeyInvalidateMatch = path.match(
+    /^\/admin\/caches\/([^/]+)\/keys\/([^/]+)\/invalidate$/,
+  );
+  if (cacheKeyInvalidateMatch && method === "POST") {
+    req.params = {
+      ...req.params,
+      name: cacheKeyInvalidateMatch[1],
+      key: cacheKeyInvalidateMatch[2],
+      action: "invalidate-key",
+    };
+    return handleAdminCaches(req);
+  }
+
+  const cacheInvalidationMatch = path.match(
+    /^\/admin\/caches\/([^/]+)\/(prefix|tags)\/invalidate$/,
+  );
+  if (cacheInvalidationMatch && method === "POST") {
+    req.params = {
+      ...req.params,
+      name: cacheInvalidationMatch[1],
+      action:
+        cacheInvalidationMatch[2] === "prefix"
+          ? "invalidate-prefix"
+          : "invalidate-tags",
+    };
+    return handleAdminCaches(req);
+  }
+
+  const cacheDetailMatch = path.match(/^\/admin\/caches\/([^/]+)$/);
+  if (cacheDetailMatch && method === "GET") {
+    req.params = { ...req.params, name: cacheDetailMatch[1] };
+    return handleAdminCaches(req);
   }
 
   // ── Webhook Routes ──────────────────────────────────────────────────────

@@ -14,7 +14,8 @@ export type OqronModuleName =
   | "worker"
   | "webhook"
   | "ratelimit"
-  | "batch";
+  | "batch"
+  | "cache";
 
 // ── Per-Module Config Interfaces (user-facing, all optional) ────────────────
 
@@ -307,7 +308,8 @@ export type OqronModuleDef =
   | WorkerModuleDef
   | WebhookModuleDef
   | RateLimitModuleDef
-  | BatchModuleDef;
+  | BatchModuleDef
+  | CacheModuleDef;
 
 // ── Flexible Input Type ─────────────────────────────────────────────────────
 // Users can pass any of these forms inside the `modules` array:
@@ -382,6 +384,7 @@ const STRING_TO_DEF: Record<OqronModuleName, () => OqronModuleDef> = {
   webhook: () => ({ module: "webhook" }),
   ratelimit: () => ({ module: "ratelimit" }),
   batch: () => ({ module: "batch" }),
+  cache: () => ({ module: "cache" }),
 };
 
 export interface RateLimitModuleConfig {
@@ -451,6 +454,23 @@ export type BatchModuleDef = { module: "batch" } & BatchModuleConfig;
  */
 export function batchModule(config?: BatchModuleConfig): BatchModuleDef {
   return { module: "batch", ...config };
+}
+
+// â”€â”€ Cache Module Config â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+export interface CacheModuleConfig {
+  /** Expired entry cleanup interval in ms. @default 60000 */
+  gcIntervalMs?: number;
+  /** Retention for cache events in ms. @default 86400000 */
+  eventRetentionMs?: number;
+  /** Distributed prewarm lock TTL in ms. @default 60000 */
+  prewarmLockTtlMs?: number;
+}
+
+export type CacheModuleDef = { module: "cache" } & CacheModuleConfig;
+
+export function cacheModule(config?: CacheModuleConfig): CacheModuleDef {
+  return { module: "cache", ...config };
 }
 
 export function workerModule(config?: WorkerModuleConfig): WorkerModuleDef {

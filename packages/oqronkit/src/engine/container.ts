@@ -47,6 +47,14 @@ const makeIsolatedBroker = (
     isolated.claimBlocking = (ns, cid, ttl, timeout, strat) =>
       base.claimBlocking!(`${prefix}:${ns}`, cid, ttl, timeout, strat);
   }
+  if (base.broadcast) {
+    isolated.broadcast = (channel, message) =>
+      base.broadcast!(`${prefix}:${channel}`, message);
+  }
+  if (base.subscribe) {
+    isolated.subscribe = (channel, handler) =>
+      base.subscribe!(`${prefix}:${channel}`, handler);
+  }
   return isolated;
 };
 

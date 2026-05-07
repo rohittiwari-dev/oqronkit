@@ -13,6 +13,7 @@ import {
 } from "./engine/index.js";
 import {
   type BatchModuleDef,
+  type CacheModuleDef,
   type CronModuleDef,
   getModuleConfig,
   type QueueModuleDef,
@@ -45,6 +46,20 @@ export type {
   BatchPayload,
   IBatch,
 } from "./batch/types.js";
+export { cache } from "./cache/define-cache.js";
+export type {
+  CacheBatchContext,
+  CacheBatchResult,
+  CacheConfig,
+  CacheContext,
+  CacheFetchManyOptions,
+  CacheFetchOptions,
+  CacheInstanceRecord,
+  CacheSetOptions,
+  CacheSnapshot,
+  CacheStats,
+  ICache,
+} from "./cache/types.js";
 export type {
   BrokerAdapterOptions,
   CreateAdaptersOptions,
@@ -116,8 +131,11 @@ export {
   type BatchModuleConfig,
   type BatchModuleDef,
   batchModule,
+  type CacheModuleConfig,
+  type CacheModuleDef,
   type CronModuleConfig,
   type CronModuleDef,
+  cacheModule,
   cronModule,
   getModuleConfig,
   normalizeModules,
@@ -414,6 +432,13 @@ export const OqronKit = {
     if (batchConf) {
       const { BatchEngine } = await import("./batch/batch-engine.js");
       const engine = new BatchEngine(_config, _logger!, batchConf);
+      OqronRegistry.getInstance().register(engine);
+    }
+
+    const cacheConf = getModuleConfig<CacheModuleDef>(_config.modules, "cache");
+    if (cacheConf) {
+      const { CacheModule } = await import("./cache/cache-module.js");
+      const engine = new CacheModule(_config, _logger!, cacheConf);
       OqronRegistry.getInstance().register(engine);
     }
 

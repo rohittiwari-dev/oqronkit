@@ -111,6 +111,21 @@ export interface IBrokerEngine {
     timeoutMs: number,
     strategy?: BrokerStrategy,
   ): Promise<string | null>;
+
+  /**
+   * Broadcast a non-durable fanout message to every subscriber on a channel.
+   * This is distinct from publish/claim queue semantics.
+   */
+  broadcast?(channel: string, message: unknown): Promise<void>;
+
+  /**
+   * Subscribe to non-durable fanout messages on a channel.
+   * Returns an unsubscribe cleanup function.
+   */
+  subscribe?(
+    channel: string,
+    handler: (message: unknown) => void | Promise<void>,
+  ): Promise<() => void | Promise<void>>;
 }
 
 /**

@@ -441,4 +441,39 @@ export class RedisBroker implements IBrokerEngine {
 
     return id;
   }
+
+  async broadcast(channel: string, message: unknown): Promise<void> {
+    await this.redis.publish(
+      this.getBroadcastChannel(channel),
+      JSON.stringify(message),
+    );
+  }
+
+  async subscribe(
+    channel: string,
+    handler: (message: unknown) => void | Promise<void>,
+  ): Promise<() => Promise<void>> {
+    const subscriber = this.redis.duplicate();
+    const broadcastChannel = this.getBroadcastChannel(channel);
+    subscriber.on("message", (_channel: string, payload: string) => {
+      if (_channel !== broadcastChannel) return;
+      try {
+        void handler(JSON.parse(payload));
+      } catch {
+        void handler(payload);
+      }
+    });
+    await subscriber.subscribe(broadcastChannel);
+    return async () => {
+      try {
+        await subscriber.unsubscribe(broadcastChannel);
+      } finally {
+        subscriber.disconnect();
+      }
+    };
+  }
+
+  private getBroadcastChannel(channel: string): string {
+    return `${this.keyPrefix}:broadcast:${channel}`;
+  }
 }

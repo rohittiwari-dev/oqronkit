@@ -1,6 +1,7 @@
 import { z } from "zod";
 import type {
   BatchModuleDef,
+  CacheModuleDef,
   CronModuleDef,
   OqronModuleDef,
   QueueModuleDef,
@@ -182,6 +183,8 @@ export function applyModuleDefaults(def: OqronModuleDef): OqronModuleDef {
       return applyRateLimitDefaults(def as RateLimitModuleDef);
     case "batch":
       return applyBatchDefaults(def as BatchModuleDef);
+    case "cache":
+      return applyCacheDefaults(def as CacheModuleDef);
     default:
       return def;
   }
@@ -292,6 +295,25 @@ function applyBatchDefaults(def: BatchModuleDef): BatchModuleDef {
     ...DEFAULT_BATCH,
     ...def,
     module: "batch",
+  };
+}
+
+// â”€â”€ Cache Defaults â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+const DEFAULT_CACHE: Required<Omit<CacheModuleDef, "module">> & {
+  module: "cache";
+} = {
+  module: "cache",
+  gcIntervalMs: 60_000,
+  eventRetentionMs: 86_400_000,
+  prewarmLockTtlMs: 60_000,
+};
+
+function applyCacheDefaults(def: CacheModuleDef): CacheModuleDef {
+  return {
+    ...DEFAULT_CACHE,
+    ...def,
+    module: "cache",
   };
 }
 

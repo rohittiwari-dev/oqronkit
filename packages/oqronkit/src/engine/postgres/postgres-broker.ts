@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { BrokerStrategy, IBrokerEngine } from "../types/engine.js";
 import { assertValidIdentifier, quoteIdentifier } from "./identifiers.js";
 
@@ -276,6 +277,53 @@ export class PostgresBroker implements IBrokerEngine {
       strategy,
     );
     return finalClaim.length > 0 ? finalClaim[0] : null;
+  }
+
+  async broadcast(channel: string, message: unknown): Promise<void> {
+    await this.ensureTable();
+    await this.pool.query("SELECT pg_notify($1, $2)", [
+      this.getBroadcastChannel(channel),
+      JSON.stringify(message),
+    ]);
+  }
+
+  async subscribe(
+    channel: string,
+    handler: (message: unknown) => void | Promise<void>,
+  ): Promise<() => Promise<void>> {
+    await this.ensureTable();
+    const broadcastChannel = this.getBroadcastChannel(channel);
+    const client = await this.pool.connect();
+    const onNotification = (msg: { channel: string; payload?: string }) => {
+      if (msg.channel !== broadcastChannel) return;
+      try {
+        void handler(JSON.parse(msg.payload ?? "null"));
+      } catch {
+        void handler(msg.payload);
+      }
+    };
+    client.on("notification", onNotification);
+    await client.query(
+      `LISTEN ${quoteIdentifier(broadcastChannel, "channel")}`,
+    );
+    return async () => {
+      try {
+        client.removeListener("notification", onNotification);
+        await client.query(
+          `UNLISTEN ${quoteIdentifier(broadcastChannel, "channel")}`,
+        );
+      } finally {
+        client.release();
+      }
+    };
+  }
+
+  private getBroadcastChannel(channel: string): string {
+    const digest = createHash("sha1")
+      .update(channel)
+      .digest("hex")
+      .slice(0, 40);
+    return `oqron_b_${digest}`;
   }
 
   async close(): Promise<void> {
