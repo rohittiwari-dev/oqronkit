@@ -43,12 +43,25 @@ await analytics.addBulk([
   { event: 'page.view', userId: 'u_2' },
   { event: 'page.view', userId: 'u_3' },
 ])
+```
 
+## Admin & Queue Management
+
+The Batch module ships with powerful runtime controls, allowing you to pause ingestion or gracefully drain queues during deployments.
+
+```ts
 // Force-flush immediately (bypasses maxSize/maxWaitMs)
 await analytics.flush()
 
 // Flush a specific group
 await analytics.flush('tenant-acme')
+
+// Pause/resume processing
+await analytics.pause()
+await analytics.resume()
+
+// Gracefully drain: Waits for all active batch jobs to finish, then pauses.
+await analytics.drain()
 
 // Check buffer state
 const pending = await analytics.getBufferSize()
@@ -91,6 +104,31 @@ await tenantFlush.add({ tenantId: 'globex', data: { /* ... */ } })
 await tenantFlush.add({ tenantId: 'acme', data: { /* ... */ } }) // Same group as first
 ```
 
+## Progress & Long-Running Batches
+
+If your batch handler is processing thousands of items and takes several minutes, you can report progress back to the OqronKit engine. This is visible in the UI and also helps the Stall Detector know your job isn't frozen.
+
+```ts
+const massiveSync = batch<UserRecord>({
+  name: 'massive-sync',
+  maxSize: 10000,
+  maxWaitMs: 60_000,
+  timeout: 300_000, // 5 minutes
+
+  handler: async (ctx) => {
+    for (let i = 0; i < ctx.batchSize; i++) {
+      await processUser(ctx.batch[i]);
+      
+      // Update progress every 100 items
+      if (i % 100 === 0) {
+        const pct = Math.floor((i / ctx.batchSize) * 100);
+        await ctx.progress(pct, `Processed ${i}/${ctx.batchSize}`);
+      }
+    }
+  }
+});
+```
+
 ## Deduplication
 
 Skip duplicate items within the same buffer window.
@@ -106,10 +144,6 @@ const events = batch<{ eventId: string; payload: any }>({
     await processUnique(ctx.batch)
   },
 })
-
-await events.add({ eventId: 'evt_1', payload: { /* ... */ } })
-await events.add({ eventId: 'evt_1', payload: { /* ... */ } }) // Silently skipped
-await events.add({ eventId: 'evt_2', payload: { /* ... */ } }) // Added
 ```
 
 > Dedup keys are tracked per-buffer-window. Once a buffer flushes, the dedup set resets.
@@ -177,35 +211,15 @@ const monitored = batch<LogEntry>({
 })
 ```
 
-| Hook | Signature | When |
-|------|-----------|------|
-| `beforeFlush` | `(items: T[], groupKey?: string) => T[]` | Before buffer becomes a job — filter/transform |
-| `onSuccess` | `(job, result) => void` | After handler completes successfully |
-| `onFail` | `(job, error) => void` | After handler throws (before retry) |
+## Persistent Buffer Semantics (Crash-Safety)
 
-## Handler Context (`ctx`)
+OqronKit is designed for absolute data safety. By default (`persist: true`), items are stored in your configured `OqronContainer.storage`.
 
-The handler receives a `BatchJobContext` with everything needed:
-
-| Property | Type | Description |
-|---|---|---|
-| `ctx.id` | `string` | Batch job UUID |
-| `ctx.name` | `string` | Batch definition name |
-| `ctx.batch` | `T[]` | Array of accumulated items |
-| `ctx.batchSize` | `number` | `ctx.batch.length` |
-| `ctx.groupKey` | `string \| undefined` | Group key (from `groupBy`) |
-| `ctx.attempt` | `number` | Current attempt (1-based) |
-| `ctx.maxAttempts` | `number` | Total attempts allowed |
-| `ctx.environment` | `string` | Environment stamp |
-| `ctx.project` | `string` | Project stamp |
-| `ctx.signal` | `AbortSignal` | Fires on timeout |
-| `ctx.aborted` | `boolean` | Whether signal was aborted |
-| `ctx.duration` | `number` | Elapsed ms since handler started |
-| `ctx.createdAt` | `Date` | When the batch job was created |
-| `ctx.log(level, msg, meta?)` | `Function` | Structured logging |
-| `ctx.progress(pct, label?)` | `Function` | Update progress (0–100) |
-| `ctx.getProgress()` | `Function` | Read current progress |
-| `ctx.discard()` | `Function` | Permanently fail — skip all retries |
+If your Node.js process crashes (OOM, SIGKILL) while it is right in the middle of flushing a buffer:
+1. The **Batch Lock** remains active.
+2. The buffer data is preserved via a `flush_marker`.
+3. When the cluster restarts, OqronKit's Stall Detector discovers the abandoned lock, recovers the abandoned items using the marker, and instantly re-publishes the batch as a new Job to the Broker.
+**Result:** Zero data loss.
 
 ## In-Memory Mode
 
@@ -224,8 +238,6 @@ const fastBuffer = batch<MetricPoint>({
 })
 ```
 
-> **Warning:** `persist: false` buffers are lost on process crash. Use the default (`persist: true`) for durability.
-
 ## Configuration Reference
 
 | Option | Type | Default | Description |
@@ -237,9 +249,7 @@ const fastBuffer = batch<MetricPoint>({
 | `groupBy` | `(item: T) => string` | `undefined` | Route items to named groups |
 | `deduplicateBy` | `(item: T) => string` | `undefined` | Skip items with duplicate keys |
 | `persist` | `boolean` | `true` | Buffer in storage adapter (`true`) or memory (`false`) |
-| `retries.max` | `number` | `0` | Max retry attempts |
-| `retries.strategy` | `'exponential' \| 'fixed'` | `'exponential'` | Backoff strategy |
-| `retries.baseDelay` | `number` | `1000` | Base delay in ms |
+| `retries` | `RetryConfig` | `{ max: 0, strategy: 'exponential', baseDelay: 1000 }` | Retry policy |
 | `deadLetter.enabled` | `boolean` | `false` | Enable dead letter queue |
 | `deadLetter.onDead` | `(job, error) => void` | `undefined` | Called when all retries exhausted |
 | `throttle.max` | `number` | `undefined` | Max flushes per window |
@@ -269,33 +279,13 @@ await OqronKit.init({
 })
 ```
 
-| Option | Type | Default | Description |
-|---|---|---|---|
-| `tickIntervalMs` | `number` | `1000` | Buffer evaluation interval |
-| `heartbeatMs` | `number` | `5000` | Job poll interval |
-| `concurrency` | `number` | `5` | Parallel batch job execution limit |
-| `leaderElection` | `boolean` | `true` | Only leader node evaluates buffers |
-
-## Queue Management
-
-```ts
-// Pause/resume processing
-await analytics.pause()
-await analytics.resume()
-await analytics.drain()  // Wait for active jobs, then pause
-
-// Inspect batch jobs
-const jobs = await analytics.getJobs({ status: 'completed', limit: 10 })
-const job = await analytics.getJob('batch:analytics-flush:default:1717171717')
-```
-
 ## Architecture
 
 The Batch module uses a **dual-loop architecture**:
 
-1. **Tick Loop** (leader only): Scans all registered buffers every `tickIntervalMs`. If a buffer meets its flush condition, it creates a batch job and publishes it to the broker.
+1. **Tick Loop** (leader only): Scans all registered buffers every `tickIntervalMs`. If a buffer meets its flush condition, it creates a batch job with a deterministic `UUID` and publishes it to the broker.
 
-2. **Poll Loop** (all nodes): Claims batch jobs from the broker and executes handlers. This distributes processing across all worker nodes.
+2. **Poll Loop** (all nodes): Claims batch jobs from the broker, extends heartbeats to prevent stall detection, and executes handlers. This distributes processing across all worker nodes.
 
 ```
 ┌─────────────┐     ┌──────────────┐     ┌──────────────┐

@@ -80,7 +80,7 @@ const MODULES = [
     icon: LayoutGrid,
     href: "/docs/batch",
     accent: "#f59e0b",
-    status: "preview",
+    status: "stable",
   },
   {
     name: "Saga",
@@ -116,7 +116,7 @@ const MODULES = [
     icon: HardDrive,
     href: "/docs/cache",
     accent: "#d946ef",
-    status: "roadmap",
+    status: "stable",
   },
   {
     name: "Ingest",
