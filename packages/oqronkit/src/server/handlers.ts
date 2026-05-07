@@ -612,6 +612,55 @@ export async function handleAdminCaches(
 
 // ── Webhook Handlers ─────────────────────────────────────────────────────
 
+export async function handleAdminBatches(
+  req: MonitorRequest,
+): Promise<MonitorResponse> {
+  const mgr = getManager();
+  if (!mgr) {
+    return {
+      status: 503,
+      body: { ok: false, error: "Manager not initialized" },
+    };
+  }
+
+  if (!req.params.name) {
+    const batches = await mgr.listBatches();
+    return { status: 200, body: { ok: true, batches } };
+  }
+
+  const { name } = req.params;
+
+  if (req.method === "POST") {
+    const { action } = req.params;
+    if (action === "pause") {
+      const ok = await mgr.pauseBatch(name);
+      return { status: ok ? 200 : 404, body: { ok } };
+    }
+    if (action === "resume") {
+      const ok = await mgr.resumeBatch(name);
+      return { status: ok ? 200 : 404, body: { ok } };
+    }
+    if (action === "flush") {
+      const groupKey = (req.body as any)?.groupKey ?? req.query.groupKey;
+      const ok = await mgr.flushBatch(
+        name,
+        typeof groupKey === "string" ? groupKey : undefined,
+      );
+      return { status: ok ? 200 : 404, body: { ok } };
+    }
+    if (action === "drain") {
+      const ok = await mgr.drainBatch(name);
+      return { status: ok ? 200 : 404, body: { ok } };
+    }
+  }
+
+  const batch = await mgr.getBatch(name);
+  if (!batch)
+    return { status: 404, body: { ok: false, error: "Batch not found" } };
+
+  return { status: 200, body: { ok: true, batch } };
+}
+
 export async function handleAdminWebhooks(
   req: MonitorRequest,
 ): Promise<MonitorResponse> {
@@ -878,6 +927,29 @@ export async function dispatch(req: MonitorRequest): Promise<MonitorResponse> {
       key: rlKeyDeleteMatch[2],
     };
     return handleAdminRateLimiters(req);
+  }
+
+  if (method === "GET" && path === "/admin/batches") {
+    req.params = { ...req.params };
+    return handleAdminBatches(req);
+  }
+
+  const batchActionMatch = path.match(
+    /^\/admin\/batches\/([^/]+)\/(pause|resume|flush|drain)$/,
+  );
+  if (batchActionMatch && method === "POST") {
+    req.params = {
+      ...req.params,
+      name: batchActionMatch[1],
+      action: batchActionMatch[2],
+    };
+    return handleAdminBatches(req);
+  }
+
+  const batchDetailMatch = path.match(/^\/admin\/batches\/([^/]+)$/);
+  if (batchDetailMatch && method === "GET") {
+    req.params = { ...req.params, name: batchDetailMatch[1] };
+    return handleAdminBatches(req);
   }
 
   if (method === "GET" && path === "/admin/caches") {

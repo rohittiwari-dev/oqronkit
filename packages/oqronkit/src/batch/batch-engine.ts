@@ -17,6 +17,7 @@
 
 import { randomUUID } from "node:crypto";
 import { OqronContainer } from "../engine/container.js";
+import { HeartbeatWorker } from "../engine/lock/heartbeat-worker.js";
 import type { Logger } from "../engine/logger/index.js";
 import type { OqronConfig } from "../engine/types/config.types.js";
 import type { OqronJob } from "../engine/types/job.types.js";
@@ -31,6 +32,7 @@ import { applyGlobalTags, getRegisteredBatches } from "./registry.js";
 import type {
   BatchBufferRecord,
   BatchConfig,
+  BatchInstanceRecord,
   BatchJobContext,
   BatchPayload,
 } from "./types.js";
@@ -97,6 +99,143 @@ export class BatchEngine implements IOqronModule {
     return this.batchConfig?.leaderElection !== false;
   }
 
+  private getBrokerName(defName: string): string {
+    return `batch:${defName}`;
+  }
+
+  private getBufferLockKey(defName: string, groupKey: string): string {
+    return `batch:buffer:${defName}:${groupKey}`;
+  }
+
+  private async sleep(ms: number): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  private isTerminalStatus(status: unknown): boolean {
+    return (
+      status === "completed" || status === "failed" || status === "cancelled"
+    );
+  }
+
+  private async withBufferLock<R>(
+    def: BatchConfig,
+    groupKey: string,
+    fn: () => Promise<R>,
+  ): Promise<R> {
+    const owner = randomUUID();
+    const ttlMs = def.lockTtlMs ?? this.lockTtlMs;
+    const lockKey = this.getBufferLockKey(def.name, groupKey);
+    const deadline = Date.now() + ttlMs;
+
+    while (!(await this.di.lock.acquire(lockKey, owner, ttlMs))) {
+      if (Date.now() >= deadline) {
+        throw new Error(
+          `[OqronKit/Batch] "${def.name}:${groupKey}" buffer lock timed out.`,
+        );
+      }
+      await this.sleep(25);
+    }
+
+    try {
+      return await fn();
+    } finally {
+      await this.di.lock.release(lockKey, owner).catch(() => {});
+    }
+  }
+
+  private async recoverMarkedFlush(
+    def: BatchConfig,
+    storageKey: string,
+    buffer: BatchBufferRecord,
+  ): Promise<BatchBufferRecord | null> {
+    if (!buffer.flushJobId) return buffer;
+
+    const job = await this.di.storage.get<OqronJob<BatchPayload>>(
+      "jobs",
+      buffer.flushJobId,
+    );
+
+    if (job) {
+      if (!this.isTerminalStatus(job.status)) {
+        await this.di.broker.publish(
+          this.getBrokerName(def.name),
+          buffer.flushJobId,
+        );
+      }
+      await this.di.storage.delete("batch_buffers", storageKey);
+      await this.persistBatchInstance(def);
+      return null;
+    }
+
+    const recovered: BatchBufferRecord = { ...buffer };
+    delete recovered.flushJobId;
+    delete recovered.flushingAt;
+    await this.di.storage.save("batch_buffers", storageKey, recovered);
+    return recovered;
+  }
+
+  private async getBufferStatsForDef(
+    def: BatchConfig,
+  ): Promise<{ groups: number; bufferedItems: number }> {
+    const persist = def.persist !== false;
+    if (persist) {
+      const allBuffers = await this.di.storage.list<BatchBufferRecord>(
+        "batch_buffers",
+        {},
+      );
+      const buffers = allBuffers.filter((b: any) => {
+        const id = b.id ?? b._id ?? "";
+        return typeof id === "string" && id.startsWith(`${def.name}:`);
+      });
+      return {
+        groups: buffers.length,
+        bufferedItems: buffers.reduce(
+          (sum, b) => sum + (b.items?.length ?? 0),
+          0,
+        ),
+      };
+    }
+
+    const memBuffers = (def as any)._memoryBuffers as
+      | Map<string, BatchBufferRecord>
+      | undefined;
+    if (!memBuffers) return { groups: 0, bufferedItems: 0 };
+    let bufferedItems = 0;
+    for (const [, buffer] of memBuffers) {
+      bufferedItems += buffer.items?.length ?? 0;
+    }
+    return { groups: memBuffers.size, bufferedItems };
+  }
+
+  private async persistBatchInstance(def: BatchConfig): Promise<void> {
+    const existing = await this.di.storage.get<BatchInstanceRecord>(
+      "batch_instances",
+      def.name,
+    );
+    const { groups, bufferedItems } = await this.getBufferStatsForDef(def);
+    const now = new Date();
+
+    await this.di.storage.save<BatchInstanceRecord>(
+      "batch_instances",
+      def.name,
+      {
+        name: def.name,
+        version: def.version ?? 1,
+        enabled: this.enabled,
+        paused: this.pausedBatches.has(def.name),
+        tags: [...(this.config.tags ?? []), ...(def.tags ?? [])],
+        maxSize: def.maxSize,
+        maxWaitMs: def.maxWaitMs,
+        concurrency: def.concurrency ?? this.defaultConcurrency,
+        persist: def.persist !== false,
+        groups,
+        bufferedItems,
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
+      },
+    );
+  }
+
   // ── IOqronModule Lifecycle ────────────────────────────────────────────
 
   async init(): Promise<void> {
@@ -117,6 +256,7 @@ export class BatchEngine implements IOqronModule {
       if (def.status === "paused") {
         this.pausedBatches.add(def.name);
       }
+      await this.persistBatchInstance(def);
     }
   }
 
@@ -217,6 +357,72 @@ export class BatchEngine implements IOqronModule {
   async disable(): Promise<void> {
     this.enabled = false;
     await this.stop();
+  }
+
+  async pauseBatch(name: string): Promise<boolean> {
+    const def = getRegisteredBatches().find(
+      (batchDef) => batchDef.name === name,
+    );
+    if (!def) return false;
+    this.pausedBatches.add(name);
+    await this.di.broker.pause(this.getBrokerName(name));
+    await this.persistBatchInstance(def);
+    return true;
+  }
+
+  async resumeBatch(name: string): Promise<boolean> {
+    const def = getRegisteredBatches().find(
+      (batchDef) => batchDef.name === name,
+    );
+    if (!def) return false;
+    this.pausedBatches.delete(name);
+    await this.di.broker.resume(this.getBrokerName(name));
+    await this.persistBatchInstance(def);
+    return true;
+  }
+
+  async flushBatch(name: string, groupKey?: string): Promise<boolean> {
+    const def = getRegisteredBatches().find(
+      (batchDef) => batchDef.name === name,
+    );
+    if (!def) return false;
+
+    if (groupKey) {
+      const key = `${def.name}:${groupKey}`;
+      const buffer = await this.di.storage.get<BatchBufferRecord>(
+        "batch_buffers",
+        key,
+      );
+      if (buffer?.items?.length) {
+        await this.flushBuffer(def, groupKey, buffer, key);
+      }
+    } else {
+      await this.flushAllGroupsForDef(def);
+    }
+
+    await this.persistBatchInstance(def);
+    return true;
+  }
+
+  async drainBatch(name: string): Promise<boolean> {
+    const paused = await this.pauseBatch(name);
+    if (!paused) return false;
+
+    const active = Array.from(this.activeJobs.entries())
+      .filter(([jobId]) => jobId.startsWith(`batch:${name}:`))
+      .map(([, promise]) => promise);
+
+    if (active.length > 0) {
+      await Promise.race([
+        Promise.allSettled(active),
+        new Promise<void>((resolve) => {
+          const t = setTimeout(resolve, this.shutdownTimeoutMs);
+          t.unref();
+        }),
+      ]);
+    }
+
+    return true;
   }
 
   // ── Leader Election ───────────────────────────────────────────────────
@@ -325,7 +531,8 @@ export class BatchEngine implements IOqronModule {
           // Snapshot and clear
           const items = [...buffer.items];
           memBuffers.delete(groupKey);
-          await this.createBatchJob(def, groupKey, items);
+          await this.createBatchJob(def, groupKey, items, buffer.firstItemAt);
+          await this.persistBatchInstance(def);
         }
       }
     }
@@ -340,48 +547,73 @@ export class BatchEngine implements IOqronModule {
     buffer: BatchBufferRecord,
     storageKey: string,
   ): Promise<void> {
-    // Throttle check
-    const gate = this.throttleGates.get(def.name);
-    if (gate && gate.getAvailable() <= 0) {
-      return; // Rate limited — skip this tick
-    }
+    await this.withBufferLock(def, groupKey, async () => {
+      // Throttle check
+      const fresh =
+        (await this.di.storage.get<BatchBufferRecord>(
+          "batch_buffers",
+          storageKey,
+        )) ?? buffer;
+      const recovered = await this.recoverMarkedFlush(def, storageKey, fresh);
+      if (!recovered?.items?.length) return;
 
-    // Backpressure check
-    if (def.maxPendingBatches) {
-      const pending = await this.di.storage.count("jobs", {
-        queueName: `batch:${def.name}`,
-        status: "waiting",
-      });
-      const active = await this.di.storage.count("jobs", {
-        queueName: `batch:${def.name}`,
-        status: "active",
-      });
-      if (pending + active >= def.maxPendingBatches) {
-        return; // Backpressure — too many pending batches
+      const gate = this.throttleGates.get(def.name);
+      if (gate && gate.getAvailable() <= 0) {
+        return; // Rate limited — skip this tick
       }
-    }
 
-    let items = [...buffer.items];
+      // Backpressure check
+      if (def.maxPendingBatches) {
+        const pending = await this.di.storage.count("jobs", {
+          queueName: this.getBrokerName(def.name),
+          status: "waiting",
+        });
+        const active = await this.di.storage.count("jobs", {
+          queueName: this.getBrokerName(def.name),
+          status: "active",
+        });
+        if (pending + active >= def.maxPendingBatches) {
+          return; // Backpressure — too many pending batches
+        }
+      }
 
-    // Apply beforeFlush hook
-    if (def.hooks?.beforeFlush) {
-      items = await def.hooks.beforeFlush(items, groupKey);
-    }
+      let items = [...recovered.items];
 
-    if (items.length === 0) {
-      // Hook filtered everything — clear buffer
+      // Apply beforeFlush hook
+      if (def.hooks?.beforeFlush) {
+        items = await def.hooks.beforeFlush(items, groupKey);
+      }
+
+      if (items.length === 0) {
+        // Hook filtered everything — clear buffer
+        await this.di.storage.delete("batch_buffers", storageKey);
+        await this.persistBatchInstance(def);
+        return;
+      }
+
+      const jobId = `batch:${def.name}:${groupKey}:${randomUUID()}`;
+      await this.di.storage.save("batch_buffers", storageKey, {
+        ...recovered,
+        flushJobId: jobId,
+        flushingAt: Date.now(),
+      });
+
+      // Create the batch job
+      await this.createBatchJob(
+        def,
+        groupKey,
+        items,
+        recovered.firstItemAt,
+        jobId,
+      );
+
+      // Record the flush in the throttle gate
+      if (gate) gate.record(1);
+
+      // Clear the buffer
       await this.di.storage.delete("batch_buffers", storageKey);
-      return;
-    }
-
-    // Create the batch job
-    await this.createBatchJob(def, groupKey, items);
-
-    // Record the flush in the throttle gate
-    if (gate) gate.record(1);
-
-    // Clear the buffer
-    await this.di.storage.delete("batch_buffers", storageKey);
+      await this.persistBatchInstance(def);
+    });
   }
 
   /**
@@ -391,21 +623,23 @@ export class BatchEngine implements IOqronModule {
     def: BatchConfig,
     groupKey: string,
     items: any[],
+    bufferCreatedAt: number = Date.now(),
+    jobId: string = `batch:${def.name}:${groupKey}:${randomUUID()}`,
   ): Promise<void> {
-    const jobId = `batch:${def.name}:${groupKey}:${Date.now()}`;
     const now = new Date();
 
     const payload: BatchPayload = {
       items,
       groupKey: groupKey !== "default" ? groupKey : undefined,
-      bufferCreatedAt: now.getTime(),
+      bufferCreatedAt,
       flushedAt: now.getTime(),
     };
 
     const job: OqronJob<BatchPayload> = {
       id: jobId,
       type: "batch",
-      queueName: `batch:${def.name}`,
+      queueName: this.getBrokerName(def.name),
+      moduleName: def.name,
       data: payload,
       status: "waiting",
       attemptMade: 0,
@@ -418,7 +652,7 @@ export class BatchEngine implements IOqronModule {
     };
 
     await this.di.storage.save("jobs", jobId, job);
-    await this.di.broker.publish(`batch:${def.name}`, jobId);
+    await this.di.broker.publish(this.getBrokerName(def.name), jobId);
 
     this.logger.info(`Flushed batch "${def.name}:${groupKey}"`, {
       items: items.length,
@@ -454,10 +688,11 @@ export class BatchEngine implements IOqronModule {
         if (buffer.items?.length > 0) {
           const items = [...buffer.items];
           memBuffers.delete(groupKey);
-          await this.createBatchJob(def, groupKey, items);
+          await this.createBatchJob(def, groupKey, items, buffer.firstItemAt);
         }
       }
     }
+    await this.persistBatchInstance(def);
   }
 
   // ── Poll Loop (Batch Job Execution) ───────────────────────────────────
@@ -479,17 +714,27 @@ export class BatchEngine implements IOqronModule {
       if (available <= 0) continue;
 
       try {
+        const brokerName = this.getBrokerName(def.name);
+        const lockTtlMs = def.lockTtlMs ?? this.lockTtlMs;
         const claimed = await this.di.broker.claim(
-          `batch:${def.name}`,
+          brokerName,
           this.workerId,
           available,
-          this.lockTtlMs,
+          lockTtlMs,
         );
 
         for (const jobId of claimed) {
           const promise = this.executeJob(def, jobId);
           this.activeJobs.set(jobId, promise);
-          promise.finally(() => this.activeJobs.delete(jobId));
+          promise.then(
+            () => this.activeJobs.delete(jobId),
+            (err) => {
+              this.logger.error(`Batch job executor crashed: ${jobId}`, {
+                error: String(err),
+              });
+              this.activeJobs.delete(jobId);
+            },
+          );
         }
       } catch (err) {
         this.logger.error(`Poll error for "${def.name}"`, {
@@ -521,7 +766,14 @@ export class BatchEngine implements IOqronModule {
       jobId,
     );
     if (!job) {
-      await this.di.broker.ack(`batch:${def.name}`, jobId);
+      await this.di.broker.ack(this.getBrokerName(def.name), jobId);
+      return;
+    }
+
+    const brokerName = this.getBrokerName(def.name);
+
+    if (this.isTerminalStatus(job.status)) {
+      await this.di.broker.ack(brokerName, jobId);
       return;
     }
 
@@ -534,7 +786,7 @@ export class BatchEngine implements IOqronModule {
         jobEnv: job.environment,
         nodeEnv: this.config.environment,
       });
-      await this.di.broker.nack(`batch:${def.name}`, jobId, 5_000);
+      await this.di.broker.nack(brokerName, jobId, 5_000);
       return;
     }
 
@@ -550,13 +802,8 @@ export class BatchEngine implements IOqronModule {
     let discarded = false;
     const startTime = Date.now();
 
-    // Timeout handling
     let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
-    if (def.timeout) {
-      timeoutHandle = setTimeout(() => {
-        abortController.abort();
-      }, def.timeout);
-    }
+    let heartbeat: HeartbeatWorker | null = null;
 
     // Build log function
     const logFn = Object.assign(
@@ -593,8 +840,13 @@ export class BatchEngine implements IOqronModule {
       },
       environment: this.config.environment ?? "development",
       project: this.config.project ?? "default",
-      async progress(percent: number) {
+      progress: async (percent: number, label?: string) => {
         progressValue = Math.min(100, Math.max(0, percent));
+        job.progressPercent = progressValue;
+        if (label !== undefined) {
+          job.progressLabel = label;
+        }
+        await this.di.storage.save("jobs", jobId, job);
       },
       getProgress: () => progressValue,
       log: logFn,
@@ -603,16 +855,67 @@ export class BatchEngine implements IOqronModule {
       },
     };
 
+    if (def.guaranteedWorker !== false) {
+      const lockTtlMs = def.lockTtlMs ?? this.lockTtlMs;
+      heartbeat = new HeartbeatWorker(
+        this.di.lock,
+        this.logger,
+        `batch:job:${jobId}`,
+        this.workerId,
+        lockTtlMs,
+        def.heartbeatMs ?? this.heartbeatMs,
+        async () => {
+          await this.di.broker.extendLock(
+            jobId,
+            this.workerId,
+            lockTtlMs,
+            brokerName,
+          );
+        },
+        () => {
+          if (!abortController.signal.aborted) {
+            abortController.abort();
+          }
+        },
+      );
+
+      const acquired = await heartbeat.start();
+      if (!acquired) {
+        job.status = "waiting";
+        await this.di.storage.save("jobs", jobId, job);
+        await this.di.broker.nack(brokerName, jobId, 1_000);
+        return;
+      }
+    }
+
     try {
-      const result = await def.handler(ctx as any);
+      const handlerPromise = Promise.resolve().then(() =>
+        def.handler(ctx as any),
+      );
+      const result =
+        typeof def.timeout === "number"
+          ? await Promise.race([
+              handlerPromise,
+              new Promise<never>((_, reject) => {
+                timeoutHandle = setTimeout(() => {
+                  abortController.abort();
+                  reject(
+                    new Error(`Batch handler timed out after ${def.timeout}ms`),
+                  );
+                }, def.timeout);
+              }),
+            ])
+          : await handlerPromise;
 
       if (timeoutHandle) clearTimeout(timeoutHandle);
+      if (heartbeat) await heartbeat.stop();
+      heartbeat = null;
 
       job.status = "completed";
       job.finishedAt = new Date();
       job.returnValue = result;
       await this.di.storage.save("jobs", jobId, job);
-      await this.di.broker.ack(`batch:${def.name}`, jobId);
+      await this.di.broker.ack(brokerName, jobId);
 
       // onSuccess hook
       if (def.hooks?.onSuccess) {
@@ -632,7 +935,7 @@ export class BatchEngine implements IOqronModule {
           def.removeOnComplete ?? keepHistoryToRemoveConfig(def.keepHistory),
         globalRemoveConfig: this.batchConfig?.removeOnComplete,
         filterKey: "queueName",
-        filterValue: `batch:${def.name}`,
+        filterValue: brokerName,
       });
 
       this.logger.info(`Batch job completed: ${jobId}`, {
@@ -641,6 +944,8 @@ export class BatchEngine implements IOqronModule {
       });
     } catch (err) {
       if (timeoutHandle) clearTimeout(timeoutHandle);
+      if (heartbeat) await heartbeat.stop();
+      heartbeat = null;
 
       const error = err instanceof Error ? err : new Error(String(err));
 
@@ -670,7 +975,7 @@ export class BatchEngine implements IOqronModule {
         job.status = "waiting";
         job.error = error.message;
         await this.di.storage.save("jobs", jobId, job);
-        await this.di.broker.nack(`batch:${def.name}`, jobId, delay);
+        await this.di.broker.nack(brokerName, jobId, delay);
 
         this.logger.warn(`Batch job failed, retrying in ${delay}ms: ${jobId}`, {
           attempt: job.attemptMade,
@@ -682,7 +987,7 @@ export class BatchEngine implements IOqronModule {
         job.error = error.message;
         job.finishedAt = new Date();
         await this.di.storage.save("jobs", jobId, job);
-        await this.di.broker.ack(`batch:${def.name}`, jobId);
+        await this.di.broker.ack(brokerName, jobId);
 
         // DLQ handler
         if (def.deadLetter?.enabled && def.deadLetter?.onDead) {
@@ -703,7 +1008,7 @@ export class BatchEngine implements IOqronModule {
             keepHistoryToRemoveConfig(def.keepFailedHistory),
           globalRemoveConfig: this.batchConfig?.removeOnFail,
           filterKey: "queueName",
-          filterValue: `batch:${def.name}`,
+          filterValue: brokerName,
         });
 
         this.logger.error(`Batch job permanently failed: ${jobId}`, {

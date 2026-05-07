@@ -11,7 +11,9 @@
  * ═══════════════════════════════════════════════════════════════════════════════
  */
 
+import { randomUUID } from "node:crypto";
 import { OqronContainer } from "../engine/container.js";
+import { OqronRegistry } from "../engine/registry.js";
 import type { OqronJob } from "../engine/types/job.types.js";
 import { registerBatch } from "./registry.js";
 import type {
@@ -72,6 +74,8 @@ export function batch<T = any, R = any>(
   const groupByFn = config.groupBy;
   const deduplicateByFn = config.deduplicateBy;
   const persist = config.persist !== false;
+  const bufferLockTtlMs = config.lockTtlMs ?? 30_000;
+  const brokerName = `batch:${batchName}`;
 
   /**
    * In-memory buffer for persist: false mode.
@@ -82,6 +86,10 @@ export function batch<T = any, R = any>(
   /** Resolve the DI container or throw if not initialized. */
   function getDI() {
     return OqronContainer.get();
+  }
+
+  function getBatchEngine(): any | undefined {
+    return OqronRegistry.getInstance().get("batch") as any;
   }
 
   /** Compute the group key for an item. */
@@ -99,6 +107,107 @@ export function batch<T = any, R = any>(
     return `${batchName}:${groupKey}`;
   }
 
+  function bufferLockKey(groupKey: string): string {
+    return `batch:buffer:${batchName}:${groupKey}`;
+  }
+
+  async function sleep(ms: number): Promise<void> {
+    await new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  async function withBufferLock<R>(
+    groupKey: string,
+    fn: () => Promise<R>,
+  ): Promise<R> {
+    const di = getDI();
+    const owner = randomUUID();
+    const lockKey = bufferLockKey(groupKey);
+    const deadline = Date.now() + bufferLockTtlMs;
+
+    while (!(await di.lock.acquire(lockKey, owner, bufferLockTtlMs))) {
+      if (Date.now() >= deadline) {
+        throw new Error(
+          `[OqronKit/Batch] "${batchName}:${groupKey}" buffer lock timed out.`,
+        );
+      }
+      await sleep(25);
+    }
+
+    try {
+      return await fn();
+    } finally {
+      await di.lock.release(lockKey, owner).catch(() => {});
+    }
+  }
+
+  function isTerminalStatus(status: unknown): boolean {
+    return (
+      status === "completed" || status === "failed" || status === "cancelled"
+    );
+  }
+
+  async function recoverMarkedFlush(
+    key: string,
+    buffer: BatchBufferRecord<T>,
+  ): Promise<BatchBufferRecord<T> | null> {
+    if (!buffer.flushJobId) return buffer;
+
+    const di = getDI();
+    const job = await di.storage.get<OqronJob<BatchPayload<T>>>(
+      "jobs",
+      buffer.flushJobId,
+    );
+
+    if (job) {
+      if (!isTerminalStatus(job.status)) {
+        await di.broker.publish(brokerName, buffer.flushJobId);
+      }
+      await di.storage.delete("batch_buffers", key);
+      return null;
+    }
+
+    const recovered: BatchBufferRecord<T> = { ...buffer };
+    delete recovered.flushJobId;
+    delete recovered.flushingAt;
+    await di.storage.save("batch_buffers", key, recovered);
+    return recovered;
+  }
+
+  async function createBatchJob(
+    groupKey: string,
+    items: T[],
+    bufferCreatedAt: number,
+  ): Promise<string> {
+    const di = getDI();
+    const jobId = `batch:${batchName}:${groupKey}:${randomUUID()}`;
+    const now = new Date();
+    const payload: BatchPayload<T> = {
+      items,
+      groupKey: groupKey !== "default" ? groupKey : undefined,
+      bufferCreatedAt,
+      flushedAt: now.getTime(),
+    };
+
+    const job: OqronJob<BatchPayload<T>> = {
+      id: jobId,
+      type: "batch",
+      queueName: brokerName,
+      data: payload,
+      status: "waiting",
+      attemptMade: 0,
+      progressPercent: 0,
+      createdAt: now,
+      environment: di.config?.environment ?? "development",
+      project: di.config?.project ?? "default",
+      tags: [...(di.config?.tags ?? []), ...(config.tags ?? [])],
+      opts: {},
+    };
+
+    await di.storage.save("jobs", jobId, job);
+    await di.broker.publish(brokerName, jobId);
+    return jobId;
+  }
+
   // ── Core buffer operations ────────────────────────────────────────────
 
   async function addToBuffer(item: T): Promise<void> {
@@ -107,33 +216,38 @@ export function batch<T = any, R = any>(
     const now = Date.now();
 
     if (persist) {
-      const di = getDI();
-      const key = bufferKey(gk);
-      const existing = await di.storage.get<BatchBufferRecord<T>>(
-        "batch_buffers",
-        key,
-      );
+      await withBufferLock(gk, async () => {
+        const di = getDI();
+        const key = bufferKey(gk);
+        const existing = await di.storage.get<BatchBufferRecord<T>>(
+          "batch_buffers",
+          key,
+        );
+        const recovered = existing
+          ? await recoverMarkedFlush(key, existing)
+          : null;
 
-      const buffer: BatchBufferRecord<T> = existing ?? {
-        id: key,
-        items: [],
-        dedupeKeys: [],
-        firstItemAt: now,
-        lastItemAt: now,
-        environment: di.config?.environment ?? "development",
-        project: di.config?.project ?? "default",
-      };
+        const buffer: BatchBufferRecord<T> = recovered ?? {
+          id: key,
+          items: [],
+          dedupeKeys: [],
+          firstItemAt: now,
+          lastItemAt: now,
+          environment: di.config?.environment ?? "development",
+          project: di.config?.project ?? "default",
+        };
 
-      // Dedup check
-      if (dedupKey && buffer.dedupeKeys.includes(dedupKey)) {
-        return; // Silently skip duplicate
-      }
+        // Dedup check
+        if (dedupKey && buffer.dedupeKeys.includes(dedupKey)) {
+          return; // Silently skip duplicate
+        }
 
-      buffer.items.push(item);
-      if (dedupKey) buffer.dedupeKeys.push(dedupKey);
-      buffer.lastItemAt = now;
+        buffer.items.push(item);
+        if (dedupKey) buffer.dedupeKeys.push(dedupKey);
+        buffer.lastItemAt = now;
 
-      await di.storage.save("batch_buffers", key, buffer);
+        await di.storage.save("batch_buffers", key, buffer);
+      });
     } else {
       // In-memory only
       const gkStr = gk;
@@ -212,26 +326,73 @@ export function batch<T = any, R = any>(
     },
 
     async flush(groupKey?: string): Promise<void> {
-      // Force-flush delegates to the engine's flush logic
-      // The engine will handle this via the registry
       const di = getDI();
       const key = groupKey ?? "default";
       const bk = bufferKey(key);
 
-      let items: T[];
       if (persist) {
-        const buf = await di.storage.get<BatchBufferRecord<T>>(
-          "batch_buffers",
-          bk,
-        );
-        if (!buf || buf.items.length === 0) return;
-        items = buf.items;
-        await di.storage.delete("batch_buffers", bk);
-      } else {
+        await withBufferLock(key, async () => {
+          const buf = await di.storage.get<BatchBufferRecord<T>>(
+            "batch_buffers",
+            bk,
+          );
+          const recovered = buf ? await recoverMarkedFlush(bk, buf) : null;
+          if (!recovered || recovered.items.length === 0) return;
+
+          let finalItems = [...recovered.items];
+          if (config.hooks?.beforeFlush) {
+            finalItems = await config.hooks.beforeFlush(finalItems, groupKey);
+          }
+          if (finalItems.length === 0) {
+            await di.storage.delete("batch_buffers", bk);
+            return;
+          }
+
+          const jobId = `batch:${batchName}:${key}:${randomUUID()}`;
+          await di.storage.save("batch_buffers", bk, {
+            ...recovered,
+            flushJobId: jobId,
+            flushingAt: Date.now(),
+          });
+
+          const now = new Date();
+          const payload: BatchPayload<T> = {
+            items: finalItems,
+            groupKey: key !== "default" ? key : undefined,
+            bufferCreatedAt: recovered.firstItemAt,
+            flushedAt: now.getTime(),
+          };
+
+          const job: OqronJob<BatchPayload<T>> = {
+            id: jobId,
+            type: "batch",
+            queueName: brokerName,
+            data: payload,
+            status: "waiting",
+            attemptMade: 0,
+            progressPercent: 0,
+            createdAt: now,
+            environment: di.config?.environment ?? "development",
+            project: di.config?.project ?? "default",
+            tags: [...(di.config?.tags ?? []), ...(config.tags ?? [])],
+            opts: {},
+          };
+
+          await di.storage.save("jobs", jobId, job);
+          await di.broker.publish(brokerName, jobId);
+          await di.storage.delete("batch_buffers", bk);
+        });
+        return;
+      }
+
+      let items: T[];
+      if (!persist) {
         const buf = memoryBuffers.get(key);
         if (!buf || buf.items.length === 0) return;
         items = [...buf.items];
         memoryBuffers.delete(key);
+      } else {
+        return;
       }
 
       // Apply beforeFlush hook
@@ -242,32 +403,7 @@ export function batch<T = any, R = any>(
       if (finalItems.length === 0) return;
 
       // Create batch job
-      const jobId = `batch:${batchName}:${key}:${Date.now()}`;
-      const payload: BatchPayload<T> = {
-        items: finalItems,
-        groupKey: groupKey ?? undefined,
-        bufferCreatedAt: Date.now(),
-        flushedAt: Date.now(),
-      };
-
-      const now = new Date();
-      const job = {
-        id: jobId,
-        type: "batch" as const,
-        queueName: `batch:${batchName}`,
-        data: payload,
-        status: "waiting" as const,
-        attemptMade: 0,
-        progressPercent: 0,
-        createdAt: now,
-        environment: di.config?.environment ?? "development",
-        project: di.config?.project ?? "default",
-        tags: config.tags ?? [],
-        opts: {},
-      };
-
-      await di.storage.save("jobs", jobId, job);
-      await di.broker.publish(`batch:${batchName}`, jobId);
+      await createBatchJob(key, finalItems, Date.now());
     },
 
     async getBufferSize(groupKey?: string): Promise<number> {
@@ -294,18 +430,32 @@ export function batch<T = any, R = any>(
     },
 
     async pause(): Promise<void> {
+      const engine = getBatchEngine();
+      if (engine && typeof engine.pauseBatch === "function") {
+        await engine.pauseBatch(batchName);
+        return;
+      }
       const di = getDI();
-      await di.broker.pause(`batch:${batchName}`);
+      await di.broker.pause(brokerName);
     },
 
     async resume(): Promise<void> {
+      const engine = getBatchEngine();
+      if (engine && typeof engine.resumeBatch === "function") {
+        await engine.resumeBatch(batchName);
+        return;
+      }
       const di = getDI();
-      await di.broker.resume(`batch:${batchName}`);
+      await di.broker.resume(brokerName);
     },
 
     async drain(): Promise<void> {
+      const engine = getBatchEngine();
+      if (engine && typeof engine.drainBatch === "function") {
+        await engine.drainBatch(batchName);
+        return;
+      }
       await proxy.pause();
-      // Engine will wait for active jobs to complete on next stop()
     },
   };
 

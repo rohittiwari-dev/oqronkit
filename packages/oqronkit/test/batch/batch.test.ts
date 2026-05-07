@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { OqronKit, batch, batchModule } from "../../src/index.js";
-import { OqronRegistry } from "../../src/engine/index.js";
+import { OqronRegistry, Storage } from "../../src/engine/index.js";
 import type { BatchJobContext, IBatch } from "../../src/batch/types.js";
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
@@ -89,6 +89,25 @@ describe("Batch Module", () => {
 
       const size = await b.getBufferSize();
       expect(size).toBe(4);
+    });
+
+    it("should preserve concurrent add() calls to the same persisted buffer", async () => {
+      const handler = vi.fn().mockResolvedValue({ ok: true });
+      const b = batch<{ n: number }>({
+        name: "concurrent-adds",
+        maxSize: 1000,
+        maxWaitMs: 60_000,
+        handler,
+      });
+
+      await initBatch();
+
+      await Promise.all(
+        Array.from({ length: 75 }, (_, n) => b.add({ n })),
+      );
+
+      expect(await b.getBufferSize()).toBe(75);
+      expect(handler).not.toHaveBeenCalled();
     });
   });
 
@@ -478,6 +497,27 @@ describe("Batch Module", () => {
       expect(typeof capturedCtx!.getProgress).toBe("function");
       expect(typeof capturedCtx!.discard).toBe("function");
     });
+
+    it("should persist progress updates to the job record", async () => {
+      const b = batch<{ n: number }>({
+        name: "persist-progress",
+        maxSize: 1,
+        maxWaitMs: 60_000,
+        handler: async (ctx) => {
+          await ctx.progress(42, "halfway");
+          return { ok: true };
+        },
+      });
+
+      await initBatch();
+      await b.add({ n: 1 });
+      await sleep(500);
+
+      const [job] = await b.getJobs({ limit: 1 });
+      const stored = await Storage.get<any>("jobs", job.id);
+      expect(stored?.progressPercent).toBe(42);
+      expect(stored?.progressLabel).toBe("halfway");
+    });
   });
 
   // ── 13. Module registration ─────────────────────────────────────────────
@@ -574,6 +614,54 @@ describe("Batch Module", () => {
       await sleep(500);
 
       expect(handler).toHaveBeenCalledTimes(1);
+    });
+
+    it("should keep items buffered while paused instead of flushing jobs", async () => {
+      const handler = vi.fn().mockResolvedValue({ ok: true });
+      const b = batch<{ n: number }>({
+        name: "pause-buffer-test",
+        maxSize: 2,
+        maxWaitMs: 60_000,
+        handler,
+      });
+
+      await initBatch();
+      await b.pause();
+      await b.addBulk([{ n: 1 }, { n: 2 }]);
+      await sleep(500);
+
+      expect(await b.getBufferSize()).toBe(2);
+      expect(await b.getJobs()).toHaveLength(0);
+      expect(handler).not.toHaveBeenCalled();
+
+      await b.resume();
+      await sleep(500);
+
+      expect(handler).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("Timeout", () => {
+    it("should fail a batch when the handler ignores the abort signal", async () => {
+      const b = batch<{ n: number }>({
+        name: "timeout-enforced",
+        maxSize: 1,
+        maxWaitMs: 60_000,
+        timeout: 50,
+        retries: { max: 0, strategy: "fixed", baseDelay: 1000 },
+        handler: async () => {
+          await sleep(500);
+          return { ok: true };
+        },
+      });
+
+      await initBatch();
+      await b.add({ n: 1 });
+      await sleep(300);
+
+      const failed = await b.getJobs({ status: "failed", limit: 1 });
+      expect(failed).toHaveLength(1);
+      expect(failed[0].error).toContain("timed out");
     });
   });
 

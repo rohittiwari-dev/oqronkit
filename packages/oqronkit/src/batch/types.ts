@@ -271,6 +271,28 @@ export interface BatchBufferRecord<T = any> {
 
   /** Project stamp for isolation verification */
   project: string;
+
+  /** Job ID reserved while this buffer is being flushed */
+  flushJobId?: string;
+
+  /** Timestamp when flush reservation was created */
+  flushingAt?: number;
+}
+
+export interface BatchInstanceRecord {
+  name: string;
+  version: number;
+  enabled: boolean;
+  paused: boolean;
+  tags: string[];
+  maxSize: number;
+  maxWaitMs: number;
+  concurrency: number;
+  persist: boolean;
+  groups: number;
+  bufferedItems: number;
+  createdAt: Date;
+  updatedAt: Date;
 }
 
 // ── Public API ──────────────────────────────────────────────────────────────

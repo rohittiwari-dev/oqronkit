@@ -11,7 +11,7 @@ describe("Batch Partial Responses", () => {
     q = queue({
       name: "partial-batch",
       batchSize: 5,
-      retries: { max: 0 },
+      retries: { max: 0, strategy: "fixed", baseDelay: 1000 },
       processBatch: async (jobs) => {
         return jobs.map((j, i) => {
           if (i === 1) return { status: "rejected" as const, reason: new Error("job-1-fail") };

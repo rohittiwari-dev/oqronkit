@@ -63,7 +63,7 @@ describe("QueueEngine — DLQ Handler", () => {
 
     const q = queue<{ x: number }>({
       name: "q-dlq-error",
-      retries: { max: 0 }, // No retries — straight to DLQ
+      retries: { max: 0, strategy: "fixed", baseDelay: 1000 }, // No retries — straight to DLQ
       deadLetter: {
         enabled: true,
         onDead: async (job) => {

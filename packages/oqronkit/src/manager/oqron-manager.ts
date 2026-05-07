@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import type { BatchInstanceRecord } from "../batch/types.js";
 import { getCache } from "../cache/registry.js";
 import type {
   CacheInstanceRecord,
@@ -216,6 +217,9 @@ export class OqronManager {
     if (type === ("cache" as any)) {
       return this.enableCache(name);
     }
+    if (type === "batch") {
+      return this.resumeBatch(name);
+    }
     return false;
   }
 
@@ -249,6 +253,9 @@ export class OqronManager {
     }
     if (type === ("cache" as any)) {
       return this.disableCache(name);
+    }
+    if (type === "batch") {
+      return this.pauseBatch(name);
     }
     return false;
   }
@@ -464,6 +471,72 @@ export class OqronManager {
       });
     }
     await Broker.resume(name);
+  }
+
+  private getBatchEngine(): any | undefined {
+    return OqronRegistry.getInstance()
+      .getAll()
+      .find((m) => m.name === "batch") as any;
+  }
+
+  async listBatches(): Promise<BatchInstanceRecord[]> {
+    return Storage.list<BatchInstanceRecord>("batch_instances", {});
+  }
+
+  async getBatch(name: string): Promise<BatchInstanceRecord | null> {
+    return Storage.get<BatchInstanceRecord>("batch_instances", name);
+  }
+
+  async pauseBatch(name: string): Promise<boolean> {
+    const engine = this.getBatchEngine();
+    if (engine && typeof engine.pauseBatch === "function") {
+      return engine.pauseBatch(name);
+    }
+    const existing = await Storage.get<BatchInstanceRecord>(
+      "batch_instances",
+      name,
+    );
+    if (!existing) return false;
+    await Storage.save("batch_instances", name, {
+      ...existing,
+      paused: true,
+      enabled: false,
+      updatedAt: new Date(),
+    });
+    await Broker.pause(`batch:${name}`);
+    return true;
+  }
+
+  async resumeBatch(name: string): Promise<boolean> {
+    const engine = this.getBatchEngine();
+    if (engine && typeof engine.resumeBatch === "function") {
+      return engine.resumeBatch(name);
+    }
+    const existing = await Storage.get<BatchInstanceRecord>(
+      "batch_instances",
+      name,
+    );
+    if (!existing) return false;
+    await Storage.save("batch_instances", name, {
+      ...existing,
+      paused: false,
+      enabled: true,
+      updatedAt: new Date(),
+    });
+    await Broker.resume(`batch:${name}`);
+    return true;
+  }
+
+  async flushBatch(name: string, groupKey?: string): Promise<boolean> {
+    const engine = this.getBatchEngine();
+    if (!engine || typeof engine.flushBatch !== "function") return false;
+    return engine.flushBatch(name, groupKey);
+  }
+
+  async drainBatch(name: string): Promise<boolean> {
+    const engine = this.getBatchEngine();
+    if (!engine || typeof engine.drainBatch !== "function") return false;
+    return engine.drainBatch(name);
   }
 
   async retryAllFailed(name: string): Promise<number> {
