@@ -1,14 +1,73 @@
 ---
 title: Rate Limiter
-description: Distributed sliding-window rate limiting with tiered policies
+description: Complete guide to throttle and rate limiting across all OqronKit modules
 icon: Shield
 ---
 
-# Rate Limiter
+# Rate Limiter & Throttle
 
-OqronKit's Rate Limiter provides distributed, multi-tier rate limiting with sliding-window algorithms. It integrates with queues, crons, and schedules — or use it standalone as Express/Hono middleware.
+OqronKit provides **two complementary mechanisms** for controlling throughput:
+
+- **`throttle`** — Per-process dispatch rate cap (pre-claim, zero overhead)
+- **`rateLimiter`** — Distributed cluster-wide gate (post-claim, adapter-driven)
+
+Understanding when to use each — and how they interact — is critical for building production systems that don't overwhelm external services.
+
+---
+
+## How They Work
+
+### `throttle` — Pre-Claim Gate
+
+Throttle runs inside the engine **before** claiming jobs from the broker. It uses a sliding-window counter to track how many jobs were dispatched in the current time window.
+
+```
+Poll tick → concurrency check → throttle check → claim min(slots, budget)
+                                   ↑
+                          "Can I dispatch more in this window?"
+                          If no → skip this tick entirely
+                          If yes → claim up to available budget
+```
+
+**Key properties:**
+- In-memory, per-process — each worker node tracks independently
+- Zero broker overhead — if throttled, no claim/nack round-trips
+- Configured inline: `throttle: { max: 20, duration: 2000 }`
+
+### `rateLimiter` — Post-Claim Gate
+
+Rate limiter runs inside the job executor **after** a job is claimed and a heartbeat lock is started. It checks a distributed counter (Redis/Postgres) shared across the entire cluster.
+
+```
+Claim job → start heartbeat → rateLimiter.check()
+                                   ↑
+                          "Is the cluster over budget?"
+                          If yes → stop heartbeat, restore job, nack back
+                          If no → execute handler
+```
+
+**Key properties:**
+- Distributed via adapter (Redis INCR/EXPIRE or Postgres counter)
+- One broker round-trip per blocked job (claim → nack)
+- Configured separately: `rateLimit.create({ ... })` then composed in
+
+---
+
+## Module Availability
+
+| Module | `throttle` | `rateLimiter` | Notes |
+|--------|-----------|---------------|-------|
+| **Queue** | ✅ | ✅ | Both apply — throttle gates claims, rateLimiter gates execution |
+| **Worker** | ✅ | ✅ | Same as Queue, just decoupled |
+| **Webhook** | ✅ | ❌ | Uses circuit breakers for endpoint protection |
+| **Cron** | ❌ | ✅ | Single fire per tick — throttle not applicable |
+| **Schedule** | ❌ | ✅ | Same as Cron |
+
+---
 
 ## Basic Usage
+
+### Creating a Rate Limiter
 
 ```ts title="triggers/rate-limiters.ts"
 import { rateLimit } from 'oqronkit'
@@ -40,7 +99,7 @@ if (!result.allowed) {
 }
 ```
 
-## Express Middleware
+### Express Middleware
 
 ```ts
 import { expressMiddleware } from 'oqronkit'
@@ -51,7 +110,7 @@ app.use('/api', expressMiddleware({
 }))
 ```
 
-## Hono Middleware
+### Hono Middleware
 
 ```ts
 import { honoMiddleware } from 'oqronkit'
@@ -62,9 +121,147 @@ app.use('/api/*', honoMiddleware({
 }))
 ```
 
-## Compose with Schedulers
+### Destroy a Limiter
 
-Rate limiters can gate cron/schedule fires to prevent overloading external APIs:
+```ts
+rateLimit.destroy('api-requests') // Removes from global registry
+```
+
+---
+
+## Examples by Module
+
+### Queue — `throttle` Only
+
+Best for single-node deployments or local pacing:
+
+```ts
+import { queue } from 'oqronkit'
+
+const emailQueue = queue<{ to: string; subject: string; body: string }>({
+  name: 'email-sender',
+  concurrency: 5,
+  throttle: { max: 20, duration: 2_000 }, // 20 emails per 2 seconds
+
+  handler: async (ctx) => {
+    await sendEmail(ctx.data)
+    return { sent: true }
+  },
+})
+```
+
+**What happens:** Each poll tick, the engine checks "have I dispatched 20 jobs in the last 2 seconds?" If yes, it claims 0 jobs and waits for the next tick.
+
+### Queue — `rateLimiter` Only
+
+Best for shared external API quotas across a cluster:
+
+```ts
+import { queue, rateLimit } from 'oqronkit'
+
+const stripeLimiter = rateLimit.create({
+  name: 'stripe-api',
+  algorithm: 'sliding-window',
+  tiers: [{ name: 'global', key: () => 'stripe', max: 100, window: '1s' }],
+})
+
+const stripeQueue = queue({
+  name: 'stripe-operations',
+  concurrency: 10,
+  rateLimiter: stripeLimiter,
+
+  handler: async (ctx) => {
+    await stripe.customers.update(ctx.data.customerId, ctx.data.changes)
+  },
+})
+```
+
+**What happens when blocked:**
+1. Job is claimed from broker
+2. Heartbeat lock is started
+3. `stripeLimiter.check()` returns `{ allowed: false }`
+4. Heartbeat is stopped, job state is rolled back
+5. Job is nacked back to broker with 1 second delay
+6. Next poll tick claims it again — retries the check
+
+> The job is **never lost**. It keeps retrying until the rate limiter allows it.
+
+### Queue — Both Combined (Production Pattern)
+
+For multi-node deployments hitting external APIs:
+
+```ts
+const sesLimiter = rateLimit.create({
+  name: 'ses-quota',
+  algorithm: 'sliding-window',
+  tiers: [{ name: 'global', key: () => 'ses', max: 50, window: '1s' }],
+})
+
+const emailQueue = queue({
+  name: 'email-sender',
+  concurrency: 5,
+  throttle: { max: 20, duration: 2_000 },     // Per-node: 20/2s
+  rateLimiter: sesLimiter,                      // Cluster-wide: 50/s
+
+  handler: async (ctx) => {
+    await ses.sendEmail(ctx.data)
+  },
+})
+```
+
+**Execution flow:**
+
+```
+Poll tick
+  ├─ concurrency check: 5 max parallel → 3 running → 2 free slots
+  ├─ throttle check: 20/2s → 18 dispatched → 2 available
+  ├─ claim limit: min(2, 2) = 2 jobs from broker
+  │
+  ├─ Job A: rateLimiter.check() → allowed → execute handler ✅
+  └─ Job B: rateLimiter.check() → blocked → nack back, retry in 1s ⏳
+```
+
+**Why use both:** Throttle prevents each node from claiming too many jobs (cheap, no adapter call). Rate limiter catches the cluster-wide overflow (expensive, but exact).
+
+### Worker — `throttle` with API Pacing
+
+```ts
+import { worker } from 'oqronkit'
+
+const apiWorker = worker({
+  topic: 'external-api-calls',
+  concurrency: 3,
+  throttle: { max: 50, duration: 60_000 }, // 50 calls per minute per node
+
+  handler: async (ctx) => {
+    const res = await fetch('https://api.vendor.com/process', {
+      method: 'POST',
+      body: JSON.stringify(ctx.data),
+    })
+    return res.json()
+  },
+})
+```
+
+### Webhook — `throttle` for Delivery Pacing
+
+```ts
+import { webhook } from 'oqronkit'
+
+const platformWebhooks = webhook({
+  name: 'platform-events',
+  concurrency: 5,
+  throttle: { max: 100, duration: 60_000 }, // 100 deliveries per minute
+
+  endpoints: [
+    { name: 'Partner API', url: 'https://partner.com/webhooks', events: ['*'] },
+  ],
+})
+```
+
+### Cron — `rateLimiter` Gate
+
+Rate limiter on a cron controls whether a scheduled fire **happens at all**:
 
 ```ts
 import { cron, rateLimit } from 'oqronkit'
@@ -78,18 +275,191 @@ const supplierLimiter = rateLimit.create({
 const inventorySync = cron({
   name: 'inventory-sync',
   every: { minutes: 15 },
-  rateLimiter: supplierLimiter, // Skips fire if over budget
+  rateLimiter: supplierLimiter,
   handler: async (ctx) => { /* ... */ },
 })
 ```
 
-## Destroy a Limiter
+**What happens when blocked:**
+1. Cron tick fires
+2. `supplierLimiter.check()` returns `{ allowed: false }`
+3. Fire is **skipped entirely** — handler never runs
+4. `nextRunAt` advances to the next scheduled time (10:15 → 10:30)
+5. The skipped fire is **gone** — it does not retry
+
+> **Important:** Unlike Queue/Worker where blocked jobs nack back and retry, a rate-limited cron fire is **permanently skipped**. The next natural fire at the next scheduled time will check again.
+
+### Schedule — `rateLimiter` Gate
+
+Works identically to Cron:
 
 ```ts
-rateLimit.destroy('api-requests') // Removes from global registry
+import { schedule, rateLimit } from 'oqronkit'
+
+const notificationLimiter = rateLimit.create({
+  name: 'notifications',
+  algorithm: 'sliding-window',
+  tiers: [{ name: 'global', key: () => 'notif', max: 1000, window: '1d' }],
+})
+
+const dailyReport = schedule({
+  name: 'daily-user-report',
+  recurring: { frequency: 'daily', at: { hour: 9, minute: 0 } },
+  rateLimiter: notificationLimiter,
+  handler: async (ctx) => { /* ... */ },
+})
 ```
+
+---
+
+## Behavior Comparison
+
+### What Happens When Blocked
+
+| Module | Mechanism | Behavior on Block | Job/Fire Lost? |
+|--------|-----------|-------------------|----------------|
+| Queue | `throttle` | Don't claim — wait for next tick | ❌ No — job stays in broker |
+| Queue | `rateLimiter` | Nack back with 1s delay | ❌ No — job retries |
+| Worker | `throttle` | Don't claim — wait for next tick | ❌ No — job stays in broker |
+| Worker | `rateLimiter` | Nack back with 1s delay | ❌ No — job retries |
+| Webhook | `throttle` | Don't claim — wait for next tick | ❌ No — job stays in broker |
+| Cron | `rateLimiter` | Skip fire, advance `nextRunAt` | ⚠️ **Yes — fire is skipped** |
+| Schedule | `rateLimiter` | Skip fire, advance `nextRunAt` | ⚠️ **Yes — fire is skipped** |
+
+### When to Use Which
+
+| Scenario | Recommended | Why |
+|----------|-------------|-----|
+| Email delivery pacing | `throttle` | Local, zero overhead, no distributed state needed |
+| Shared API quota (Stripe, SES) | `rateLimiter` | Must be exact across all cluster nodes |
+| High-volume + external API | **Both** | Throttle for local pacing, rateLimiter for cluster safety |
+| Webhook to slow partner | `throttle` | Prevent overwhelming the endpoint |
+| Cron hitting external API | `rateLimiter` | Gate the fire decision |
+| Internal CPU-bound tasks | Neither | Just use `concurrency` |
+| Single-node deployment | `throttle` | No need for distributed coordination |
+
+---
+
+## Real-World Patterns
+
+### ❌ Anti-Pattern: Heavy Work Directly in Cron
+
+```ts
+// DANGEROUS — if crash happens between send and mark, emails get duplicated
+const giftEmailCron = cron({
+  name: 'send-gift-emails',
+  every: { minutes: 5 },
+  rateLimiter: emailLimiter,
+
+  handler: async (ctx) => {
+    const gifts = await GiftingsModel.findAll({ where: { sent: false } })
+    for (const gift of gifts) {
+      await sendEmail(gift.to_email, gift.template)  // ← Sent!
+      await gift.update({ sent: true })               // ← Crash here = duplicate
+    }
+  },
+})
+```
+
+**Problems:**
+1. If `rateLimiter` blocks: entire handler skipped, no emails sent — rows stay unsent until next fire (safe but delayed)
+2. If handler crashes between `sendEmail()` and `update()`: that email gets sent **again** on the next fire (duplicate)
+3. All emails are sent in one burst — no pacing within the handler
+
+### ✅ Best Practice: Cron Enqueues, Queue Delivers
+
+```ts
+// Step 1: Cron just discovers work and enqueues it
+const giftEmailCron = cron({
+  name: 'discover-gift-emails',
+  every: { minutes: 5 },
+
+  handler: async (ctx) => {
+    const gifts = await GiftingsModel.findAll({ where: { sent: false } })
+
+    if (gifts.length === 0) return
+
+    // Enqueue each gift as an independent job
+    await giftEmailQueue.addBulk(
+      gifts.map(g => ({
+        data: { giftId: g.id, to: g.to_email, template: g.template },
+        opts: { jobId: `gift-email-${g.id}` },  // Idempotency key
+      }))
+    )
+
+    // Mark as queued immediately — not "sent", just "queued"
+    await GiftingsModel.update(
+      { sent: true },
+      { where: { id: gifts.map(g => g.id) } }
+    )
+  },
+})
+
+// Step 2: Queue handles delivery with throttle + retries
+const giftEmailQueue = queue({
+  name: 'gift-email-delivery',
+  concurrency: 5,
+  throttle: { max: 20, duration: 2_000 },
+
+  retries: {
+    max: 3,
+    strategy: 'exponential',
+    baseDelay: 5_000,
+  },
+
+  hooks: {
+    onFail: async (job, error) => {
+      // Unmark so next cron rediscovers it
+      await GiftingsModel.update(
+        { sent: false },
+        { where: { id: job.data.giftId } }
+      )
+    },
+  },
+
+  handler: async (ctx) => {
+    await sendEmail(ctx.data.to, ctx.data.template)
+    return { delivered: true }
+  },
+})
+```
+
+**Why this is safer:**
+- **Cron is fast** — just queries + enqueues (no rate limiter needed)
+- **Each email is an independent job** — if one fails, others aren't affected
+- **Throttle paces delivery** — 20 per 2 seconds, no email provider rate limits hit
+- **Retries per email** — failed delivery retries with exponential backoff
+- **Idempotency key** — `jobId: gift-email-${g.id}` prevents duplicate enqueue
+- **Crash-safe** — if the worker crashes mid-send, that one job retries, nothing else is affected
+
+### ✅ Multi-Node with Cluster Rate Limit
+
+```ts
+// For 5 worker nodes sharing an SES quota of 50/second
+const sesLimiter = rateLimit.create({
+  name: 'ses-quota',
+  algorithm: 'sliding-window',
+  tiers: [{ name: 'global', key: () => 'ses', max: 50, window: '1s' }],
+})
+
+const emailQueue = queue({
+  name: 'email-delivery',
+  concurrency: 5,
+  throttle: { max: 15, duration: 1_000 },   // Each node: 15/s (5 nodes × 15 = 75 max)
+  rateLimiter: sesLimiter,                    // Cluster enforced: 50/s (catches overflow)
+
+  handler: async (ctx) => {
+    await ses.sendEmail(ctx.data)
+  },
+})
+```
+
+---
 
 ## Next Steps
 
-- [Webhook](/docs/webhook) — Event-driven webhook dispatch
-- [Scheduler](/docs/scheduler) — Compose rate limiters with crons
+- [Task Queue](/docs/task-queue) — Queue configuration and throttle examples
+- [Distributed Worker](/docs/distributed-worker) — Decoupled processing with throttle
+- [Webhook](/docs/webhook) — Webhook delivery with throttle pacing
+- [Scheduler](/docs/scheduler) — Cron and schedule rate limiter composition
+- [Crash Safety](/docs/crash-safety) — Heartbeat locks and stall detection

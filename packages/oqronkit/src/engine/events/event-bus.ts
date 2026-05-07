@@ -97,6 +97,29 @@ export type OqronEventMap = {
   ];
   "ratelimit:circuit-closed": [limiterName: string, tier: string, key: string];
 
+  // Cache lifecycle
+  "cache:hit": [
+    cacheName: string,
+    key: string,
+    tier: "L1" | "L2",
+    stale: boolean,
+  ];
+  "cache:miss": [cacheName: string, key: string];
+  "cache:set": [cacheName: string, key: string];
+  "cache:delete": [cacheName: string, key: string];
+  "cache:invalidate": [
+    cacheName: string,
+    payload: { key: string | null; tags: string[] | null; count: number },
+  ];
+  "cache:refresh:start": [cacheName: string, key: string];
+  "cache:refresh:success": [cacheName: string, key: string, latencyMs: number];
+  "cache:refresh:error": [cacheName: string, key: string, error: Error];
+  "cache:stale-served": [cacheName: string, key: string];
+  "cache:circuit-open": [cacheName: string, error: unknown];
+  "cache:circuit-close": [cacheName: string];
+  "cache:instance:enabled": [cacheName: string];
+  "cache:instance:disabled": [cacheName: string];
+
   // ── Queue Lifecycle (Phase 4 — Dynamic CRUD) ──────────────────────────────
   "queue:registered": [queueName: string];
   "queue:deregistered": [queueName: string];
@@ -128,6 +151,16 @@ export type OqronEventMap = {
   "worker:job:claimed": [topic: string, jobId: string];
   "worker:job:completed": [topic: string, jobId: string, durationMs: number];
   "worker:job:failed": [topic: string, jobId: string, durationMs: number];
+
+  // PubSub lifecycle
+  "pubsub:message:published": [topicName: string, messageId: string];
+  "pubsub:delivery:claimed": [topicName: string, deliveryId: string];
+  "pubsub:delivery:acked": [topicName: string, deliveryId: string];
+  "pubsub:delivery:nacked": [topicName: string, deliveryId: string];
+  "pubsub:delivery:dead": [topicName: string, deliveryId: string];
+  "pubsub:group:paused": [topicName: string, groupName: string];
+  "pubsub:group:resumed": [topicName: string, groupName: string];
+  "pubsub:reconciliation:repaired": [topicName: string, repaired: number];
 
   // ── Webhook Lifecycle (Phase 3 — Hardening) ─────────────────────────────
   "webhook:created": [dispatcherName: string];

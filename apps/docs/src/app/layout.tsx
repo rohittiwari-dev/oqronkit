@@ -19,10 +19,10 @@ export const metadata = {
   metadataBase: new URL("https://oqronkit.rohittiwari.me"),
   title: {
     template: "%s | OqronKit",
-    default: "OqronKit — Enterprise Background Job Engine for Node.js",
+    default: "OqronKit — Background Job Engine for Node.js",
   },
   description:
-    "Industry-grade, crash-safe, and framework-agnostic backend orchestration engine for Node.js. 12 enterprise modules — task queues, distributed workers, schedulers, rate limiters, webhooks, sagas, workflow DAGs, and more. Adapter-driven architecture with Memory, Redis, and Postgres support.",
+    "Crash-safe, and framework-agnostic backend orchestration engine for Node.js. 12 modules — task queues, distributed workers, schedulers, rate limiters, webhooks, sagas, workflow DAGs, and more. Adapter-driven architecture with Memory, Redis, and Postgres support.",
   keywords: [
     "OqronKit",
     "background jobs Node.js",
@@ -68,15 +68,15 @@ export const metadata = {
     locale: "en_US",
     url: "https://oqronkit.rohittiwari.me",
     siteName: "OqronKit",
-    title: "OqronKit — Enterprise Background Job Engine for Node.js",
+    title: "OqronKit — Background Job Engine for Node.js",
     description:
-      "Industry-grade, crash-safe backend orchestration engine with 12 enterprise modules. Adapter-driven architecture — Memory, Redis, Postgres. Zero vendor lock-in.",
+      "Crash-safe backend orchestration engine with 12 modules. Adapter-driven architecture — Memory, Redis, Postgres. Zero vendor lock-in.",
   },
   twitter: {
     card: "summary_large_image",
-    title: "OqronKit — Enterprise Background Job Engine for Node.js",
+    title: "OqronKit — Background Job Engine for Node.js",
     description:
-      "Crash-safe background jobs, distributed workers, schedulers, rate limiters, webhooks, sagas — 12 enterprise modules for Node.js.",
+      "Crash-safe background jobs, distributed workers, schedulers, rate limiters, webhooks, sagas — 12 modules for Node.js.",
     creator: "@rohittiwari_dev",
   },
 };

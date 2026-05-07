@@ -1,7 +1,10 @@
 import { z } from "zod";
 import type {
+  BatchModuleDef,
+  CacheModuleDef,
   CronModuleDef,
   OqronModuleDef,
+  PubSubModuleDef,
   QueueModuleDef,
   RateLimitModuleDef,
   SchedulerModuleDef,
@@ -86,6 +89,25 @@ const DEFAULT_QUEUE: Omit<
   shutdownTimeout: 25000,
   maxStalledCount: 1,
   stalledInterval: 30000,
+};
+
+const DEFAULT_PUBSUB: Required<PubSubModuleDef> = {
+  module: "pubsub",
+  concurrency: 1,
+  pollIntervalMs: 100,
+  lockTtlMs: 30000,
+  ackTimeoutMs: 30000,
+  retries: {
+    max: 3,
+    strategy: "exponential",
+    baseDelay: 1000,
+    maxDelay: 60000,
+  },
+  deadLetter: { enabled: true },
+  shutdownTimeout: 25000,
+  reconciliationIntervalMs: 30000,
+  reconciliationBatchSize: 500,
+  retentionIntervalMs: 60000,
 };
 
 const DEFAULT_WORKER: Omit<
@@ -173,12 +195,18 @@ export function applyModuleDefaults(def: OqronModuleDef): OqronModuleDef {
       return applySchedulerDefaults(def);
     case "queue":
       return applyQueueDefaults(def);
+    case "pubsub":
+      return applyPubSubDefaults(def as PubSubModuleDef);
     case "worker":
       return applyWorkerDefaults(def as WorkerModuleDef);
     case "webhook":
       return applyWebhookDefaults(def as WebhookModuleDef);
     case "ratelimit":
       return applyRateLimitDefaults(def as RateLimitModuleDef);
+    case "batch":
+      return applyBatchDefaults(def as BatchModuleDef);
+    case "cache":
+      return applyCacheDefaults(def as CacheModuleDef);
     default:
       return def;
   }
@@ -214,6 +242,16 @@ function applyQueueDefaults(def: QueueModuleDef): QueueModuleDef {
     module: "queue",
     retries: { ...DEFAULT_QUEUE.retries, ...(def.retries ?? {}) },
     deadLetter: { ...DEFAULT_QUEUE.deadLetter, ...(def.deadLetter ?? {}) },
+  };
+}
+
+function applyPubSubDefaults(def: PubSubModuleDef): PubSubModuleDef {
+  return {
+    ...DEFAULT_PUBSUB,
+    ...def,
+    module: "pubsub",
+    retries: { ...DEFAULT_PUBSUB.retries, ...(def.retries ?? {}) },
+    deadLetter: { ...DEFAULT_PUBSUB.deadLetter, ...(def.deadLetter ?? {}) },
   };
 }
 
@@ -260,6 +298,57 @@ function applyRateLimitDefaults(def: RateLimitModuleDef): RateLimitModuleDef {
   };
 }
 
+// ── Batch Defaults ──────────────────────────────────────────────────────────
+
+const DEFAULT_BATCH: Required<
+  Omit<
+    BatchModuleDef,
+    | "module"
+    | "lagMonitor"
+    | "disabledBehavior"
+    | "maxHeldJobs"
+    | "removeOnComplete"
+    | "removeOnFail"
+  >
+> & {
+  module: "batch";
+} = {
+  module: "batch",
+  tickIntervalMs: 1_000,
+  concurrency: 1,
+  heartbeatMs: 5_000,
+  lockTtlMs: 30_000,
+  leaderElection: true,
+  shutdownTimeout: 25_000,
+};
+
+function applyBatchDefaults(def: BatchModuleDef): BatchModuleDef {
+  return {
+    ...DEFAULT_BATCH,
+    ...def,
+    module: "batch",
+  };
+}
+
+// â”€â”€ Cache Defaults â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+const DEFAULT_CACHE: Required<Omit<CacheModuleDef, "module">> & {
+  module: "cache";
+} = {
+  module: "cache",
+  gcIntervalMs: 60_000,
+  eventRetentionMs: 86_400_000,
+  prewarmLockTtlMs: 60_000,
+};
+
+function applyCacheDefaults(def: CacheModuleDef): CacheModuleDef {
+  return {
+    ...DEFAULT_CACHE,
+    ...def,
+    module: "cache",
+  };
+}
+
 // ── Main Config Schema ──────────────────────────────────────────────────────
 
 export const OqronConfigSchema = z.object({
@@ -267,7 +356,9 @@ export const OqronConfigSchema = z.object({
   environment: z.string().default("development"),
 
   // Storage mode
-  mode: z.enum(["default", "db", "redis", "hybrid-db"]).default("default"),
+  mode: z
+    .enum(["default", "db", "redis", "hybrid-db", "custom"])
+    .default("default"),
 
   // Infrastructure
   redis: z.any().optional(),
@@ -383,4 +474,10 @@ export type ValidatedConfig = Omit<
 > & {
   /** Normalized and default-merged module definitions */
   modules: OqronModuleDef[];
+  /** Custom adapter implementations (passthrough — not Zod-validated) */
+  adapters?: {
+    storage: import("../types/engine.js").IStorageEngine;
+    broker: import("../types/engine.js").IBrokerEngine;
+    lock: import("../types/engine.js").ILockAdapter;
+  };
 };

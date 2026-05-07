@@ -26,6 +26,17 @@ export class MemoryStore implements IStorageEngine {
     map.set(id, this.clone(data));
   }
 
+  async saveIfAbsent<T>(
+    namespace: string,
+    id: string,
+    data: T,
+  ): Promise<boolean> {
+    const map = this.getNamespaceMap(namespace);
+    if (map.has(id)) return false;
+    map.set(id, this.clone(data));
+    return true;
+  }
+
   async get<T>(namespace: string, id: string): Promise<T | null> {
     const map = this.getNamespaceMap(namespace);
     const data = map.get(id);
@@ -58,12 +69,22 @@ export class MemoryStore implements IStorageEngine {
       );
     }
 
-    // Sort by createdAt descending (newest first)
-    results.sort((a: any, b: any) => {
-      const aTime = this.toEpochMs(a.createdAt) ?? 0;
-      const bTime = this.toEpochMs(b.createdAt) ?? 0;
-      return bTime - aTime;
-    });
+    if (opts?.orderBy) {
+      const { field, direction = "asc", type } = opts.orderBy;
+      results.sort((a: any, b: any) => {
+        const av = this.toComparable(a[field], type);
+        const bv = this.toComparable(b[field], type);
+        const cmp = av < bv ? -1 : av > bv ? 1 : 0;
+        return direction === "asc" ? cmp : -cmp;
+      });
+    } else {
+      // Sort by createdAt descending (newest first)
+      results.sort((a: any, b: any) => {
+        const aTime = this.toEpochMs(a.createdAt) ?? 0;
+        const bTime = this.toEpochMs(b.createdAt) ?? 0;
+        return bTime - aTime;
+      });
+    }
 
     // Apply pagination
     const offset = opts?.offset ?? 0;
@@ -106,6 +127,23 @@ export class MemoryStore implements IStorageEngine {
     map.delete(id);
   }
 
+  async bulkSave<T>(
+    namespace: string,
+    records: Array<{ id: string; data: T }>,
+  ): Promise<void> {
+    const map = this.getNamespaceMap(namespace);
+    for (const record of records) {
+      map.set(record.id, this.clone(record.data));
+    }
+  }
+
+  async bulkDelete(namespace: string, ids: string[]): Promise<void> {
+    const map = this.getNamespaceMap(namespace);
+    for (const id of ids) {
+      map.delete(id);
+    }
+  }
+
   async prune(namespace: string, beforeMs: number): Promise<number> {
     const map = this.getNamespaceMap(namespace);
     let prunedCount = 0;
@@ -133,6 +171,37 @@ export class MemoryStore implements IStorageEngine {
     }
 
     return prunedCount;
+  }
+
+  async increment(
+    namespace: string,
+    id: string,
+    field: string,
+    by = 1,
+  ): Promise<number> {
+    const map = this.getNamespaceMap(namespace);
+    const existing = this.clone((map.get(id) ?? {}) as Record<string, any>);
+    const current = Number(existing[field] ?? 0);
+    const next = (Number.isFinite(current) ? current : 0) + by;
+    existing[field] = next;
+    map.set(id, existing);
+    return next;
+  }
+
+  async compareAndSet<T extends Record<string, any>>(
+    namespace: string,
+    id: string,
+    expected: Partial<T>,
+    patch: Partial<T>,
+  ): Promise<boolean> {
+    const map = this.getNamespaceMap(namespace);
+    const existing = map.get(id);
+    if (!existing) return false;
+    for (const [key, value] of Object.entries(expected)) {
+      if (!this.valuesEqual(existing[key], value)) return false;
+    }
+    map.set(id, this.clone({ ...existing, ...patch }));
+    return true;
   }
 
   // ── Where condition helpers ──────────────────────────────────────────────
@@ -176,6 +245,30 @@ export class MemoryStore implements IStorageEngine {
       return Number.isNaN(parsed) ? undefined : parsed;
     }
     return undefined;
+  }
+
+  private toComparable(
+    value: unknown,
+    type?: "number" | "date" | "string",
+  ): number | string {
+    if (type === "number") {
+      const n = Number(value);
+      return Number.isFinite(n) ? n : Number.NEGATIVE_INFINITY;
+    }
+    if (type === "date") {
+      return this.toEpochMs(value) ?? Number.NEGATIVE_INFINITY;
+    }
+    if (typeof value === "number") return value;
+    const time = this.toEpochMs(value);
+    if (time !== undefined) return time;
+    return String(value ?? "");
+  }
+
+  private valuesEqual(left: unknown, right: unknown): boolean {
+    if (left instanceof Date || right instanceof Date) {
+      return this.toEpochMs(left) === this.toEpochMs(right);
+    }
+    return JSON.stringify(left) === JSON.stringify(right);
   }
 
   private clone<T>(value: T, seen = new WeakMap<object, any>()): T {

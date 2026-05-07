@@ -68,7 +68,7 @@ export function Footer() {
             </Link>
 
             <p className="text-sm text-fd-muted-foreground leading-relaxed max-w-xs mb-6">
-              The enterprise-grade background job engine for Node.js.
+              The background job engine for Node.js.
               Crash-safe, adapter-driven, and open source.
             </p>
 

@@ -12,8 +12,11 @@ import {
   type ValidatedConfig,
 } from "./engine/index.js";
 import {
+  type BatchModuleDef,
+  type CacheModuleDef,
   type CronModuleDef,
   getModuleConfig,
+  type PubSubModuleDef,
   type QueueModuleDef,
   type RateLimitModuleDef,
   type SchedulerModuleDef,
@@ -35,6 +38,48 @@ function removeSignalHandlers(): void {
   _signalHandlers = [];
 }
 
+// ── Batch Module ────────────────────────────────────────────────────────────
+export { batch } from "./batch/define-batch.js";
+export { applyGlobalTags as applyGlobalBatchTags } from "./batch/registry.js";
+export type {
+  BatchConfig,
+  BatchJobContext,
+  BatchPayload,
+  IBatch,
+} from "./batch/types.js";
+export { cache } from "./cache/define-cache.js";
+export type {
+  CacheBatchContext,
+  CacheBatchResult,
+  CacheConfig,
+  CacheContext,
+  CacheFetchManyOptions,
+  CacheFetchOptions,
+  CacheInstanceRecord,
+  CacheSetOptions,
+  CacheSnapshot,
+  CacheStats,
+  ICache,
+} from "./cache/types.js";
+export type {
+  BrokerAdapterOptions,
+  CreateAdaptersOptions,
+  LockAdapterOptions,
+  OqronAdapters,
+  PostgresAdapterConfig,
+  RedisAdapterConfig,
+  StorageAdapterOptions,
+} from "./engine/adapter-factory.js";
+// ── Adapter Factories ───────────────────────────────────────────────────────
+export {
+  createAdapters,
+  createBroker,
+  createBrokerAdapter,
+  createLock,
+  createLockAdapter,
+  createStorage,
+  createStorageAdapter,
+} from "./engine/adapter-factory.js";
 export type {
   ClusteringConfig,
   CronDefinition,
@@ -60,12 +105,22 @@ export type {
 // ── Re-exports: single source of truth for ALL user-facing APIs ─────────────
 export {
   createLogger,
-  DependencyResolver,
   defineConfig,
-  OqronContainer,
   OqronEventBus,
 } from "./engine/index.js";
 export { ShardedLeaderElection } from "./engine/lock/index.js";
+export type { OqronStorageMode } from "./engine/types/config.types.js";
+// ── Adapter Interfaces (for custom adapter implementations) ──────────────────
+export type {
+  BrokerStrategy,
+  IBrokerEngine,
+  ICloseable,
+  ILockAdapter,
+  IStorageEngine,
+  ListOptions,
+  WhereCondition,
+  WhereOp,
+} from "./engine/types/engine.js";
 export {
   type JobHistoryResult,
   type ModuleInfo,
@@ -74,14 +129,23 @@ export {
   type QueueMetrics,
 } from "./manager/oqron-manager.js";
 export {
+  type BatchModuleConfig,
+  type BatchModuleDef,
+  batchModule,
+  type CacheModuleConfig,
+  type CacheModuleDef,
   type CronModuleConfig,
   type CronModuleDef,
+  cacheModule,
   cronModule,
   getModuleConfig,
   normalizeModules,
   type OqronModuleDef,
   type OqronModuleInput,
   type OqronModuleName,
+  type PubSubModuleConfig,
+  type PubSubModuleDef,
+  pubsubModule,
   type QueueModuleConfig,
   type QueueModuleDef,
   queueModule,
@@ -98,6 +162,23 @@ export {
   webhookModule,
   workerModule,
 } from "./modules.js";
+export { topic } from "./pubsub/define-pubsub.js";
+export type {
+  ITopic,
+  MessageContext,
+  PubSubAckMode,
+  PubSubDeadLetterRecord,
+  PubSubDeliveryRecord,
+  PubSubDeliveryStatus,
+  PubSubGroupRecord,
+  PubSubMessageRecord,
+  PubSubPublishOptions,
+  PubSubStartPosition,
+  SubscriptionConfig,
+  TopicConfig,
+  TopicDistributionConfig,
+  TopicStats,
+} from "./pubsub/types.js";
 export { queue } from "./queue/define-queue.js";
 export {
   type QueueMetricEntry,
@@ -336,6 +417,16 @@ export const OqronKit = {
       OqronRegistry.getInstance().register(engine);
     }
 
+    const pubsubConf = getModuleConfig<PubSubModuleDef>(
+      _config.modules,
+      "pubsub",
+    );
+    if (pubsubConf) {
+      const { PubSubModule } = await import("./pubsub/pubsub-module.js");
+      const engine = new PubSubModule(_config, _logger!, pubsubConf);
+      OqronRegistry.getInstance().register(engine);
+    }
+
     const workerConf = getModuleConfig<WorkerModuleDef>(
       _config.modules,
       "worker",
@@ -366,6 +457,20 @@ export const OqronKit = {
       );
       const rlModule = new RateLimitModule(_config, _logger!, ratelimitConf);
       OqronRegistry.getInstance().register(rlModule);
+    }
+
+    const batchConf = getModuleConfig<BatchModuleDef>(_config.modules, "batch");
+    if (batchConf) {
+      const { BatchEngine } = await import("./batch/batch-engine.js");
+      const engine = new BatchEngine(_config, _logger!, batchConf);
+      OqronRegistry.getInstance().register(engine);
+    }
+
+    const cacheConf = getModuleConfig<CacheModuleDef>(_config.modules, "cache");
+    if (cacheConf) {
+      const { CacheModule } = await import("./cache/cache-module.js");
+      const engine = new CacheModule(_config, _logger!, cacheConf);
+      OqronRegistry.getInstance().register(engine);
     }
 
     const registry = OqronRegistry.getInstance();

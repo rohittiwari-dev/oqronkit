@@ -9,10 +9,10 @@ import { QuickStart } from "@/components/landing/quick-start";
 export const metadata: Metadata = {
   metadataBase: new URL("https://oqronkit.rohittiwari.me"),
   title: {
-    absolute: "OqronKit — Enterprise Background Job Engine for Node.js",
+    absolute: "OqronKit — Background Job Engine for Node.js",
   },
   description:
-    "Industry-grade, crash-safe backend orchestration engine for Node.js. 12 enterprise modules — task queues, distributed workers, schedulers, rate limiters, webhooks, sagas, workflow DAGs, and more. Adapter-driven with Memory, Redis, and Postgres.",
+    "Crash-safe backend orchestration engine for Node.js. 12 modules — task queues, distributed workers, schedulers, rate limiters, webhooks, sagas, workflow DAGs, and more. Adapter-driven with Memory, Redis, and Postgres.",
   keywords: [
     "OqronKit",
     "background jobs Node.js",
@@ -41,17 +41,17 @@ export const metadata: Metadata = {
   ],
   openGraph: {
     siteName: "OqronKit",
-    title: "OqronKit — Enterprise Background Job Engine for Node.js",
+    title: "OqronKit — Background Job Engine for Node.js",
     description:
-      "Crash-safe background jobs, distributed workers, schedulers, rate limiters, webhooks, sagas — 12 enterprise modules. Adapter-driven with Memory, Redis, and Postgres.",
+      "Crash-safe background jobs, distributed workers, schedulers, rate limiters, webhooks, sagas — 12 modules. Adapter-driven with Memory, Redis, and Postgres.",
     url: "https://oqronkit.rohittiwari.me",
     type: "website",
   },
   twitter: {
     card: "summary_large_image",
-    title: "OqronKit — Enterprise Background Job Engine for Node.js",
+    title: "OqronKit — Background Job Engine for Node.js",
     description:
-      "12 enterprise modules for background computation — crash-safe, adapter-driven, horizontally scalable. Task queues, workers, schedulers, and more.",
+      "12 modules for background computation — crash-safe, adapter-driven, horizontally scalable. Task queues, workers, schedulers, and more.",
   },
   alternates: {
     canonical: "/",
@@ -66,7 +66,7 @@ export default function HomePage() {
     name: "OqronKit",
     alternateName: ["Oqron Kit", "oqronkit"],
     description:
-      "Industry-grade, crash-safe backend orchestration engine for Node.js with 12 enterprise modules.",
+      "Crash-safe backend orchestration engine for Node.js with 12 modules.",
     publisher: {
       "@type": "Person",
       name: "Rohit Tiwari",

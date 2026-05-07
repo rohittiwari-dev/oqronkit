@@ -16,6 +16,7 @@ import {
 } from "../engine/utils/job-executor.js";
 import { keepHistoryToRemoveConfig } from "../engine/utils/job-retention.js";
 import { ReconciliationEngine } from "../engine/utils/reconciliation-engine.js";
+import { ThrottleGate } from "../engine/utils/throttle-gate.js";
 import type { WorkerModuleDef } from "../modules.js";
 import { getRegisteredQueues } from "../queue/registry.js";
 import {
@@ -47,6 +48,8 @@ export class WorkerEngine implements IOqronModule {
   private lagMonitor: LagMonitor | null = null;
   /** Storage-broker reconciliation engine — recovers orphaned jobs from split-brain crashes */
   private reconciler: ReconciliationEngine | null = null;
+  /** Per-topic throttle gates — caps dispatch rate per time window */
+  private throttleGates = new Map<string, ThrottleGate>();
 
   constructor(
     private readonly config: OqronConfig,
@@ -441,6 +444,11 @@ export class WorkerEngine implements IOqronModule {
   }
 
   private startPolling(w: WorkerConfig) {
+    // Create throttle gate if configured
+    if (w.throttle) {
+      this.throttleGates.set(w.topic, new ThrottleGate(w.throttle));
+    }
+
     // Use pollIntervalMs if set, fall back to heartbeatMs
     const basePollMs =
       w.pollIntervalMs ??
@@ -493,7 +501,14 @@ export class WorkerEngine implements IOqronModule {
 
       // Compute claim limit — respect batchSize for batch mode
       const batchSize = w.batchSize ?? 10;
-      const limit = w.processBatch ? Math.min(freeSlots, batchSize) : freeSlots;
+      let limit = w.processBatch ? Math.min(freeSlots, batchSize) : freeSlots;
+
+      // Throttle gate: cap limit by available budget in the current window
+      const gate = this.throttleGates.get(w.topic);
+      if (gate) {
+        limit = Math.min(limit, gate.getAvailable());
+        if (limit <= 0) return;
+      }
 
       // Use blocking claims when available for lower latency
       let claimedIds: string[] = [];
@@ -538,6 +553,9 @@ export class WorkerEngine implements IOqronModule {
       }
 
       if (!claimedIds.length) return;
+
+      // Record dispatched count for throttle gate
+      gate?.record(claimedIds.length);
 
       // Fetch job data & validate
       const validJobs: OqronJob[] = [];

@@ -1,4 +1,11 @@
 import { randomUUID } from "node:crypto";
+import type { BatchInstanceRecord } from "../batch/types.js";
+import { getCache } from "../cache/registry.js";
+import type {
+  CacheInstanceRecord,
+  CacheSnapshot,
+  CacheStats,
+} from "../cache/types.js";
 import {
   Broker,
   OqronEventBus,
@@ -207,6 +214,12 @@ export class OqronManager {
     if (type === ("ratelimit" as any)) {
       return this.enableRateLimiter(name);
     }
+    if (type === ("cache" as any)) {
+      return this.enableCache(name);
+    }
+    if (type === "batch") {
+      return this.resumeBatch(name);
+    }
     return false;
   }
 
@@ -237,6 +250,12 @@ export class OqronManager {
     }
     if (type === ("ratelimit" as any)) {
       return this.disableRateLimiter(name);
+    }
+    if (type === ("cache" as any)) {
+      return this.disableCache(name);
+    }
+    if (type === "batch") {
+      return this.pauseBatch(name);
     }
     return false;
   }
@@ -322,6 +341,65 @@ export class OqronManager {
     return limiter.getStatus(adminKey);
   }
 
+  async listCaches(): Promise<CacheInstanceRecord[]> {
+    return Storage.list<CacheInstanceRecord>("cache_instances");
+  }
+
+  async getCacheStats(name: string): Promise<CacheStats | null> {
+    return Storage.get<CacheStats>("cache_stats", name);
+  }
+
+  async getCacheSnapshot(name: string): Promise<CacheSnapshot | null> {
+    const cache = getCache(name);
+    if (!cache) return null;
+    return cache.snapshot();
+  }
+
+  async clearCache(name: string): Promise<number> {
+    const cache = getCache(name);
+    if (!cache) return 0;
+    return cache.invalidateAll();
+  }
+
+  async invalidateCacheKey(name: string, key: string): Promise<boolean> {
+    const cache = getCache(name);
+    if (!cache) return false;
+    await cache.invalidate(key);
+    return true;
+  }
+
+  async invalidateCachePrefix(name: string, prefix: string): Promise<number> {
+    const cache = getCache(name);
+    if (!cache) return 0;
+    return cache.invalidatePrefix(prefix);
+  }
+
+  async invalidateCacheTags(name: string, tags: string[]): Promise<number> {
+    const cache = getCache(name);
+    if (!cache) return 0;
+    return cache.invalidateTags(tags);
+  }
+
+  async enableCache(name: string): Promise<boolean> {
+    const rec = await Storage.get<CacheInstanceRecord>("cache_instances", name);
+    if (!rec) return false;
+    rec.enabled = true;
+    rec.updatedAt = new Date();
+    await Storage.save("cache_instances", name, rec);
+    OqronEventBus.emit("cache:instance:enabled", name);
+    return true;
+  }
+
+  async disableCache(name: string): Promise<boolean> {
+    const rec = await Storage.get<CacheInstanceRecord>("cache_instances", name);
+    if (!rec) return false;
+    rec.enabled = false;
+    rec.updatedAt = new Date();
+    await Storage.save("cache_instances", name, rec);
+    OqronEventBus.emit("cache:instance:disabled", name);
+    return true;
+  }
+
   // ── Queue Administration ───────────────────────────────────────────────────
 
   async getQueueInfo(
@@ -393,6 +471,72 @@ export class OqronManager {
       });
     }
     await Broker.resume(name);
+  }
+
+  private getBatchEngine(): any | undefined {
+    return OqronRegistry.getInstance()
+      .getAll()
+      .find((m) => m.name === "batch") as any;
+  }
+
+  async listBatches(): Promise<BatchInstanceRecord[]> {
+    return Storage.list<BatchInstanceRecord>("batch_instances", {});
+  }
+
+  async getBatch(name: string): Promise<BatchInstanceRecord | null> {
+    return Storage.get<BatchInstanceRecord>("batch_instances", name);
+  }
+
+  async pauseBatch(name: string): Promise<boolean> {
+    const engine = this.getBatchEngine();
+    if (engine && typeof engine.pauseBatch === "function") {
+      return engine.pauseBatch(name);
+    }
+    const existing = await Storage.get<BatchInstanceRecord>(
+      "batch_instances",
+      name,
+    );
+    if (!existing) return false;
+    await Storage.save("batch_instances", name, {
+      ...existing,
+      paused: true,
+      enabled: false,
+      updatedAt: new Date(),
+    });
+    await Broker.pause(`batch:${name}`);
+    return true;
+  }
+
+  async resumeBatch(name: string): Promise<boolean> {
+    const engine = this.getBatchEngine();
+    if (engine && typeof engine.resumeBatch === "function") {
+      return engine.resumeBatch(name);
+    }
+    const existing = await Storage.get<BatchInstanceRecord>(
+      "batch_instances",
+      name,
+    );
+    if (!existing) return false;
+    await Storage.save("batch_instances", name, {
+      ...existing,
+      paused: false,
+      enabled: true,
+      updatedAt: new Date(),
+    });
+    await Broker.resume(`batch:${name}`);
+    return true;
+  }
+
+  async flushBatch(name: string, groupKey?: string): Promise<boolean> {
+    const engine = this.getBatchEngine();
+    if (!engine || typeof engine.flushBatch !== "function") return false;
+    return engine.flushBatch(name, groupKey);
+  }
+
+  async drainBatch(name: string): Promise<boolean> {
+    const engine = this.getBatchEngine();
+    if (!engine || typeof engine.drainBatch !== "function") return false;
+    return engine.drainBatch(name);
   }
 
   async retryAllFailed(name: string): Promise<number> {

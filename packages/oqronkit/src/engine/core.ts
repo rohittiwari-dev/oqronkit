@@ -63,6 +63,20 @@ export async function initEngine(config: OqronConfig): Promise<void> {
 
   const mode: OqronStorageMode = config.mode ?? "default";
 
+  // ── Custom adapters: user-provided storage/broker/lock ─────────────────
+  if (mode === "custom") {
+    if (!config.adapters) {
+      throw new Error(
+        '[OqronKit] mode "custom" requires `adapters` config with storage, broker, and lock.',
+      );
+    }
+    storage = config.adapters.storage;
+    broker = config.adapters.broker;
+    lock = config.adapters.lock;
+    OqronContainer.init(storage, broker, lock, config);
+    return;
+  }
+
   if (mode === "hybrid-db") {
     // ── Hybrid: PG (storage) + Redis (broker + lock) ──────────────────────
     if (!config.postgres) {

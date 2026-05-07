@@ -45,8 +45,14 @@ export type DisabledBehavior = "hold" | "skip" | "reject";
  * - `"db"`      — PostgreSQL required. Storage + Broker + Lock all via PG.
  * - `"redis"`   — Redis required. Storage + Broker + Lock all via Redis.
  * - `"hybrid-db"` — Both PG + Redis required. PG for durable Storage, Redis for fast Broker + Lock.
+ * - `"custom"`  — User-provided adapters via `config.adapters`. Full control.
  */
-export type OqronStorageMode = "default" | "db" | "redis" | "hybrid-db";
+export type OqronStorageMode =
+  | "default"
+  | "db"
+  | "redis"
+  | "hybrid-db"
+  | "custom";
 
 export interface OqronConfig {
   /**
@@ -90,6 +96,44 @@ export interface OqronConfig {
     tablePrefix?: string;
     /** Connection pool size. @default 10 */
     poolSize?: number;
+  };
+
+  /**
+   * Custom adapter implementations.
+   * Required when `mode` is `"custom"`.
+   *
+   * Allows passing your own storage, broker, and lock adapters
+   * (e.g., DynamoDB, RabbitMQ, Etcd, etc.). OqronKit wraps them
+   * with environment/project isolation automatically.
+   *
+   * @example
+   * ```ts
+   * import { OqronKit } from 'oqronkit'
+   * import type { IStorageEngine, IBrokerEngine, ILockAdapter } from 'oqronkit'
+   * import { MyDynamoStore } from './adapters/dynamo-store'
+   * import { MyRabbitBroker } from './adapters/rabbit-broker'
+   * import { MyEtcdLock } from './adapters/etcd-lock'
+   *
+   * await OqronKit.init({
+   *   config: {
+   *     mode: 'custom',
+   *     adapters: {
+   *       storage: new MyDynamoStore(),
+   *       broker: new MyRabbitBroker(),
+   *       lock: new MyEtcdLock(),
+   *     },
+   *     modules: [queueModule(), cronModule()],
+   *   },
+   * })
+   * ```
+   */
+  adapters?: {
+    /** Custom storage engine implementing IStorageEngine */
+    storage: import("./engine.js").IStorageEngine;
+    /** Custom broker engine implementing IBrokerEngine */
+    broker: import("./engine.js").IBrokerEngine;
+    /** Custom lock adapter implementing ILockAdapter */
+    lock: import("./engine.js").ILockAdapter;
   };
 
   /**

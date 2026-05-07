@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { BrokerStrategy, IBrokerEngine } from "../types/engine.js";
 import { assertValidIdentifier, quoteIdentifier } from "./identifiers.js";
 
@@ -89,6 +90,36 @@ export class PostgresBroker implements IBrokerEngine {
        SET priority = $3, run_at = $4::timestamptz, locked_by = NULL, locked_until = NULL`,
       [brokerName, id, priority ?? 0, runAt],
     );
+  }
+
+  async publishBatch(
+    brokerName: string,
+    ids: Array<{ id: string; delayMs?: number; priority?: number }>,
+  ): Promise<void> {
+    await this.ensureTable();
+    const client = await this.pool.connect();
+    try {
+      await client.query("BEGIN");
+      for (const item of ids) {
+        const runAt =
+          item.delayMs && item.delayMs > 0
+            ? new Date(Date.now() + item.delayMs).toISOString()
+            : new Date().toISOString();
+        await client.query(
+          `INSERT INTO ${this.tableName} (broker_name, id, priority, run_at)
+           VALUES ($1, $2, $3, $4::timestamptz)
+           ON CONFLICT (broker_name, id) DO UPDATE
+           SET priority = $3, run_at = $4::timestamptz, locked_by = NULL, locked_until = NULL`,
+          [brokerName, item.id, item.priority ?? 0, runAt],
+        );
+      }
+      await client.query("COMMIT");
+    } catch (err) {
+      await client.query("ROLLBACK").catch(() => {});
+      throw err;
+    } finally {
+      client.release();
+    }
   }
 
   /**
@@ -188,6 +219,10 @@ export class PostgresBroker implements IBrokerEngine {
     );
   }
 
+  async remove(brokerName: string, id: string): Promise<void> {
+    await this.ack(brokerName, id);
+  }
+
   async nack(
     brokerName: string,
     id: string,
@@ -228,7 +263,8 @@ export class PostgresBroker implements IBrokerEngine {
     );
   }
 
-  private async isPaused(brokerName: string): Promise<boolean> {
+  async isPaused(brokerName: string): Promise<boolean> {
+    await this.ensureTable();
     const result = await this.pool.query(
       `SELECT 1 FROM ${this.tableName}
        WHERE broker_name = $1 AND id = '__paused__'
@@ -236,6 +272,16 @@ export class PostgresBroker implements IBrokerEngine {
       [brokerName],
     );
     return result.rows.length > 0;
+  }
+
+  async size(brokerName: string): Promise<number> {
+    await this.ensureTable();
+    const result = await this.pool.query(
+      `SELECT COUNT(*) AS cnt FROM ${this.tableName}
+       WHERE broker_name = $1 AND id <> '__paused__'`,
+      [brokerName],
+    );
+    return Number(result.rows[0].cnt);
   }
 
   /**
@@ -276,6 +322,53 @@ export class PostgresBroker implements IBrokerEngine {
       strategy,
     );
     return finalClaim.length > 0 ? finalClaim[0] : null;
+  }
+
+  async broadcast(channel: string, message: unknown): Promise<void> {
+    await this.ensureTable();
+    await this.pool.query("SELECT pg_notify($1, $2)", [
+      this.getBroadcastChannel(channel),
+      JSON.stringify(message),
+    ]);
+  }
+
+  async subscribe(
+    channel: string,
+    handler: (message: unknown) => void | Promise<void>,
+  ): Promise<() => Promise<void>> {
+    await this.ensureTable();
+    const broadcastChannel = this.getBroadcastChannel(channel);
+    const client = await this.pool.connect();
+    const onNotification = (msg: { channel: string; payload?: string }) => {
+      if (msg.channel !== broadcastChannel) return;
+      try {
+        void handler(JSON.parse(msg.payload ?? "null"));
+      } catch {
+        void handler(msg.payload);
+      }
+    };
+    client.on("notification", onNotification);
+    await client.query(
+      `LISTEN ${quoteIdentifier(broadcastChannel, "channel")}`,
+    );
+    return async () => {
+      try {
+        client.removeListener("notification", onNotification);
+        await client.query(
+          `UNLISTEN ${quoteIdentifier(broadcastChannel, "channel")}`,
+        );
+      } finally {
+        client.release();
+      }
+    };
+  }
+
+  private getBroadcastChannel(channel: string): string {
+    const digest = createHash("sha1")
+      .update(channel)
+      .digest("hex")
+      .slice(0, 40);
+    return `oqron_b_${digest}`;
   }
 
   async close(): Promise<void> {

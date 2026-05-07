@@ -117,6 +117,22 @@ const breaker = createCircuitBreaker({
 })
 ```
 
+## Throttle
+
+Cap the delivery rate to avoid overwhelming endpoints:
+
+```ts
+const rateLimitedWebhooks = webhook({
+  name: 'api-events',
+  concurrency: 5,
+  throttle: { max: 100, duration: 60_000 }, // 100 deliveries per minute
+
+  endpoints: [
+    { name: 'Partner API', url: 'https://partner.com/webhooks', events: ['*'] },
+  ],
+})
+```
+
 ## Next Steps
 
 - [Rate Limiter](/docs/rate-limiter) — Protect webhook dispatch with rate limits

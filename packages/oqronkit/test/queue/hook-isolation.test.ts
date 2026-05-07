@@ -49,7 +49,7 @@ test("onFail hook gets executed on handler error", async () => {
   let hookRan = false;
   const testQueue = queue({
     name: "hook_err_test_2",
-    retries: { max: 0 },
+    retries: { max: 0, strategy: "fixed", baseDelay: 1000 },
     handler: async () => {
       console.log("HANDLER 2 EXECUTED");
       throw new Error("Handler error");

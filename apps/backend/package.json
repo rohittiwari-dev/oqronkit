@@ -1,6 +1,6 @@
 {
   "name": "@oqronkit/backend",
-  "version": "0.0.1",
+  "version": "0.0.2-beta.0",
   "private": true,
   "scripts": {
     "dev": "tsx watch --ignore data src/index.ts",
@@ -15,7 +15,7 @@
     "fastify": "^4.29.0",
     "hono": "^4.4.13",
     "ioredis": "^5.10.1",
-    "oqronkit": "*"
+    "oqronkit": "0.0.3-beta.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",

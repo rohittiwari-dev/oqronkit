@@ -1,119 +1,362 @@
 ---
 title: PubSub
-description: Durable topics and fan-out consumer groups
+description: Durable topics, consumer groups, partitions, offsets, replay, and dead letters
 icon: Radio
 ---
 
 # PubSub
 
-The PubSub module provides durable publish/subscribe messaging with topic-based routing, consumer groups, and guaranteed at-least-once delivery.
+The PubSub module provides durable publish/subscribe messaging for events that
+must survive process crashes. It is built on the existing OqronKit storage,
+broker, and lock adapters, so there is no separate PubSub adapter family to
+configure or maintain.
 
-> **Roadmap Module** — PubSub is part of the v1.x Enterprise release. This page documents the planned API.
+PubSub is an at-least-once delivery system. Use `idempotencyKey` when publishing
+and make handlers idempotent when the side effect cannot safely run twice.
 
-## Planned API
+## Enable the Module
 
-### Define a Topic
+```ts title="index.ts"
+import { OqronKit, pubsubModule } from "oqronkit";
 
-```ts
-import { topic } from 'oqronkit'
+await OqronKit.init({
+  config: {
+    project: "billing-platform",
+    environment: "production",
+    modules: [
+      pubsubModule({
+        concurrency: 10,
+        ackTimeoutMs: 30_000,
+        retries: {
+          max: 5,
+          strategy: "exponential",
+          baseDelay: 1_000,
+          maxDelay: 60_000,
+        },
+      }),
+    ],
+  },
+});
+```
 
-const orderEvents = topic<OrderEvent>({
-  name: 'order-events',
+`project` and `environment` are part of the container isolation prefix. They
+separate topics, offsets, group state, deliveries, and dead letters across apps
+and deployment environments.
 
-  // Message retention
+## Define a Topic
+
+```ts title="triggers/order-events.ts"
+import { topic } from "oqronkit";
+
+type OrderEvent =
+  | { type: "order.created"; orderId: string; accountId: string; total: number }
+  | { type: "order.paid"; orderId: string; accountId: string; paymentId: string };
+
+export const orderEvents = topic<OrderEvent>({
+  name: "order-events",
+  tags: ["orders", "billing"],
+
   retention: {
-    maxAge: '7d',       // Keep messages for 7 days
-    maxCount: 100_000,  // Or max 100k messages
+    maxAgeMs: 7 * 24 * 60 * 60 * 1000,
+    maxCount: 100_000,
   },
 
-  // Dead letter for unprocessable messages
+  distribution: {
+    partitions: 16,
+    partitionKey: (message) => message.accountId,
+  },
+
+  validate: (message) =>
+    message.orderId ? true : "orderId is required",
+});
+```
+
+## Publish Messages
+
+```ts
+const messageId = await orderEvents.publish(
+  {
+    type: "order.created",
+    orderId: "ord_123",
+    accountId: "acct_1",
+    total: 99.99,
+  },
+  {
+    idempotencyKey: "order-created:ord_123",
+    partitionKey: "acct_1",
+    correlationId: "req_abc",
+    headers: {
+      source: "checkout",
+    },
+  },
+);
+```
+
+Batch publishing persists messages and pushes broker notifications in one call:
+
+```ts
+await orderEvents.publishBatch([
+  {
+    message: {
+      type: "order.created",
+      orderId: "ord_124",
+      accountId: "acct_1",
+      total: 149.5,
+    },
+    options: { idempotencyKey: "order-created:ord_124" },
+  },
+  {
+    message: {
+      type: "order.paid",
+      orderId: "ord_124",
+      accountId: "acct_1",
+      paymentId: "pay_456",
+    },
+    options: { idempotencyKey: "order-paid:ord_124" },
+  },
+]);
+```
+
+## Consumer Groups
+
+Different groups each receive every message. Multiple processes using the same
+group compete for work and share that group's offsets.
+
+```ts title="triggers/billing-subscription.ts"
+import { orderEvents } from "./order-events";
+
+await orderEvents.subscribe({
+  group: "billing-service",
+  concurrency: 8,
+  batchSize: 50,
+  maxInFlight: 200,
+  startFrom: "earliest",
+
+  filter: (event) => event.type === "order.paid",
+
+  handler: async (ctx) => {
+    await createInvoice(ctx.message.orderId);
+    ctx.log.info(`invoice created for ${ctx.message.orderId}`);
+  },
+});
+```
+
+```ts title="triggers/analytics-subscription.ts"
+import { orderEvents } from "./order-events";
+
+await orderEvents.subscribe({
+  group: "analytics-service",
+  concurrency: 20,
+
+  handler: async (ctx) => {
+    await trackEvent(ctx.message);
+  },
+});
+```
+
+`billing-service` and `analytics-service` both receive the same topic stream.
+Inside each group, messages are delivered once at a time per partition to
+preserve keyed ordering.
+
+## Manual Ack
+
+The default `ackMode` is `auto`: if the handler resolves, the delivery is
+acknowledged. Use `manual` when acknowledgement must happen only after a
+specific side effect completes.
+
+```ts
+await orderEvents.subscribe({
+  group: "warehouse-service",
+  ackMode: "manual",
+  ackTimeoutMs: 60_000,
+
+  handler: async (ctx) => {
+    try {
+      await reserveInventory(ctx.message);
+      await ctx.ack();
+    } catch (err) {
+      await ctx.nack(err instanceof Error ? err.message : "reservation failed");
+    }
+  },
+});
+```
+
+If a manual handler returns without `ack()`, `nack()`, or `discard()`, OqronKit
+nacks the delivery so it is not stranded.
+
+## Partitioning
+
+Partitioning gives you horizontal distribution while preserving order for a key.
+
+```ts
+const accountEvents = topic<AccountEvent>({
+  name: "account-events",
+  distribution: {
+    partitions: 32,
+    partitionKey: (event) => event.accountId,
+  },
+});
+```
+
+You can also override the key per publish:
+
+```ts
+await accountEvents.publish(event, {
+  partitionKey: event.accountId,
+});
+```
+
+Use stable business keys such as `tenantId`, `accountId`, `userId`, or
+`aggregateId`. Avoid random keys when ordered processing matters.
+
+## Retries and Dead Letters
+
+```ts
+await orderEvents.subscribe({
+  group: "shipping-service",
+  retries: {
+    max: 3,
+    strategy: "exponential",
+    baseDelay: 2_000,
+    maxDelay: 30_000,
+  },
   deadLetter: {
     enabled: true,
-    maxRetries: 5,
+    onDead: async (messageId, message, error) => {
+      await alertOps({ messageId, message, error });
+    },
   },
-})
-```
-
-### Publish Messages
-
-```ts
-// Publish a single message
-await orderEvents.publish({
-  event: 'order.created',
-  orderId: 'ord_123',
-  amount: 99.99,
-})
-
-// Publish batch
-await orderEvents.publishBatch([
-  { event: 'order.created', orderId: 'ord_123', amount: 99.99 },
-  { event: 'order.created', orderId: 'ord_124', amount: 149.50 },
-])
-```
-
-### Subscribe with Consumer Groups
-
-```ts
-// Consumer group — each message is processed by exactly one consumer in the group
-orderEvents.subscribe({
-  group: 'billing-service',
-  concurrency: 5,
-
   handler: async (ctx) => {
-    const { event, orderId, amount } = ctx.message
-    await chargeBilling(orderId, amount)
-    ctx.ack() // Acknowledge processing
+    await scheduleShipment(ctx.message);
   },
-})
-
-// Fan-out — each subscriber gets every message independently
-orderEvents.subscribe({
-  group: 'analytics-service',
-  concurrency: 10,
-
-  handler: async (ctx) => {
-    await trackEvent(ctx.message)
-    ctx.ack()
-  },
-})
-
-// Both billing-service AND analytics-service receive every message
+});
 ```
 
-## Consumer Group Semantics
-
-| Pattern | Behavior |
-|---------|----------|
-| **Competing consumers** | Multiple instances in the same group — messages load-balanced across them |
-| **Fan-out** | Different groups — each group receives every message independently |
-| **Exclusive** | Single consumer group with concurrency 1 — strict ordering |
-
-## Message Filtering
+Dead letters are inspectable and retryable:
 
 ```ts
-orderEvents.subscribe({
-  group: 'shipping',
-  filter: (msg) => msg.event === 'order.paid',  // Only paid orders
+const dead = await orderEvents.deadLetters("shipping-service", { limit: 50 });
 
-  handler: async (ctx) => {
-    await scheduleShipment(ctx.message.orderId)
-    ctx.ack()
-  },
-})
+await orderEvents.retryDeadLetter("shipping-service", dead[0].messageId);
+await orderEvents.retryAllDeadLetters("shipping-service");
 ```
 
-## Replay
+Call `ctx.discard(reason)` inside a handler to skip retries and send the
+delivery directly to the terminal discarded state.
+
+## Replay and Offsets
+
+Each consumer group owns independent committed offsets per partition.
 
 ```ts
-// Replay messages from a specific offset or timestamp
+// Reprocess from the beginning.
+await orderEvents.seek("analytics-service", { position: "earliest" });
+
+// Start at the newest published message.
+await orderEvents.seek("analytics-service", { position: "latest" });
+
+// Rewind to an offset, timestamp, or message.
+await orderEvents.seek("analytics-service", { offset: 42 });
+await orderEvents.seek("analytics-service", { timestamp: new Date("2026-01-01") });
+await orderEvents.seek("analytics-service", { messageId: "msg_123" });
+```
+
+`replay()` is shorthand for resetting a group to a timestamp or offset:
+
+```ts
 await orderEvents.replay({
-  group: 'analytics-service',
-  from: new Date('2026-01-01'),
-  // or: fromOffset: 42000
-})
+  group: "analytics-service",
+  from: new Date("2026-01-01"),
+});
 ```
+
+## Operations
+
+```ts
+const lag = await orderEvents.lag("billing-service");
+const stats = await orderEvents.stats();
+
+await orderEvents.pause("billing-service");
+await orderEvents.resume("billing-service");
+
+// Pause or resume every group on the topic.
+await orderEvents.pause();
+await orderEvents.resume();
+
+// Remove all persisted PubSub state for this topic.
+const removed = await orderEvents.purge();
+```
+
+`stats()` includes total messages, partition count, oldest and newest message
+timestamps, per-group lag, pending messages, dead-letter count, and committed
+offsets.
+
+## Module Configuration
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `concurrency` | `number` | `1` | Default parallel delivery limit per subscription |
+| `pollIntervalMs` | `number` | `100` | Broker polling interval |
+| `lockTtlMs` | `number` | `30000` | Broker lease TTL for claimed deliveries |
+| `ackTimeoutMs` | `number` | `30000` | Handler timeout before a delivery is nacked |
+| `retries.max` | `number` | `3` | Default retry count |
+| `retries.strategy` | `"fixed" \| "exponential"` | `"exponential"` | Default retry backoff strategy |
+| `retries.baseDelay` | `number` | `1000` | Initial retry delay in milliseconds |
+| `retries.maxDelay` | `number` | `60000` | Maximum retry delay in milliseconds |
+| `deadLetter.enabled` | `boolean` | `true` | Store exhausted deliveries in dead letters |
+| `shutdownTimeout` | `number` | `25000` | Graceful shutdown drain timeout |
+| `reconciliationIntervalMs` | `number` | `30000` | Leader interval for repairing expired leases and due retries. Set `0` to disable |
+| `reconciliationBatchSize` | `number` | `500` | Max delivery records repaired per scan |
+| `retentionIntervalMs` | `number` | `60000` | Leader interval for topic retention cleanup. Set `0` to disable |
+
+## Topic Configuration
+
+| Option | Type | Description |
+|---|---|---|
+| `name` | `string` | Unique topic name |
+| `tags` | `string[]` | Optional labels for organization |
+| `validate` | `(message) => boolean \| string` | Reject invalid messages before publish |
+| `retention.maxAgeMs` | `number` | Delete messages older than this age |
+| `retention.maxCount` | `number` | Keep only the newest N messages |
+| `distribution.partitions` | `number` | Number of partitions. Defaults to `1` |
+| `distribution.partitionKey` | `(message, meta) => string \| number` | Select the key used for hash partitioning |
+| `hooks.onPublish` | `Function` | Runs after publish |
+| `hooks.onAck` | `Function` | Runs after a group acknowledges a message |
+| `hooks.onDead` | `Function` | Runs when a delivery enters dead letters |
+
+## Subscription Configuration
+
+| Option | Type | Default | Description |
+|---|---|---|---|
+| `group` | `string` | required | Consumer group name |
+| `handler` | `(ctx) => Promise<void>` | required | Message processor |
+| `concurrency` | `number` | module default | Max parallel deliveries for this subscription |
+| `batchSize` | `number` | `50` | Max broker claims per poll |
+| `maxInFlight` | `number` | `concurrency` | Max active deliveries in this process |
+| `filter` | `(message) => boolean` | optional | Skip messages that do not match |
+| `startFrom` | `"latest" \| "earliest" \| Date \| number` | `"latest"` | Initial offset when the group is first created |
+| `ackMode` | `"auto" \| "manual"` | `"auto"` | Handler acknowledgement mode |
+| `ackTimeoutMs` | `number` | module default | Handler timeout |
+| `retries` | `object` | module default | Per-subscription retry overrides |
+| `deadLetter` | `object` | module default | Per-subscription dead-letter overrides |
+
+## Adapter Notes
+
+PubSub uses the same adapter surfaces as queues and workers:
+
+- Storage holds topic metadata, message records, group offsets, deliveries,
+  idempotency keys, and dead letters.
+- Broker notifications wake subscribers and carry message IDs.
+- Locks elect one node for reconciliation and retention cleanup.
+
+For production workloads, use Redis or PostgreSQL adapters. The memory adapters
+are useful for local development and tests, but they do not survive process
+restart.
 
 ## Next Steps
 
-- [Webhook](/docs/webhook) — Event-driven external endpoint distribution
-- [Pipeline](/docs/pipeline) — Streaming ETL with backpressure
+<Cards>
+  <Card title="Adapters" href="/docs/adapters" description="Choose Memory, Redis, or PostgreSQL for PubSub durability" />
+  <Card title="Crash Safety" href="/docs/crash-safety" description="How locks, heartbeats, and reconciliation recover work" />
+  <Card title="Distributed Worker" href="/docs/distributed-worker" description="Compare PubSub groups with queue workers" />
+</Cards>

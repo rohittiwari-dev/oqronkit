@@ -13,7 +13,10 @@ export type OqronModuleName =
   | "queue"
   | "worker"
   | "webhook"
-  | "ratelimit";
+  | "ratelimit"
+  | "batch"
+  | "cache"
+  | "pubsub";
 
 // ── Per-Module Config Interfaces (user-facing, all optional) ────────────────
 
@@ -151,6 +154,34 @@ export interface QueueModuleConfig {
       };
 }
 
+export interface PubSubModuleConfig {
+  /** Parallel delivery limit per subscription. @default 1 */
+  concurrency?: number;
+  /** Polling interval for broker claims in ms. @default 100 */
+  pollIntervalMs?: number;
+  /** Broker claim lock TTL in ms. @default 30000 */
+  lockTtlMs?: number;
+  /** Handler acknowledgement timeout in ms. @default 30000 */
+  ackTimeoutMs?: number;
+  /** Default retry configuration for subscriptions */
+  retries?: {
+    max?: number;
+    strategy?: "fixed" | "exponential";
+    baseDelay?: number;
+    maxDelay?: number;
+  };
+  /** Dead letter queue configuration */
+  deadLetter?: { enabled?: boolean };
+  /** Graceful shutdown drain timeout in ms. @default 25000 */
+  shutdownTimeout?: number;
+  /** Leader reconciliation interval. Set 0 to disable. @default 30000 */
+  reconciliationIntervalMs?: number;
+  /** Max delivery records repaired per reconciliation scan. @default 500 */
+  reconciliationBatchSize?: number;
+  /** Leader retention cleanup interval. Set 0 to disable. @default 60000 */
+  retentionIntervalMs?: number;
+}
+
 export interface WebhookModuleConfig {
   /** Maximum number of parallel Webhook jobs across all dispatchers. @default 10 */
   concurrency?: number;
@@ -231,6 +262,7 @@ export type SchedulerModuleDef = {
   module: "scheduler";
 } & SchedulerModuleConfig;
 export type QueueModuleDef = { module: "queue" } & QueueModuleConfig;
+export type PubSubModuleDef = { module: "pubsub" } & PubSubModuleConfig;
 export type WebhookModuleDef = {
   module: "webhook";
 } & WebhookModuleConfig;
@@ -303,9 +335,12 @@ export type OqronModuleDef =
   | CronModuleDef
   | SchedulerModuleDef
   | QueueModuleDef
+  | PubSubModuleDef
   | WorkerModuleDef
   | WebhookModuleDef
-  | RateLimitModuleDef;
+  | RateLimitModuleDef
+  | BatchModuleDef
+  | CacheModuleDef;
 
 // ── Flexible Input Type ─────────────────────────────────────────────────────
 // Users can pass any of these forms inside the `modules` array:
@@ -358,6 +393,10 @@ export function queueModule(config?: QueueModuleConfig): QueueModuleDef {
   return { module: "queue", ...config };
 }
 
+export function pubsubModule(config?: PubSubModuleConfig): PubSubModuleDef {
+  return { module: "pubsub", ...config };
+}
+
 /**
  * Create a Webhook module configuration.
  *
@@ -376,9 +415,12 @@ const STRING_TO_DEF: Record<OqronModuleName, () => OqronModuleDef> = {
   cron: () => ({ module: "cron" }),
   scheduler: () => ({ module: "scheduler" }),
   queue: () => ({ module: "queue" }),
+  pubsub: () => ({ module: "pubsub" }),
   worker: () => ({ module: "worker" }),
   webhook: () => ({ module: "webhook" }),
   ratelimit: () => ({ module: "ratelimit" }),
+  batch: () => ({ module: "batch" }),
+  cache: () => ({ module: "cache" }),
 };
 
 export interface RateLimitModuleConfig {
@@ -408,6 +450,63 @@ export function rateLimitModule(
   config?: RateLimitModuleConfig,
 ): RateLimitModuleDef {
   return { module: "ratelimit", ...config };
+}
+
+// ── Batch Module Config ─────────────────────────────────────────────────────
+
+export interface BatchModuleConfig {
+  /** Buffer check frequency in ms. @default 1000 */
+  tickIntervalMs?: number;
+  /** Default max parallel batch jobs. @default 1 */
+  concurrency?: number;
+  /** Heartbeat renewal interval in ms. @default 5000 */
+  heartbeatMs?: number;
+  /** Lock TTL for crash recovery in ms. @default 30000 */
+  lockTtlMs?: number;
+  /** Only leader flushes in cluster. @default true */
+  leaderElection?: boolean;
+  /** Graceful shutdown drain timeout in ms. @default 25000 */
+  shutdownTimeout?: number;
+  /** Behavior when a disabled batch receives items */
+  disabledBehavior?: DisabledBehavior;
+  /** Max held jobs when disabled */
+  maxHeldJobs?: number;
+  /** Lag monitor thresholds */
+  lagMonitor?: { maxLagMs?: number; sampleIntervalMs?: number };
+  /** Default auto-remove completed batch jobs */
+  removeOnComplete?: RemoveOnConfig;
+  /** Default auto-remove failed batch jobs */
+  removeOnFail?: RemoveOnConfig;
+}
+
+export type BatchModuleDef = { module: "batch" } & BatchModuleConfig;
+
+/**
+ * Create a Batch module configuration.
+ *
+ * @example
+ * modules: [batchModule()]
+ * modules: [batchModule({ tickIntervalMs: 500, leaderElection: true })]
+ */
+export function batchModule(config?: BatchModuleConfig): BatchModuleDef {
+  return { module: "batch", ...config };
+}
+
+// â”€â”€ Cache Module Config â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+export interface CacheModuleConfig {
+  /** Expired entry cleanup interval in ms. @default 60000 */
+  gcIntervalMs?: number;
+  /** Retention for cache events in ms. @default 86400000 */
+  eventRetentionMs?: number;
+  /** Distributed prewarm lock TTL in ms. @default 60000 */
+  prewarmLockTtlMs?: number;
+}
+
+export type CacheModuleDef = { module: "cache" } & CacheModuleConfig;
+
+export function cacheModule(config?: CacheModuleConfig): CacheModuleDef {
+  return { module: "cache", ...config };
 }
 
 export function workerModule(config?: WorkerModuleConfig): WorkerModuleDef {

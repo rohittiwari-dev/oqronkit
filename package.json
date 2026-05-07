@@ -7,7 +7,7 @@
     "test": "turbo run test",
     "dev": "turbo run dev",
     "lint": "turbo run lint",
-    "commit": "cz",
+    "commit": "git-cz",
     "changeset": "changeset",
     "format": "biome format --write .",
     "check": "biome check --write .",
@@ -26,12 +26,30 @@
       "path": "./node_modules/cz-conventional-changelog"
     }
   },
+  "lint-staged": {
+    "*.{ts,tsx,js,jsx}": [
+      "biome check --write",
+      "biome format --write"
+    ],
+    "*.{json,md,mdx,css}": [
+      "biome format --write"
+    ]
+  },
   "author": "Rohit Tiwari <rohit@rohittiwari.me>",
   "homepage": "https://oqronkit.rohittiwari.me",
   "bugs": {
     "url": "https://github.com/rohittiwari-dev/oqronkit/issues"
   },
-  "keywords": [],
+  "keywords": [
+    "oqronkit",
+    "background jobs",
+    "job queue",
+    "cron",
+    "scheduler",
+    "task queue",
+    "orchestrator",
+    "microservices"
+  ],
   "devDependencies": {
     "@biomejs/biome": "^2.4.14",
     "@changesets/cli": "^2.31.0",
@@ -40,6 +58,7 @@
     "commitizen": "^4.3.1",
     "cz-conventional-changelog": "^3.3.0",
     "husky": "^9.1.7",
+    "lint-staged": "^17.0.2",
     "turbo": "^2.9.9"
   },
   "workspaces": [

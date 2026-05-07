@@ -1,132 +1,369 @@
 ---
 title: Cache
-description: Stampede-protected hierarchical memory tiers
+description: Stampede-protected hierarchical memory tiers with automatic invalidation
 icon: HardDrive
 ---
 
 # Cache
 
-The Cache module provides a multi-tier caching system with built-in stampede protection, automatic invalidation, and configurable TTLs. It prevents the "thundering herd" problem where thousands of requests simultaneously try to recompute an expired cache entry.
+The Cache module is an industry-grade, distributed, stampede-protected caching system designed for extreme scale and performance. It uses a tiered approach (L1 in-memory + L2 distributed storage) and natively integrates with OqronKit's adapter architecture to prevent database meltdowns during traffic spikes.
 
-> **Roadmap Module** — Cache is part of the v1.x Enterprise release. This page documents the planned API.
+## Real-World Examples
 
-## Planned API
+OqronKit caches are strongly typed and designed to be exported as singletons from your service layer. Here are some complete, real-world examples you can drop into your application.
 
-### Define a Cache
+### 1. The E-Commerce Product Catalog (Batch Fetching & Tags)
+
+This example demonstrates how to solve the N+1 database query problem using `fetcherMany` (the DataLoader pattern), and how to use tag-based invalidation to broadcast cache purges across your entire server cluster.
+
+```ts title="src/services/product.cache.ts"
+import { cache } from 'oqronkit';
+import { db } from '../db';
+
+export interface Product {
+  id: string;
+  tenantId: string;
+  name: string;
+  price: number;
+  stock: number;
+}
+
+export const productCache = cache<Product>({
+  name: 'products',
+  
+  // Cache for 1 hour. We can use a function to make it dynamic!
+  ttlMs: (product) => product.stock === 0 ? 60_000 : 3600_000, // Cache out-of-stock items for only 1 min
+  
+  // Define tags so we can easily invalidate groups of products later
+  tags: ['ecommerce', 'catalog'],
+
+  // Highly optimized database batching. 
+  // If we request 50 products and 10 are missing from L1/L2, this fetcher only runs ONCE for the 10 missing keys!
+  fetcherMany: async (keys, ctx) => {
+    const products = await db.products.findMany({ where: { id: { in: keys } } });
+    
+    return products.reduce((acc, product) => {
+      acc[product.id] = product;
+      
+      // We dynamically tag each cache entry with its tenant.
+      // This allows us to purge an entire tenant's products instantly.
+      ctx.log.info(`Fetched product ${product.id}`);
+      return acc;
+    }, {} as Record<string, Product>);
+  },
+  
+  // Prevent database hammering during a cache miss
+  stampedeProtection: {
+    clusterLock: true,        // Only 1 server in the whole cluster can fetch a missing key
+    lockTtlMs: 10_000         // Fetcher has 10 seconds to finish before lock releases
+  }
+});
+```
+
+**Using the Catalog Cache in your API:**
+
+```ts title="src/controllers/product.controller.ts"
+import { productCache } from '../services/product.cache';
+
+// Fetch multiple products at once
+app.get('/api/products/batch', async (req, res) => {
+  const ids = req.query.ids.split(','); // e.g. "prod_1,prod_2,prod_3"
+  
+  // Automatically hits L1 RAM -> L2 Redis -> Database (fetcherMany)
+  const productsMap = await productCache.getOrFetchMany(ids);
+  
+  res.json(productsMap);
+});
+
+// Admin Route: Update a product and invalidate its cache
+app.patch('/api/admin/products/:id', async (req, res) => {
+  await db.products.update(req.params.id, req.body);
+  
+  // Instantly invalidates this specific key across all L1/L2 tiers on all servers
+  await productCache.invalidate(req.params.id); 
+  res.send('Updated');
+});
+
+// Admin Route: Purge an entire tenant's catalog instantly
+app.post('/api/admin/tenants/:tenantId/purge-products', async (req, res) => {
+  // If you manually tagged entries during set() or fetcherMany(), you can invalidate by tag!
+  await productCache.invalidateTags([`tenant:${req.params.tenantId}`]);
+  res.send('Tenant catalog purged');
+});
+```
+
+### 2. High-Traffic User Sessions (Tier Isolation & Negative Caching)
+
+This example shows how to handle sensitive session data that should *only* live in fast local memory, and how to protect your database from brute-force DDoS attacks looking for invalid session IDs.
+
+```ts title="src/services/session.cache.ts"
+import { cache } from 'oqronkit';
+import { authService } from '../auth';
+
+export interface SessionData {
+  userId: string;
+  role: 'admin' | 'user';
+  permissions: string[];
+}
+
+export const sessionCache = cache<SessionData | null>({
+  name: 'user-sessions',
+  ttlMs: 300_000, // 5 minutes
+  
+  // Security: Only keep sessions in Node.js RAM (L1). Do not write to Redis/Postgres (L2).
+  l2: { enabled: false },
+  
+  // Security: If an attacker tries millions of random session IDs, 
+  // cache the "Not Found" (null) result for 30 seconds so we don't hammer the database!
+  negativeCache: {
+    enabled: true,
+    ttlMs: 30_000,
+    shouldCache: (value, error) => value === null || error !== undefined
+  },
+  
+  fetcher: async (sessionId, ctx) => {
+    try {
+      const session = await authService.validateSession(sessionId);
+      return session; // Returns null if invalid
+    } catch (err) {
+      ctx.log.error(`Session validation failed for ${sessionId}`);
+      throw err;
+    }
+  }
+});
+```
+
+**Using the Session Cache as Express Middleware:**
+
+```ts title="src/middleware/auth.ts"
+import { sessionCache } from '../services/session.cache';
+
+export async function requireAuth(req, res, next) {
+  const sessionId = req.cookies['session_id'];
+  if (!sessionId) return res.status(401).send('Unauthorized');
+  
+  // Because L2 is disabled, this checks local RAM. If miss, it runs the fetcher.
+  const session = await sessionCache.getOrFetch(sessionId);
+  
+  if (!session) {
+    return res.status(401).send('Invalid Session');
+  }
+  
+  req.user = session;
+  next();
+}
+
+app.post('/api/logout', async (req, res) => {
+  // Purge the session from RAM immediately
+  await sessionCache.delete(req.cookies['session_id']);
+  res.clearCookie('session_id').send('Logged out');
+});
+```
+
+### 3. Dynamic API Rate Limiting (Stale-While-Revalidate)
+
+Sometimes you want to serve stale data immediately to keep latency ultra-low, while recomputing the fresh data in the background.
+
+```ts title="src/services/github.cache.ts"
+import { cache } from 'oqronkit';
+
+export const githubStarsCache = cache<number>({
+  name: 'github-stars',
+  ttlMs: 60_000, // Consider data fresh for 1 minute
+  
+  // If the data is older than 1 minute, but less than 1 hour old:
+  // 1. Immediately return the stale data to the user (0ms latency!)
+  // 2. In the background, run the fetcher and update the cache.
+  staleWhileRevalidateMs: 3600_000, // 1 hour
+  
+  // If GitHub API goes down, serve stale data for up to 24 hours to keep the site alive.
+  staleIfErrorMs: 86400_000,
+  
+  fetcher: async (repoName) => {
+    const res = await fetch(`https://api.github.com/repos/${repoName}`);
+    if (!res.ok) throw new Error('GitHub API Error');
+    const data = await res.json();
+    return data.stargazers_count;
+  }
+});
+
+// In your API:
+app.get('/api/stars/:owner/:repo', async (req, res) => {
+  const repo = `${req.params.owner}/${req.params.repo}`;
+  
+  // This will return instantly if the cache is hot OR if it's stale (kicking off a background refresh).
+  const stars = await githubStarsCache.getOrFetch(repo);
+  res.json({ stars });
+});
+```
+
+## Progressive Disclosure
+
+The module is designed to be **incredibly simple to start with, yet infinitely scalable**. The only required parameters are `name` and `ttlMs`. Every other enterprise feature (prewarming, cluster locking, serialization, telemetry, circuit breakers) is strictly optional.
+
+### Minimalist Usage
 
 ```ts
 import { cache } from 'oqronkit'
 
-const userCache = cache<User>({
-  name: 'user-profile',
-
-  // Hierarchical tiers — fastest to slowest
-  tiers: [
-    {
-      name: 'memory',
-      adapter: 'memory',
-      maxSize: 1000,       // LRU eviction after 1000 entries
-      ttl: '30s',          // Short-lived L1
-    },
-    {
-      name: 'redis',
-      adapter: 'redis',
-      ttl: '10m',          // Longer-lived L2
-    },
-  ],
-
-  // Stampede protection
-  stampede: {
-    enabled: true,
-    lockTtlMs: 5_000,     // Only one recompute at a time
-    staleWhileRevalidate: true, // Serve stale while recomputing
-  },
-
-  // How to fetch on cache miss
-  resolver: async (key) => {
-    return await db.users.findById(key)
-  },
+// Just name and TTL. Beautifully simple.
+// Gets L1 memory cache, L2 Storage, and local single-flight deduping out of the box.
+export const simpleCache = cache<string>({
+  name: 'simple',
+  ttlMs: 60_000,
+  
+  fetcher: async (id) => await db.findById(id)
 })
 ```
 
-### Read and Write
+## Dynamic Per-Call Fetching (Inline Fetchers)
+
+You don't have to define a `fetcher` or `fetcherMany` in the cache definition at all. Instead, you can pass them **inline at call-time**. This is essential when the fetch logic depends on per-request context like auth tokens, tenant IDs, or user permissions.
+
+### Single-key inline fetcher
+
+```ts title="src/services/social.cache.ts"
+import { cache } from 'oqronkit';
+
+// No fetcher defined here — this cache is purely a storage shell.
+export const socialProfileCache = cache<SocialProfile>({
+  name: 'social-profiles',
+  ttlMs: 600_000, // 10 minutes
+});
+```
+
+```ts title="src/controllers/social.controller.ts"
+import { socialProfileCache } from '../services/social.cache';
+
+app.get('/api/users/:id/social', async (req, res) => {
+  const authToken = req.headers.authorization;
+  const tenantId = req.headers['x-tenant-id'];
+  
+  // The fetcher is injected RIGHT HERE, with full access to request context.
+  const profile = await socialProfileCache.getOrFetch(req.params.id, {
+    fetcher: async (key, ctx) => {
+      ctx.log.info(`Fetching social profile for ${key}`);
+      // Use auth token from the current request — impossible to do in a global fetcher!
+      return await socialApi.getProfile(key, { 
+        token: authToken,
+        tenant: tenantId 
+      });
+    },
+    // You can also override TTL, tags, and timeout per call
+    ttlMs: 120_000,
+    tags: [`tenant:${tenantId}`],
+    timeoutMs: 5000,
+  });
+  
+  res.json(profile);
+});
+```
+
+### Batch inline fetcher (`fetcherMany`)
+
+Same pattern, but for fetching multiple keys at once. This avoids N+1 queries even without a global `fetcherMany` on the definition.
+
+```ts title="src/controllers/dashboard.controller.ts"
+import { socialProfileCache } from '../services/social.cache';
+
+app.get('/api/dashboard/team', async (req, res) => {
+  const teamMemberIds = req.query.ids.split(',');
+  const authToken = req.headers.authorization;
+  
+  // Inline fetcherMany — only called for keys that miss L1 and L2.
+  const profiles = await socialProfileCache.getOrFetchMany(teamMemberIds, {
+    fetcherMany: async (missingKeys, ctx) => {
+      ctx.log.info(`Batch fetching ${missingKeys.length} profiles`);
+      
+      // One single API call for all missing keys
+      const results = await socialApi.getProfiles(missingKeys, { token: authToken });
+      
+      // Return a Record<string, T> mapping each key to its value
+      return results.reduce((acc, profile) => {
+        acc[profile.id] = profile;
+        return acc;
+      }, {} as Record<string, SocialProfile>);
+    },
+    // Control concurrency if falling back to individual fetcher calls
+    concurrency: 3,
+    // Stop on first error, or continue fetching remaining keys
+    stopOnError: false,
+  });
+  
+  res.json(profiles);
+});
+```
+
+### Overriding a global fetcher
+
+If a cache *does* have a global fetcher, you can still override it at call-time. The inline fetcher wins.
 
 ```ts
-// Get — checks L1 → L2 → resolver (on miss)
-const user = await userCache.get('user_123')
-
-// Set — writes to all tiers
-await userCache.set('user_123', updatedUser)
-
-// Delete — invalidates across all tiers
-await userCache.del('user_123')
-
-// Get or compute — atomic stampede-protected fetch
-const user = await userCache.getOrSet('user_123', async () => {
-  return await db.users.findById('user_123')
-})
-```
-
-## Stampede Protection
-
-Without stampede protection, when a popular cache key expires:
-```
-1000 requests arrive simultaneously
-→ 1000 cache misses
-→ 1000 identical database queries
-→ Database overwhelmed 💥
-```
-
-With OqronKit's stampede protection:
-```
-1000 requests arrive simultaneously
-→ 1 request acquires the recompute lock
-→ 999 requests wait (or get stale data with staleWhileRevalidate)
-→ Lock owner recomputes and updates cache
-→ All requests get fresh data ✓
-```
-
-## Invalidation Patterns
-
-```ts
-// Pattern-based invalidation
-await userCache.invalidatePattern('user_*')
-
-// Tag-based invalidation
-const productCache = cache({
+export const productCache = cache<Product>({
   name: 'products',
-  tags: (key, value) => [`tenant:${value.tenantId}`, `category:${value.category}`],
-  resolver: async (key) => db.products.findById(key),
-})
+  ttlMs: 3600_000,
+  fetcher: async (id) => db.products.findById(id), // Default: hit our own database
+});
 
-// Invalidate all products for a tenant
-await productCache.invalidateByTag('tenant:acme')
+// In a specific controller, override to fetch from an external partner API instead
+app.get('/api/partner/products/:id', async (req, res) => {
+  const product = await productCache.getOrFetch(req.params.id, {
+    fetcher: async (id) => partnerApi.fetchProduct(id, { apiKey: req.query.key }),
+    forceRefresh: true, // Always bypass cache and re-fetch from partner
+  });
+  res.json(product);
+});
 ```
 
-## TTL Strategies
+## Auto-Prewarming (Hydration)
 
-| Strategy | Behavior |
-|----------|----------|
-| **Fixed** | Entry expires after a set duration |
-| **Sliding** | TTL resets on every access |
-| **Stale-While-Revalidate** | Serve stale data immediately, recompute in background |
-| **Write-Through** | Writes go to cache AND origin simultaneously |
+Never let your users experience a cache-miss. The engine can hydrate keys in the background silently.
 
-## Metrics
+```ts title="cache/homepage.ts"
+export const topArticlesCache = cache<Article>({
+  name: 'top-articles',
+  ttlMs: 3600_000, // 1 hour TTL
+  
+  prewarm: {
+    intervalMs: 1800_000, // Every 30 minutes
+    concurrency: 5,       // Process 5 articles at a time
+    
+    // Discover the most critical keys to keep hot in RAM
+    keys: async () => await analyticsDb.getTrendingSlugs({ limit: 100 })
+  },
+  
+  fetcher: async (slug) => await db.articles.findBySlug(slug)
+});
+```
+
+## Execution Controls & Tier Isolation
+
+You can override default behaviors dynamically at call-time.
 
 ```ts
-const stats = await userCache.getStats()
-// {
-//   hits: 45_000,
-//   misses: 1_200,
-//   hitRate: 0.974,
-//   stampedePrevented: 342,
-//   avgLatencyMs: { memory: 0.1, redis: 2.3, resolver: 45 },
-//   evictions: 890,
-// }
+// 1. Forcing a background refresh
+await productCache.getOrFetch('hot_item', { forceRefresh: true });
+
+// 2. Hanging DB Protection (Timeouts)
+await productCache.getOrFetch('slow_query', {
+  timeoutMs: 5000 // If DB takes >5s, abandon fetcher and return stale data
+});
+
+// 3. Tier Isolation (L1 Only)
+await productCache.set('user:1:card', creditCardData, {
+  ignoreL2: true // This highly sensitive data lives ONLY in Node.js process memory.
+});
 ```
+
+## Admin API
+
+Monitor and manage caches in real-time.
+
+- `productCache.stats()`: Returns hits, misses, stale hits, evictions, average latency, and L1 memory usage.
+- `productCache.snapshot()`: Dumps the entire L1 cache keys and metadata for debugging.
+- `productCache.invalidateAll()`: Flushes the entire cache.
 
 ## Next Steps
 
+- [Task Queue](/docs/task-queue) — For immediate, per-job processing
 - [Rate Limiter](/docs/rate-limiter) — Protect your APIs with distributed rate limiting
-- [Adapters](/docs/adapters) — Configure Redis and PostgreSQL backends

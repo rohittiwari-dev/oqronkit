@@ -1,6 +1,6 @@
 /**
  * ═══════════════════════════════════════════════════════════════════════════════
- *  OqronKit — Enterprise Backend Demo
+ *  OqronKit — Backend Demo
  *  Showcases ALL modules working together in a real Express.js application.
  * ═══════════════════════════════════════════════════════════════════════════════
  *
@@ -35,7 +35,7 @@ mkdirSync("data", { recursive: true });
 
 // ─── 2. Bootstrap OqronKit ──────────────────────────────────────────────────
 async function main(): Promise<void> {
-  console.log("🚀 Booting OqronKit Enterprise Backend…\n");
+  console.log("🚀 Booting OqronKit Backend…\n");
 
   await OqronKit.init({
     config: {
@@ -89,7 +89,7 @@ async function main(): Promise<void> {
   // // Basic root info
   // app.get("/", (_req, res) => {
   //   res.json({
-  //     name: "OqronKit Enterprise Backend Demo",
+  //     name: "OqronKit Backend Demo",
   //     version: "1.0.0",
   //     modules: ["cron", "scheduler", "taskQueue", "worker"],
   //     endpoints: {

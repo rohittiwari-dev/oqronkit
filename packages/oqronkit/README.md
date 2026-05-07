@@ -4,11 +4,11 @@
 <h3 align="center">OqronKit</h3>
 <p align="center"><em>Crash-Safe Background Computation Engine for Node.js</em></p>
 
-# ⚡ OqronKit — Enterprise Background Computation Engine
+# ⚡ OqronKit — Background Job Engine for Node.js
 
-The **production-ready, crash-safe background job engine** for Node.js. Framework-agnostic, adapter-driven, and designed for horizontal scaling from day one. Replace your cron scheduler, job queue, retry engine, webhook dispatcher, dead-letter queue, and distributed locking infrastructure — with a single library.
+A **crash-safe background job engine** for Node.js. Framework-agnostic, adapter-driven, and designed for horizontal scaling from day one. Replace your cron scheduler, job queue, retry engine, webhook dispatcher, dead-letter queue, and distributed locking infrastructure — with a single library.
 
-> **Built with TypeScript** for SaaS platforms, fintech backends, and data pipelines. Zero-framework-lock, pluggable storage (In-Memory → PostgreSQL → Redis), heartbeat-driven crash recovery, DAG job dependencies, and environment-isolated execution.
+> **Built with TypeScript**. Zero-framework-lock, pluggable storage (In-Memory → PostgreSQL → Redis), heartbeat-driven crash recovery, DAG job dependencies, and environment-isolated execution.
 
 [![npm version](https://img.shields.io/npm/v/oqronkit.svg)](https://www.npmjs.com/package/oqronkit)
 [![License](https://img.shields.io/npm/l/oqronkit.svg)](https://github.com/rohittiwari-dev/oqronkit/blob/main/LICENSE)
@@ -20,13 +20,13 @@ For full API reference, module deep-dives, architecture guides, and advanced usa
 
 ## ✨ Key Features
 
-OqronKit provides enterprise-grade background processing capabilities:
+OqronKit provides the following core capabilities:
 
 - ⚡ **4 Core Modules** — Task Queue, Webhooks, Cron Scheduler, and Interval Schedule engine
 - 🔒 **Crash-Safe Execution** — Heartbeat locks, stall detection, and automatic job recovery on process death (`SIGKILL`/OOM)
 - 🎯 **Strict TypeScript** — Fully typed APIs with Zod-validated configuration schemas
 - 🏗️ **Adapter-Driven Architecture** — In-Memory for dev, PostgreSQL or Redis for distributed production — zero code changes
-- 📡 **Enterprise Webhooks** — SHA-256/512 HMAC signing, deep-glob event matchers (`user.*.created`), fan-out distribution, and DLQ
+- 📡 **Robust Webhooks** — SHA-256/512 HMAC signing, deep-glob event matchers (`user.*.created`), fan-out distribution, and DLQ
 - 🔄 **Job Dependencies (DAG)** — Build execution pipelines with `dependsOn`, `cascade-fail`, and `block` failure policies
 - 🌐 **Horizontal Scaling** — Natively designed for multi-node worker pools with leader election and environment isolation
 - 🛡️ **Dynamic Pausing** — Intelligently `"hold"`, `"skip"`, or `"reject"` jobs when modules are temporarily disabled

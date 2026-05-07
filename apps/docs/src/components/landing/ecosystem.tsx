@@ -34,9 +34,9 @@ const ITEMS = [
     label: "Distributed",
     name: "Worker Engine",
     description:
-      "Pure Industrygrade-style decoupled architecture. Queue pushes on API nodes, Worker polls on processing nodes. Heartbeat locks and stall detection for crash-safety.",
+      "Decoupled architecture. Queue pushes on API nodes, Worker polls on processing nodes. Heartbeat locks and stall detection for crash-safety.",
     icon: Cpu,
-    badge: "enterprise",
+    badge: "core",
     badgeColor: "bg-pink-500/10 text-pink-400 border-pink-500/20",
     accentColor: "#ec4899",
     glow: "from-pink-500/20 to-rose-600/5",
