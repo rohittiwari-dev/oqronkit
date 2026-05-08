@@ -6,6 +6,7 @@
  */
 
 import { Router } from "express";
+import { randomBytes } from "crypto";
 
 const router = Router();
 
@@ -125,7 +126,7 @@ router.post("/users/signup", async (req, res) => {
     const { scheduleOnboardingDrip } = await import(
       "../triggers/schedules.js"
     );
-    const userId = req.body.userId ?? `u_${Math.random().toString(36).slice(2, 8)}`;
+    const userId = req.body.userId ?? `u_${randomBytes(4).toString("hex")}`;
     const userName = req.body.userName ?? "Demo User";
     const email = req.body.email ?? "demo@example.com";
     await scheduleOnboardingDrip(userId, userName, email);
