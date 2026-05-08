@@ -387,3 +387,136 @@ export async function dispatchPaymentWebhook(
     },
   );
 }
+
+// ═══════════════════════════════════════════════════════════════════════════════
+//  5. ETL PIPELINE (DAG) — Extract → Transform → Load
+//     Demonstrates Job Dependencies: dependsOn, parentFailurePolicy
+// ═══════════════════════════════════════════════════════════════════════════════
+
+type ExtractInput = {
+  source: string;
+  format: "csv" | "json" | "parquet";
+};
+type ExtractOutput = {
+  rowCount: number;
+  tempPath: string;
+};
+
+export const extractQueue = queue<ExtractInput, ExtractOutput>({
+  name: "pipeline-extract",
+  concurrency: 3,
+  retries: { max: 2, strategy: "fixed", baseDelay: 5_000 },
+  removeOnComplete: { count: 100 },
+
+  handler: async (ctx) => {
+    ctx.progress(10, `Downloading ${ctx.data.source}`);
+    await new Promise((r) => setTimeout(r, 500));
+    ctx.progress(50, "Parsing data");
+    await new Promise((r) => setTimeout(r, 300));
+    ctx.progress(100, "Extraction complete");
+    return {
+      rowCount: 15_000,
+      tempPath: `/tmp/extracted-${ctx.id}.json`,
+    };
+  },
+});
+
+type TransformInput = {
+  tempPath: string;
+  transformations: string[];
+};
+type TransformOutput = {
+  outputPath: string;
+  processedRows: number;
+};
+
+export const transformQueue = queue<TransformInput, TransformOutput>({
+  name: "pipeline-transform",
+  concurrency: 2,
+  removeOnComplete: { count: 100 },
+
+  handler: async (ctx) => {
+    ctx.progress(10, "Loading extracted data");
+    await new Promise((r) => setTimeout(r, 400));
+    ctx.progress(
+      50,
+      `Applying ${ctx.data.transformations.length} transformations`,
+    );
+    await new Promise((r) => setTimeout(r, 600));
+    ctx.progress(100, "Transformation complete");
+    return {
+      outputPath: `/tmp/transformed-${ctx.id}.json`,
+      processedRows: 14_800,
+    };
+  },
+});
+
+type LoadInput = {
+  outputPath: string;
+  targetTable: string;
+};
+type LoadOutput = {
+  insertedRows: number;
+  duration: number;
+};
+
+export const loadQueue = queue<LoadInput, LoadOutput>({
+  name: "pipeline-load",
+  concurrency: 1,
+  removeOnComplete: { count: 100 },
+
+  handler: async (ctx) => {
+    const start = Date.now();
+    ctx.progress(10, `Loading into ${ctx.data.targetTable}`);
+    await new Promise((r) => setTimeout(r, 800));
+    ctx.progress(100, "Load complete");
+    return {
+      insertedRows: 14_800,
+      duration: Date.now() - start,
+    };
+  },
+});
+
+/**
+ * Orchestrate the full ETL pipeline using job dependencies (DAG).
+ * Extract → Transform → Load, each waiting for its parent to complete.
+ */
+export async function runETLPipeline(params: {
+  source: string;
+  format: "csv" | "json" | "parquet";
+  transforms: string[];
+  targetTable: string;
+}) {
+  const extractJob = await extractQueue.add({
+    source: params.source,
+    format: params.format,
+  });
+
+  const transformJob = await transformQueue.add(
+    {
+      tempPath: "",
+      transformations: params.transforms,
+    },
+    {
+      dependsOn: [extractJob.id],
+      parentFailurePolicy: "cascade-fail",
+    },
+  );
+
+  const loadJob = await loadQueue.add(
+    {
+      outputPath: "",
+      targetTable: params.targetTable,
+    },
+    {
+      dependsOn: [transformJob.id],
+      parentFailurePolicy: "cascade-fail",
+    },
+  );
+
+  return {
+    extract: extractJob.id,
+    transform: transformJob.id,
+    load: loadJob.id,
+  };
+}

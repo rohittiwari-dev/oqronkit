@@ -14,6 +14,10 @@ configure or maintain.
 PubSub is an at-least-once delivery system. Use `idempotencyKey` when publishing
 and make handlers idempotent when the side effect cannot safely run twice.
 
+> [!TIP]
+> **Working example →** See a complete PubSub implementation with partitioned order events, multiple consumer groups (billing + analytics), and manual-ack notification dispatch:
+> [apps/backend/src/triggers/pubsub.ts](https://github.com/rohittiwari-dev/oqronkit/blob/main/apps/backend/src/triggers/pubsub.ts)
+
 ## How It Works
 
 The PubSub module is built on top of OqronKit's existing Storage, Broker, and Lock adapters. Messages are durably stored, partitioned, and delivered to consumer groups with independent offsets.

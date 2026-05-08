@@ -8,6 +8,10 @@ icon: Box
 
 The Task Queue is OqronKit's simplest module. Publisher and consumer are defined together — perfect for monolithic apps and fast prototypes.
 
+> [!TIP]
+> **Working example →** See a complete Task Queue implementation with image processing, email dispatch, PDF generation, ETL DAG pipeline, and crash-safe workers:
+> [apps/backend/src/triggers/task-queues.ts](https://github.com/rohittiwari-dev/oqronkit/blob/main/apps/backend/src/triggers/task-queues.ts)
+
 ## How It Works
 
 When you call `queue()` with a handler, OqronKit creates a monolithic queue where both the producer (`.add()`) and the consumer (polling engine) live in the same process.

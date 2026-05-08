@@ -10,6 +10,10 @@ The Batch module accumulates incoming items and flushes them as a single batch w
 
 Use it for analytics ingestion, bulk database writes, log aggregation, webhook fan-out, or any workload where processing items one-by-one is wasteful.
 
+> [!TIP]
+> **Working example →** See a complete, production-grade Batch implementation with analytics ingestion, grouped log aggregation, deduplication, and lifecycle hooks:
+> [apps/backend/src/triggers/batches.ts](https://github.com/rohittiwari-dev/oqronkit/blob/main/apps/backend/src/triggers/batches.ts)
+
 ## Basic Usage
 
 ```ts title="triggers/analytics.ts"

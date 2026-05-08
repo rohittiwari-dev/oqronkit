@@ -8,6 +8,10 @@ icon: Cpu
 
 The Distributed Worker pattern separates **publishers** (API nodes) from **consumers** (worker nodes). Publishers use `queue()` without a handler. Consumers use `worker()` which only processes — no `.add()` method.
 
+> [!TIP]
+> **Working example →** See a complete Distributed Worker implementation with video encoding, publisher/consumer split, and crash-safe processing:
+> [apps/backend/src/triggers/distributed-workers.ts](https://github.com/rohittiwari-dev/oqronkit/blob/main/apps/backend/src/triggers/distributed-workers.ts)
+
 ## Architecture
 
 ```

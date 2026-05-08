@@ -8,6 +8,10 @@ icon: Bell
 
 OqronKit's Webhook module handles fan-out event distribution with HMAC signing, glob pattern matching, circuit breakers, and a dead letter queue.
 
+> [!TIP]
+> **Working example →** See a complete Webhook implementation with multi-endpoint dispatch, glob event matching, HMAC signing, and circuit breakers:
+> [apps/backend/src/triggers/webhooks.ts](https://github.com/rohittiwari-dev/oqronkit/blob/main/apps/backend/src/triggers/webhooks.ts)
+
 ## How It Works
 
 The Webhook module uses the same **poll-based** architecture as the Queue engine, but adds fan-out routing, HMAC signing, circuit breakers, and per-endpoint rate limiting.

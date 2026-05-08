@@ -1,14 +1,28 @@
+/**
+ * ═══════════════════════════════════════════════════════════════════════════════
+ *  OqronKit — Webhook Module
+ *  Fan-out event distribution with HMAC signing, glob matching, circuit breakers.
+ * ═══════════════════════════════════════════════════════════════════════════════
+ *
+ *  Features demonstrated:
+ *  ✓ Glob-based endpoint matching ("order.**", "user.*.activated")
+ *  ✓ Per-endpoint HMAC-SHA256 signatures
+ *  ✓ Circuit breaker protection
+ *  ✓ Exponential retry with DLQ
+ *  ✓ Multiple endpoints receiving the same event
+ *  ✓ Static and dynamic endpoint resolution
+ */
+
 import { webhook } from "oqronkit";
 
-/**
- * Webhook Dispatcher
- * Demonstrates Fan-out distribution, HMAC signatures, and Glob matching.
- */
+// ─────────────────────────────────────────────────────────────────────────────
+// PLATFORM WEBHOOK DISPATCHER
+// Fan-out events to external consumers with HMAC signing and circuit breakers.
+// ─────────────────────────────────────────────────────────────────────────────
 export const platformWebhooks = webhook({
   name: "platform-events",
   concurrency: 10,
 
-  // Custom retry behavior for this specific distribution
   retries: {
     max: 3,
     strategy: "exponential",
@@ -17,7 +31,7 @@ export const platformWebhooks = webhook({
 
   security() {
     return {
-      signingSecret: "asdasdasd",
+      signingSecret: process.env.WEBHOOK_SIGNING_SECRET || "whsec_dev_secret",
     };
   },
 
@@ -26,43 +40,30 @@ export const platformWebhooks = webhook({
       {
         name: "AcmeCorp Integration",
         url: "https://api.acme.com/v1/webhooks/receive",
-        // Subscribes to all order events using glob matching
         events: ["order.**", "user.signup"],
         security: {
           signingAlgorithm: "sha256",
-          signingSecret: process.env.ACME_WEBHOOK_SECRET || "fallback-secret",
+          signingSecret:
+            process.env.ACME_WEBHOOK_SECRET || "acme-fallback-secret",
           signingHeader: "x-acme-signature",
         },
       },
       {
         name: "Internal Analytics Stream",
         url: "https://data.internal.svc/ingest",
-        // Matches a single segment wildcard
         events: ["user.*.activated", "system.health"],
-        // endpoints can also omit security if they are purely internal
+      },
+      {
+        name: "Partner Notification Service",
+        url: "https://partner.example.com/hooks",
+        events: ["order.payment.*", "subscription.*"],
+        security: {
+          signingAlgorithm: "sha256",
+          signingSecret:
+            process.env.PARTNER_WEBHOOK_SECRET || "partner-fallback-secret",
+          signingHeader: "x-partner-signature",
+        },
       },
     ];
   },
-});
-
-// Example Event Firings:
-// These could be triggered anywhere inside your Express/Nest API codebase
-
-// Matches both AcmeCorp (order.**) and is ignored by Internal Analytics
-platformWebhooks.fire("order.payment.completed", {
-  orderId: "ord_123xyz",
-  amount: 450.0,
-  currency: "USD",
-});
-
-// Matches AcmeCorp (user.signup)
-platformWebhooks.fire("user.signup", {
-  userId: "usr_abc890",
-  email: "newuser@example.com",
-});
-
-// Matches Internal Analytics (user.*.activated)
-platformWebhooks.fire("user.onboarding.activated", {
-  userId: "usr_abc890",
-  timestamp: Date.now(),
 });

@@ -8,6 +8,10 @@ icon: HardDrive
 
 The Cache module is an industry-grade, distributed, stampede-protected caching system designed for extreme scale and performance. It uses a tiered approach (L1 in-memory + L2 distributed storage) and natively integrates with OqronKit's adapter architecture to prevent database meltdowns during traffic spikes.
 
+> [!TIP]
+> **Working example →** See a complete Cache implementation with SWR, stampede protection, negative caching, prewarming, and lifecycle hooks:
+> [apps/backend/src/services/caches.ts](https://github.com/rohittiwari-dev/oqronkit/blob/main/apps/backend/src/services/caches.ts)
+
 ## How It Works
 
 ### Tiered Lookup Flow
