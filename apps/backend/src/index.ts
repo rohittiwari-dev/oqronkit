@@ -1,36 +1,54 @@
 /**
  * ═══════════════════════════════════════════════════════════════════════════════
- *  OqronKit — Backend Demo
- *  Showcases ALL modules working together in a real Express.js application.
+ *  OqronKit — Backend Demo Server
+ *  Showcases ALL 9 stable modules working together in a real Express.js app.
  * ═══════════════════════════════════════════════════════════════════════════════
  *
- *  Modules active:
- *  • cron       — Time-based repeating jobs (see jobs/crons.ts)
- *  • scheduler  — Rich scheduled tasks with payloads (see jobs/scheduler.ts)
- *  • taskQueue  — Monolithic background tasks (see jobs/task-queues.ts)
- *  • worker     — Distributed publisher/consumer (see jobs/distributed-workers.ts)
+ *  Active Modules:
+ *  ─── Auto-discovered from triggers/ ─────────────────────────────────────────
+ *  • cron         — Time-based repeating jobs          (triggers/crons.ts)
+ *  • scheduler    — Rich scheduled tasks with payloads (triggers/schedules.ts)
+ *  • taskQueue    — Monolithic background tasks         (triggers/task-queues.ts)
+ *  • worker       — Distributed publisher/consumer      (triggers/distributed-workers.ts)
+ *  • webhook      — Fan-out event distribution          (triggers/webhooks.ts)
+ *  • batch        — Accumulator buffering + flush       (triggers/batches.ts)
+ *  • pubsub       — Durable topics + consumer groups    (triggers/pubsub.ts)
  *
- *  v1 Features showcased:
- *  • DI Container (OqronContainer) — automatic adapter selection
- *  • AbortController — cancel active jobs via ctx.signal
- *  • Job Ordering — FIFO / LIFO / Priority strategies
- *  • PostgreSQL / Redis / Memory adapters
+ *  ─── Standalone services (self-registering) ────────────────────────────────
+ *  • rateLimit    — Multi-tier sliding window limits    (services/rate-limiters.ts)
+ *  • cache        — L1/L2 tiered stampede-safe cache    (services/caches.ts)
  *
- *  The OqronKit engine auto-discovers all job definitions from the `jobsDir`
- *  directory and boots them into their respective modules during init().
+ *  Admin API:
+ *  • OqronKit.expressRouter() at /api/oqron exposes 50+ built-in management
+ *    endpoints for queues, jobs, schedules, batches, webhooks, caches,
+ *    rate limiters, and system stats.
  */
 
 import { mkdirSync } from "node:fs";
 import express from "express";
 import {
+  batchModule,
+  cacheModule,
   cronModule,
   OqronKit,
+  pubsubModule,
   queueModule,
+  rateLimitModule,
   scheduleModule,
+  webhookModule,
   workerModule,
 } from "oqronkit";
 
-// ─── 1. Prepare data directory ───────────────────────────────────────────────
+// ─── Import standalone services (self-register on import) ────────────────────
+// These call cache.create() and rateLimit.create() which self-register
+// into OqronKit's global registries immediately — no triggers dir needed.
+import "./services/caches.js";
+import "./services/rate-limiters.js";
+
+// ─── Import API routes ──────────────────────────────────────────────────────
+import apiRoutes from "./routes/api.routes.js";
+
+// ─── 1. Prepare data directory ──────────────────────────────────────────────
 mkdirSync("data", { recursive: true });
 
 // ─── 2. Bootstrap OqronKit ──────────────────────────────────────────────────
@@ -39,94 +57,58 @@ async function main(): Promise<void> {
 
   await OqronKit.init({
     config: {
-      // All four modules active — cron, scheduler, taskQueue, worker
-      modules: [cronModule, scheduleModule, queueModule, workerModule],
+      // ── All 9 stable modules active ──
+      modules: [
+        cronModule,
+        scheduleModule,
+        queueModule,
+        workerModule,
+        webhookModule,
+        batchModule,
+        pubsubModule,
+        rateLimitModule,
+        cacheModule,
+      ],
 
       // Pretty-print structured logs for development
       logger: {
         prettify: true,
       },
+
+      // Optional: Basic Auth for admin API
+      // ui: {
+      //   auth: {
+      //     username: process.env.OQRON_ADMIN_USER ?? "admin",
+      //     password: process.env.OQRON_ADMIN_PASS ?? "secret",
+      //   },
+      // },
     },
   });
 
-  // // ── Dynamic Scheduling Demo ────────────────────────────────────────────
-  // // Schedule a full onboarding drip campaign for a simulated new user signup
-  // const { scheduleOnboardingDrip } = await import("./jobs/scheduler.js");
-  // const userId = `u_${Math.random().toString(36).slice(2, 8)}`;
-  // await scheduleOnboardingDrip(userId, "Rohit Tiwari", "rohit@example.com");
-  // console.log(`\n📧 Onboarding drip campaign scheduled for user: ${userId}`);
-
-  // // ── Dynamic Trial Start Demo ───────────────────────────────────────────
-  // // Schedule trial expiration for a simulated new tenant
-  // const { startTrial } = await import("./jobs/scheduler.js");
-  // await startTrial("tenant_acme", "Pro Plan", "admin@acme.com");
-  // console.log("⏰ Trial expiration scheduled for tenant: tenant_acme\n");
-
-  // // ── Task Queue Demo — Enqueue some background tasks ────────────────────
-  // const { handleImageUpload, sendDelayedWelcomeEmail, dispatchPaymentWebhook } =
-  //   await import("./jobs/task-queues.js");
-
-  // await handleImageUpload("img_001", "https://uploads.example.com/photo.jpg");
-  // console.log("🖼️  Image processing job enqueued: img_001");
-
-  // await sendDelayedWelcomeEmail("rohit@example.com", "Rohit");
-  // console.log("📧 Delayed welcome email enqueued (5s delay)");
-
-  // await dispatchPaymentWebhook(
-  //   "https://hooks.example.com/payment",
-  //   "order_42",
-  //   99.99,
-  // );
-  // console.log("🔔 Payment webhook enqueued: order_42");
-
-  // // ─── 3. Express HTTP server ────────────────────────────────────────────
+  // ─── 3. Express HTTP server ────────────────────────────────────────────────
   const app = express();
   app.use(express.json());
 
-  // // Mount OqronKit monitoring routes — /health, /events, /jobs/:id/trigger, etc.
+  // Mount OqronKit built-in admin API (50+ endpoints)
+  // Health, events, jobs, queues, schedules, batches, webhooks,
+  // rate limiters, caches — all managed via REST.
   app.use("/api/oqron", OqronKit.expressRouter());
 
-  // // Basic root info
-  // app.get("/", (_req, res) => {
-  //   res.json({
-  //     name: "OqronKit Backend Demo",
-  //     version: "1.0.0",
-  //     modules: ["cron", "scheduler", "taskQueue", "worker"],
-  //     endpoints: {
-  //       health: "GET  /api/oqron/health",
-  //       events: "GET  /api/oqron/events?limit=50",
-  //       trigger: "POST /api/oqron/jobs/:id/trigger",
-  //       metrics: "GET  /api/oqron/metrics",
-  //     },
-  //   });
-  // });
-
-  // // Example API route: trigger image processing
-  // app.post("/api/images/process", async (req, res) => {
-  //   try {
-  //     const { imageId, sourceUrl } = req.body;
-  //     await handleImageUpload(imageId, sourceUrl);
-  //     res.status(202).json({ message: "Image processing started", imageId });
-  //   } catch (err: unknown) {
-  //     res.status(500).json({ error: (err as Error).message });
-  //   }
-  // });
-
-  // // Example API route: cancel a running job (AbortController support)
-  // app.delete("/api/jobs/:jobId", async (req, res) => {
-  //   try {
-  //     const mgr = OqronManager.from(OqronKit.getConfig());
-  //     await mgr.cancelJob(req.params.jobId);
-  //     res.json({ message: "Job cancelled", jobId: req.params.jobId });
-  //   } catch (err: unknown) {
-  //     res.status(500).json({ error: (err as Error).message });
-  //   }
-  // });
+  // Mount business API routes (exercising all modules)
+  app.use("/api", apiRoutes);
 
   const PORT = Number(process.env.PORT ?? 4000);
   app.listen(PORT, () => {
-    console.log(`\n🌐 Server ready on http://localhost:${PORT}`);
-    console.log(`📊 Monitoring at http://localhost:${PORT}/api/oqron/health\n`);
+    console.log(`\n${"═".repeat(60)}`);
+    console.log(`  OqronKit Backend Demo — http://localhost:${PORT}`);
+    console.log(`${"═".repeat(60)}`);
+    console.log(`\n  📊 Admin API:  http://localhost:${PORT}/api/oqron/admin/system`);
+    console.log(`  💚 Health:     http://localhost:${PORT}/api/oqron/health`);
+    console.log(`  📋 API Docs:   http://localhost:${PORT}/api/admin-docs`);
+    console.log(`  🏠 Info:       http://localhost:${PORT}/api`);
+    console.log(`\n  Modules: cron, scheduler, queue, worker, webhook,`);
+    console.log(`           batch, pubsub, rateLimit, cache`);
+    console.log(`\n${"═".repeat(60)}\n`);
   });
 }
 

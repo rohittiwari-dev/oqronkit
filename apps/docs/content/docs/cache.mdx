@@ -8,6 +8,84 @@ icon: HardDrive
 
 The Cache module is an industry-grade, distributed, stampede-protected caching system designed for extreme scale and performance. It uses a tiered approach (L1 in-memory + L2 distributed storage) and natively integrates with OqronKit's adapter architecture to prevent database meltdowns during traffic spikes.
 
+> [!TIP]
+> **Working example →** See a complete Cache implementation with SWR, stampede protection, negative caching, prewarming, and lifecycle hooks:
+> [apps/backend/src/services/caches.ts](https://github.com/rohittiwari-dev/oqronkit/blob/main/apps/backend/src/services/caches.ts)
+
+## How It Works
+
+### Tiered Lookup Flow
+
+Every `.getOrFetch(key)` call follows a strict lookup hierarchy:
+
+```
+getOrFetch(key)
+  │
+  ├─ 1. L1 Check (process memory, ~0.001ms)
+  │    ├─ HIT + fresh? → Return immediately ✅
+  │    ├─ HIT + stale? → Return stale + background revalidate 🔄
+  │    └─ MISS → continue
+  │
+  ├─ 2. L2 Check (Redis/Postgres via Storage adapter, ~1-5ms)
+  │    ├─ HIT + fresh? → Populate L1, return ✅
+  │    ├─ HIT + stale? → Populate L1, return stale + revalidate 🔄
+  │    └─ MISS → continue
+  │
+  ├─ 3. Negative Cache Check
+  │    ├─ Key is cached as "not found"? → Return null ✅
+  │    └─ No negative entry → continue
+  │
+  ├─ 4. Stampede Protection
+  │    ├─ Single-flight dedup: another request for same key in-flight?
+  │    │   YES → Wait for the in-flight request, share result
+  │    ├─ Cluster lock: clusterLock enabled?
+  │    │   YES → Acquire distributed lock (only 1 server fetches)
+  │    │   NO  → Local single-flight only
+  │    └─ continue
+  │
+  ├─ 5. Execute Fetcher
+  │    ├─ Inline fetcher provided? → Use it
+  │    ├─ Global fetcher defined? → Use it
+  │    └─ Neither? → Return undefined
+  │
+  ├─ 6. Fetcher returned value:
+  │    ├─ null + negativeCache enabled? → Cache as negative, return null
+  │    ├─ value → Write to L1 + L2, return value ✅
+  │    └─ error + staleIfErrorMs? → Return stale data if available
+  │
+  └─ 7. Release cluster lock (if acquired)
+```
+
+### Stampede Protection
+
+During a traffic spike, thousands of requests may hit the same uncached key simultaneously. Without protection, all requests would hammer the database.
+
+OqronKit prevents this with **two layers**:
+
+| Layer | Scope | Mechanism |
+|-------|-------|-----------|
+| **Single-Flight** | Per-process | In-memory dedup — only 1 fetch per key per Node.js process |
+| **Cluster Lock** | Per-cluster | Distributed lock via Lock adapter — only 1 fetch per key across ALL servers |
+
+### Stale-While-Revalidate
+
+When `staleWhileRevalidateMs` is set, expired entries are served immediately while a background refresh runs:
+
+1. User requests key → L1 has stale data (TTL expired, but within SWR window)
+2. **Return stale data instantly** (0ms user-facing latency)
+3. In the background: run fetcher, update L1 + L2
+4. Next request gets fresh data
+
+If the fetcher fails during revalidation, `staleIfErrorMs` controls how long to keep serving stale data as a fallback.
+
+### Prewarming Loop
+
+When `prewarm` is configured, a background interval:
+1. Calls `prewarm.keys()` to discover critical keys
+2. Fetches each key through the normal cache pipeline
+3. Populates L1 + L2 before any user request arrives
+4. Uses a distributed lock to ensure only one node prewarms
+
 ## Real-World Examples
 
 OqronKit caches are strongly typed and designed to be exported as singletons from your service layer. Here are some complete, real-world examples you can drop into your application.

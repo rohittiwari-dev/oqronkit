@@ -11,7 +11,7 @@
  *
  *  Features demonstrated:
  *  ✓ One-off execution (runAt)
- *  ✓ Delayed execution (runAfter)
+ *  ✓ Delayed execution (runAt with future Date)
  *  ✓ Object-based recurring (recurring: { frequency, dayOfMonth, at, months })
  *  ✓ RFC 5545 rrule strings
  *  ✓ Simple interval (`every: { hours, minutes, seconds }`)
@@ -358,21 +358,21 @@ export async function scheduleOnboardingDrip(
   // Email 2: Getting Started Tips — fires 3 days later (simulated: 10s)
   await onboardingEmailJob.schedule({
     nameSuffix: `${userId}-tips`,
-    runAfter: { seconds: 10 },
+    runAt: new Date(Date.now() + 10_000),
     payload: { userId, template: "day3-getting-started", userName, email },
   });
 
   // Email 3: Feature Highlight — fires 7 days later (simulated: 20s)
   await onboardingEmailJob.schedule({
     nameSuffix: `${userId}-features`,
-    runAfter: { seconds: 20 },
+    runAt: new Date(Date.now() + 20_000),
     payload: { userId, template: "day7-feature-highlight", userName, email },
   });
 
   // Email 4: Feedback Request — fires 14 days later (simulated: 30s)
   await onboardingEmailJob.schedule({
     nameSuffix: `${userId}-feedback`,
-    runAfter: { seconds: 30 },
+    runAt: new Date(Date.now() + 30_000),
     payload: { userId, template: "day14-feedback-request", userName, email },
   });
 }
@@ -492,7 +492,7 @@ export async function startTrial(
 ) {
   await trialExpirationJob.schedule({
     nameSuffix: tenantId,
-    runAfter: { seconds: 15 },
+    runAt: new Date(Date.now() + 15_000),
     payload: { tenantId, planName, adminEmail },
   });
 }

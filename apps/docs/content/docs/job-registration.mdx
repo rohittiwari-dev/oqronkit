@@ -1,0 +1,240 @@
+---
+title: Job Registration
+description: How OqronKit discovers and registers your job definitions — auto-discovery, explicit paths, and manual imports
+---
+
+# Job Registration
+
+OqronKit uses a **self-registering factory** pattern. Every time you call `queue()`, `cron()`, `worker()`, `webhook()`, `batch()`, or any other definition factory, it immediately pushes the config into a global registry. When `OqronKit.init()` boots, each module engine drains its registry and starts processing.
+
+The key question is: **how do those factory calls get executed?** OqronKit supports three strategies.
+
+---
+
+## Strategy 1: Auto-Discovery (Default)
+
+When the `triggers` config option is **omitted**, OqronKit automatically scans these well-known directories (relative to `cwd`):
+
+```
+src/triggers/    triggers/    src/jobs/    jobs/
+```
+
+The first directory that exists is recursively scanned. All `.ts`, `.js`, `.mjs`, and `.cjs` files are dynamically imported. Since each factory call self-registers on import, no manual wiring is needed.
+
+```ts title="src/triggers/email-queue.ts"
+import { queue } from 'oqronkit'
+
+// This self-registers into the global queue registry on import
+export const emailQueue = queue<{ to: string; body: string }>({
+  name: 'send-email',
+  handler: async (ctx) => {
+    await sendEmail(ctx.data.to, ctx.data.body)
+  },
+})
+```
+
+```ts title="src/triggers/daily-cleanup.ts"
+import { cron } from 'oqronkit'
+
+// This self-registers into the global cron registry on import
+export const cleanup = cron({
+  name: 'daily-cleanup',
+  expression: '0 0 * * *',
+  handler: async (ctx) => {
+    ctx.log('info', 'Running cleanup...')
+  },
+})
+```
+
+```ts title="index.ts"
+import { OqronKit, cronModule, queueModule } from 'oqronkit'
+
+await OqronKit.init({
+  config: {
+    modules: [cronModule(), queueModule()],
+    // triggers is omitted → auto-detects src/triggers/
+  },
+})
+```
+
+<Callout type="info">
+  Auto-discovery stops at the **first** matching directory. If both `src/triggers/` and `jobs/` exist, only `src/triggers/` is scanned.
+</Callout>
+
+### Recommended Directory Structure
+
+```
+my-app/
+├── src/
+│   ├── triggers/           ← auto-discovered
+│   │   ├── queues/
+│   │   │   ├── email.ts
+│   │   │   └── pdf.ts
+│   │   ├── crons/
+│   │   │   └── cleanup.ts
+│   │   ├── workers/
+│   │   │   └── video-encode.ts
+│   │   └── webhooks/
+│   │       └── payment.ts
+│   └── index.ts
+└── package.json
+```
+
+You can nest subdirectories freely — the scanner is recursive.
+
+---
+
+## Strategy 2: Explicit Path
+
+Point `triggers` to a custom directory:
+
+```ts title="index.ts"
+await OqronKit.init({
+  config: {
+    modules: [cronModule(), queueModule(), workerModule()],
+    triggers: './my-custom-jobs',  // relative to cwd
+  },
+})
+```
+
+OqronKit resolves this relative to `cwd` (or `opts.cwd` if provided) and recursively imports all files. If the directory doesn't exist, a warning is logged.
+
+This is useful when your project structure doesn't follow the conventional directory names:
+
+```
+my-app/
+├── lib/
+│   └── background/         ← custom path
+│       ├── billing-cron.ts
+│       └── image-queue.ts
+├── src/
+│   └── index.ts
+└── package.json
+```
+
+```ts
+await OqronKit.init({
+  config: {
+    modules: [cronModule(), queueModule()],
+    triggers: './lib/background',
+  },
+})
+```
+
+---
+
+## Strategy 3: Manual Imports
+
+Disable auto-discovery entirely and import definition files yourself **before** calling `OqronKit.init()`:
+
+```ts title="index.ts"
+// Import job definitions manually — each self-registers on import
+import './jobs/email-queue.js'
+import './jobs/billing-cron.js'
+import './jobs/video-worker.js'
+
+import { OqronKit, cronModule, queueModule, workerModule } from 'oqronkit'
+
+await OqronKit.init({
+  config: {
+    modules: [cronModule(), queueModule(), workerModule()],
+    triggers: false,  // disable scanning, silence warnings
+  },
+})
+```
+
+<Callout type="warn">
+  When using manual imports, you **must** import job files before `OqronKit.init()`. The init sequence drains the registries during boot — any definitions registered after init will be invisible to the engines.
+</Callout>
+
+### When to Use Manual Imports
+
+| Scenario | Why |
+|----------|-----|
+| **Serverless** (Lambda, Vercel) | Filesystem scanning adds cold-start latency |
+| **Conditional loading** | Load different jobs per environment or role |
+| **Monorepo with shared definitions** | Import specific definitions from another package |
+| **Testing** | Register only the job under test |
+
+### Conditional Registration Example
+
+```ts title="index.ts"
+// Only load heavy workers on dedicated worker nodes
+import './jobs/common-queues.js'
+
+if (process.env.NODE_ROLE === 'worker') {
+  await import('./jobs/heavy-workers.js')
+}
+
+if (process.env.NODE_ROLE === 'scheduler') {
+  await import('./jobs/crons.js')
+}
+
+await OqronKit.init({
+  config: {
+    modules: [cronModule(), queueModule(), workerModule()],
+    triggers: false,
+  },
+})
+```
+
+---
+
+## How It Works Under the Hood
+
+Each factory function pushes its config into a [`Symbol.for()`](https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Symbol/for)-guarded global registry:
+
+| Factory | Registry Key | Drain Function |
+|---------|-------------|----------------|
+| `queue()` | `oqronkit:pending_queues` | `getRegisteredQueues()` |
+| `cron()` | `oqronkit:pending_crons` | `_drainPending()` |
+| `schedule()` | `oqronkit:pending_schedules` | `_drainPendingSchedules()` |
+| `worker()` | `oqronkit:pending_workers` | `getRegisteredWorkers()` |
+| `webhook()` | `oqronkit:pending_webhooks` | `getRegisteredWebhooks()` |
+| `batch()` | `oqronkit:pending_batches` | `getRegisteredBatches()` |
+
+Using `Symbol.for()` on `globalThis` guarantees a **single canonical array** even in monorepo setups where multiple bundler copies of OqronKit might be evaluated at runtime.
+
+### Init Sequence
+
+```
+OqronKit.init()
+  │
+  ├─ 1. Load & validate config
+  ├─ 2. Boot engine (storage, broker, lock adapters)
+  ├─ 3. Discover triggers ← imports files, populates registries
+  ├─ 4. Boot each enabled module engine
+  │      └─ Each engine drains its registry
+  ├─ 5. Call init() on all modules
+  └─ 6. Call start() on all modules → engines begin polling/ticking
+```
+
+<Callout type="info">
+  If a definition is registered for a module that isn't enabled in `config.modules`, it will sit in the registry but never be drained or executed. No error is thrown — this is by design for publisher-only setups.
+</Callout>
+
+---
+
+## HMR & Deduplication
+
+Each registry deduplicates by name. If a definition with the same `name` is registered twice (common during HMR/hot reload in development), the **last registration wins**:
+
+```ts
+// First registration
+const q1 = queue({ name: 'emails', handler: handlerV1 })
+
+// Second registration (e.g., HMR reload) — overwrites the first
+const q2 = queue({ name: 'emails', handler: handlerV2 })
+
+// Only handlerV2 will be used
+```
+
+---
+
+## Quick Reference
+
+| Config | Behavior |
+|--------|----------|
+| `triggers` omitted | Auto-detect: scan `src/triggers/`, `triggers/`, `src/jobs/`, `jobs/` |
+| `triggers: './path'` | Scan the specified directory recursively |
+| `triggers: false` | No scanning. Import files manually before `init()` |

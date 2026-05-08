@@ -8,6 +8,11 @@ icon: Clock
 
 OqronKit provides two scheduling APIs: `cron()` for fixed infrastructure jobs, and `schedule()` for dynamic, data-driven scheduling.
 
+> [!TIP]
+> **Working examples →** See complete Scheduler and Cron implementations with recurring, rrule, dynamic templates, drip campaigns, and every feature of the API:
+> - [apps/backend/src/triggers/schedules.ts](https://github.com/rohittiwari-dev/oqronkit/blob/main/apps/backend/src/triggers/schedules.ts)
+> - [apps/backend/src/triggers/crons.ts](https://github.com/rohittiwari-dev/oqronkit/blob/main/apps/backend/src/triggers/crons.ts)
+
 ## Cron vs Schedule
 
 | | `cron()` | `schedule()` |
@@ -17,6 +22,72 @@ OqronKit provides two scheduling APIs: `cron()` for fixed infrastructure jobs, a
 | **Dynamic dispatch** | No | `.trigger()` / `.schedule()` |
 | **Conditions** | No | `condition: async (ctx) => boolean` |
 | **Best for** | Sweeps, cleanup, metrics | Drip campaigns, delayed actions |
+
+---
+
+## How It Works
+
+Both `cron()` and `schedule()` share the same engine architecture — a **leader-elected tick loop** that scans for due definitions and fires handlers.
+
+### Tick Loop Lifecycle
+
+```
+OqronKit.init()
+  │
+  ├─ Leader Election: compete for "scheduler:leader" lock
+  │   (only leader runs the tick loop; followers are standby)
+  │
+  │  ┌──── Tick Loop (every tickInterval ms) ────────────┐
+  │  │                                                    │
+  ├──┤ 1. Am I still leader? (renew leader lock)          │
+  │  │ 2. Event loop healthy? (lag monitor check)         │
+  │  │ 3. Query Storage for records where nextRunAt ≤ now │
+  │  │ 4. Sort by priority (lower = fires first)          │
+  │  │                                                    │
+  │  │ For each due record:                               │
+  │  │  ├─ Is it paused? → Apply disabledBehavior         │
+  │  │  ├─ Condition guard? → shouldFire() check          │
+  │  │  ├─ Rate limiter? → rateLimiter.check()            │
+  │  │  ├─ Overlap policy? → Skip if already running      │
+  │  │  │                                                 │
+  │  │  ├─ FIRE: spawn handler execution                  │
+  │  │  └─ Advance nextRunAt to next occurrence            │
+  │  └────────────────────────────────────────────────────┘
+  │
+  │  ┌──── Fire Execution ───────────────────────────────┐
+  │  │                                                    │
+  ├──┤ 1. Acquire heartbeat lock (guaranteedWorker)       │
+  │  │ 2. Create job record in Storage (status: "active") │
+  │  │ 3. Start heartbeat renewal interval                │
+  │  │ 4. Run beforeRun hook                              │
+  │  │ 5. Execute handler(ctx)                            │
+  │  │ 6. Run afterRun hook                               │
+  │  │ 7. Mark job "completed" or "failed"                │
+  │  │ 8. Stop heartbeat, release lock                    │
+  │  │ 9. Apply retention policy (keepHistory)            │
+  │  └────────────────────────────────────────────────────┘
+```
+
+### Leader Election
+
+In multi-node deployments, only **one node** runs the tick loop. All nodes compete for a `scheduler:leader` lock key with a TTL:
+
+1. The winner becomes the **Master Poller** — only it checks for due schedules
+2. If the leader crashes, the lock expires within ~3 seconds
+3. A standby node acquires the lock and takes over
+4. Handlers still execute on the leader node (not distributed to workers)
+
+For sharded multi-region deployments, use `clustering` config to split schedule ownership across regions.
+
+### Missed Fire Recovery
+
+When a leader starts (or re-acquires leadership after a crash), it runs **missed fire recovery**:
+
+1. Scans all definitions where `nextRunAt < now`
+2. Applies the `missedFire` policy:
+   - `skip` — Advance `nextRunAt` to next occurrence, ignore the miss
+   - `run-once` — Fire once for the most recent missed time
+   - `run-all` — Fire once per each missed occurrence (capped by `maxMissedRuns`)
 
 ---
 

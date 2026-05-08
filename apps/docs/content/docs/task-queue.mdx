@@ -8,6 +8,91 @@ icon: Box
 
 The Task Queue is OqronKit's simplest module. Publisher and consumer are defined together — perfect for monolithic apps and fast prototypes.
 
+> [!TIP]
+> **Working example →** See a complete Task Queue implementation with image processing, email dispatch, PDF generation, ETL DAG pipeline, and crash-safe workers:
+> [apps/backend/src/triggers/task-queues.ts](https://github.com/rohittiwari-dev/oqronkit/blob/main/apps/backend/src/triggers/task-queues.ts)
+
+## How It Works
+
+When you call `queue()` with a handler, OqronKit creates a monolithic queue where both the producer (`.add()`) and the consumer (polling engine) live in the same process.
+
+### Job Lifecycle
+
+```
+.add(data, opts)
+  │
+  ├─ 1. Create OqronJob record in Storage (status: "waiting")
+  ├─ 2. Publish job ID to Broker (with optional delay/priority)
+  │
+  │  ┌──── Poll Loop (runs every heartbeatMs) ────┐
+  │  │                                             │
+  ├──┤ 3. Check concurrency: free slots available? │
+  │  │    Check throttle gate: budget remaining?    │
+  │  │    Check lag monitor: event loop healthy?    │
+  │  │                                             │
+  │  │ 4. Broker.claim(queueName, limit, strategy) │
+  │  │    ── fifo / lifo / priority ordering ──     │
+  │  └─────────────────────────────────────────────┘
+  │
+  ├─ 5. Acquire heartbeat lock (Lock adapter, TTL-based)
+  ├─ 6. Mark job as "active" in Storage
+  ├─ 7. Start heartbeat renewal interval
+  ├─ 8. Execute handler(ctx) with AbortSignal
+  │
+  ├─ SUCCESS:
+  │    ├─ Mark job "completed" in Storage
+  │    ├─ Ack job in Broker (removes from queue)
+  │    ├─ Stop heartbeat, release lock
+  │    ├─ Run onSuccess hook
+  │    └─ Apply retention policy (removeOnComplete)
+  │
+  └─ FAILURE:
+       ├─ Check retry config: attempts remaining?
+       │   YES → Nack to Broker with backoff delay
+       │         Mark job "delayed", set runAt
+       │   NO  → Mark job "failed"
+       │         Check DLQ: enabled?
+       │           YES → Run onDead hook
+       ├─ Stop heartbeat, release lock
+       └─ Run onFail hook
+```
+
+### Job State Machine
+
+| State | Meaning |
+|-------|--------|
+| `waiting` | Queued in broker, ready to be claimed |
+| `delayed` | Scheduled for future processing (delay or retry backoff) |
+| `active` | Claimed by a worker, handler executing |
+| `completed` | Handler returned successfully |
+| `failed` | All retries exhausted or permanently discarded |
+| `stalled` | Heartbeat lock expired — worker presumed crashed |
+| `paused` | Queue is disabled; job held for later |
+| `waiting-children` | Blocked on parent job dependencies |
+| `cancelled` | Explicitly cancelled via admin API |
+
+### Crash Safety
+
+When `guaranteedWorker: true` (default):
+
+1. **Heartbeat Lock** — The worker atomically claims a lock via the Lock adapter with a TTL. A `setInterval` renews it every `heartbeatMs`.
+2. **Stall Detector** — A background scanner checks all active locks. If a lock has expired (worker crashed), the job is marked `stalled` and nacked back to the broker.
+3. **Cross-Node Scanner** — Optional (`crossNodeStallScanner: true`). Scans ALL active jobs in storage, not just local ones — catches orphans from nodes that crashed without cleanup.
+4. **Reconciliation Engine** — Optional (`reconciliation: true`). Heals split-brain scenarios where a job was saved to storage but the broker nack failed.
+
+### Concurrency Model
+
+Concurrency is **per-queue, per-process**. If you define `concurrency: 5` and run 3 worker processes, the system can process up to 15 jobs in parallel across the cluster.
+
+```
+Process A: queue("emails", concurrency: 5)  → max 5 active
+Process B: queue("emails", concurrency: 5)  → max 5 active
+Process C: queue("emails", concurrency: 5)  → max 5 active
+                                       Total: max 15 active
+```
+
+Each queue is isolated — `concurrency: 5` on the email queue does not affect the PDF queue's slots.
+
 ## Basic Usage
 
 ```ts title="triggers/email-queue.ts"
