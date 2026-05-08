@@ -14,6 +14,66 @@ configure or maintain.
 PubSub is an at-least-once delivery system. Use `idempotencyKey` when publishing
 and make handlers idempotent when the side effect cannot safely run twice.
 
+## How It Works
+
+The PubSub module is built on top of OqronKit's existing Storage, Broker, and Lock adapters. Messages are durably stored, partitioned, and delivered to consumer groups with independent offsets.
+
+### Message Flow
+
+```
+.publish(message, opts)
+  │
+  ├─ 1. Validate message (topic.validate())
+  ├─ 2. Check idempotency key (skip if duplicate)
+  ├─ 3. Assign partition:
+  │    ├─ partitionKey provided? → hash(key) % partitions
+  │    └─ No key? → round-robin assignment
+  ├─ 4. Assign monotonic offset within partition
+  ├─ 5. Persist message record to Storage
+  └─ 6. Notify Broker (wake subscriber poll loops)
+
+
+.subscribe({ group, handler })
+  │
+  │  ┌──── Poll Loop (per group, per process) ──────────┐
+  │  │                                                   │
+  ├──┤ 1. Query Storage for messages after group offset  │
+  │  │    (respects partition assignment, batchSize)     │
+  │  │ 2. Apply subscription filter (if set)             │
+  │  │ 3. Create delivery record for each message        │
+  │  │ 4. Execute handler(ctx) per delivery              │
+  │  │                                                   │
+  │  │ On handler completion:                            │
+  │  │  ├─ auto ack mode: ack on resolve, nack on reject │
+  │  │  └─ manual mode: wait for ctx.ack() / ctx.nack()  │
+  │  │                                                   │
+  │  │ 5. Commit offset after successful ack             │
+  │  │ 6. On nack: apply retry backoff                   │
+  │  │    All retries exhausted? → Dead letter            │
+  │  └───────────────────────────────────────────────────┘
+```
+
+### Consumer Group Isolation
+
+Each consumer group maintains **independent offsets**. Multiple groups subscribing to the same topic each receive every message independently:
+
+```
+Topic: "order-events" (16 partitions)
+  │
+  ├─ Group: "billing-service"    offset=142  (processing message 143)
+  ├─ Group: "analytics-service"  offset=89   (behind, catching up)
+  └─ Group: "shipping-service"   offset=142  (up to date)
+```
+
+Within a single group, multiple processes **compete** for work. Messages from the same partition are delivered to only one process at a time, preserving keyed ordering.
+
+### Reconciliation (Leader-Only)
+
+A leader node periodically scans for:
+- **Expired deliveries** — Handler timed out without ack/nack. Re-queued for retry.
+- **Due retries** — Deliveries in backoff whose delay has elapsed. Re-published to Broker.
+- **Retention cleanup** — Deletes messages older than `retention.maxAgeMs` or beyond `retention.maxCount`.
+
 ## Enable the Module
 
 ```ts title="index.ts"

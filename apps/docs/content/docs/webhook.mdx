@@ -8,6 +8,85 @@ icon: Bell
 
 OqronKit's Webhook module handles fan-out event distribution with HMAC signing, glob pattern matching, circuit breakers, and a dead letter queue.
 
+## How It Works
+
+The Webhook module uses the same **poll-based** architecture as the Queue engine, but adds fan-out routing, HMAC signing, circuit breakers, and per-endpoint rate limiting.
+
+### Delivery Lifecycle
+
+```
+.fire(eventName, payload)
+  │
+  ├─ 1. Match event against endpoint globs
+  │    "order.payment.completed" matches:
+  │      ✓ "order.**"  (AcmeCorp)
+  │      ✗ "user.signup" (AcmeCorp)
+  │      ✗ "user.*.activated" (Analytics)
+  │
+  ├─ 2. For EACH matched endpoint:
+  │    ├─ Create delivery job record in Storage
+  │    │   (url, method, headers, body, endpointName)
+  │    └─ Publish job ID to Broker
+  │
+  │  ┌──── Poll Loop (per dispatcher) ───────────────────┐
+  │  │                                                    │
+  ├──┤ 3. Claim jobs from Broker                          │
+  │  │    (respects concurrency + throttle gate)          │
+  │  └────────────────────────────────────────────────────┘
+  │
+  ├─ 4. Acquire heartbeat lock
+  ├─ 5. Resolve endpoint config (static or dynamic)
+  ├─ 6. Sign payload with HMAC (if security configured)
+  │    ├─ Compute signature: HMAC-SHA256(body, secret)
+  │    └─ Attach X-Oqron-Signature + X-Oqron-Timestamp
+  │
+  ├─ 7. Check outbound rate limiter (per-endpoint)
+  │    Blocked? → Re-queue with delay
+  │
+  ├─ 8. Check circuit breaker (per-endpoint)
+  │    Open? → Re-queue with 15s delay
+  │
+  ├─ 9. HTTP delivery (POST/PUT with timeout)
+  │    ├─ Uses AbortSignal for cancellation
+  │    └─ Respects Retry-After header
+  │
+  ├─ 2xx SUCCESS:
+  │    ├─ Record circuit breaker success
+  │    ├─ Mark job "completed", run onSuccess hook
+  │    └─ Ack in Broker
+  │
+  └─ 4xx/5xx FAILURE:
+       ├─ Record circuit breaker failure
+       ├─ Retryable status? (5xx, 429, 408)
+       │   YES → Calculate backoff (exponential/fixed)
+       │         Respect Retry-After header if present
+       │         Nack to Broker with delay
+       │   NO  → Hard fail (e.g., 401, 404)
+       └─ All retries exhausted? → DLQ + onDead hook
+```
+
+### Fan-Out Pattern
+
+A single `.fire()` call can create **multiple delivery jobs** — one per matched endpoint. Each delivery is an independent job with its own retries, circuit breaker state, and DLQ entry.
+
+```
+fire("order.payment.completed", { orderId: "123" })
+  │
+  ├─ → Job 1: POST https://api.acme.com/webhooks  (matched "order.**")
+  ├─ → Job 2: POST https://data.internal/ingest    (matched "order.*")
+  └─ → Job 3: POST https://partner.com/hooks       (matched "*")
+```
+
+### Circuit Breaker States
+
+| State | Behavior |
+|-------|----------|
+| **Closed** | Normal delivery — failures counted |
+| **Open** | All deliveries re-queued — endpoint presumed down |
+| **Half-Open** | One probe delivery allowed — success resets to Closed |
+
+The circuit breaker is **per-endpoint** and shared across the cluster when using Redis/Postgres adapters.
+
 ## Basic Usage
 
 ```ts title="triggers/webhooks.ts"
